@@ -1,0 +1,13 @@
+{
+  "version": "2.0.0",
+  "organization": "NestJS Best Practices",
+  "date": "January 2026",
+  "abstract": "A CRUD-focused best-practices reference for NestJS applications, designed for AI agents and LLMs. Contains 12 rules across 7 categories (architecture, dependency injection, error handling, security, testing, database, API design), prioritized by impact. Each rule includes a short explanation and incorrect vs. correct code examples to guide code generation and review. Trimmed from a larger library for teaching purposes.",
+  "references": [
+    "https://docs.nestjs.com",
+    "https://github.com/nestjs/nest",
+    "https://typeorm.io",
+    "https://github.com/typestack/class-validator",
+    "https://github.com/goldbergyoni/nodebestpractices"
+  ]
+}

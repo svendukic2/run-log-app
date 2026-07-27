@@ -1,0 +1,16 @@
+#!/bin/bash
+
+set -euo pipefail
+
+# Staged paths (Added/Copied/Modified/Renamed).
+CHANGED="$(git diff --cached --name-only --diff-filter=ACMR)"
+
+# Lint + format staged files (per-app config, see .lintstagedrc.js).
+npx lint-staged
+
+# Reminder only - backend unit tests are not run automatically here (they can be
+# slow). The `backend` job in .github/workflows/ci.yml runs lint, build, unit
+# tests and e2e on every PR. Run them locally if you like.
+if echo "$CHANGED" | grep -q '^backend/'; then
+  echo "ℹ️  backend/ files changed - consider running: cd backend && npm test"
+fi

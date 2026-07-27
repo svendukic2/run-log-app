@@ -1,0 +1,112 @@
+name: CI
+
+# The pre-commit hook tells you "the CI backend job runs them on every PR".
+# This workflow is what makes that true.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A newer push to the same branch cancels the previous run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # backend/ and frontend/ are independent npm projects with their own
+  # package.json and their own node_modules, so they get their own jobs and
+  # run in parallel. Neither imports the other's source.
+  backend:
+    name: backend (NestJS)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - run: npm ci
+
+      - name: Lint
+        # The local script passes --fix; in CI we only want to be told, never
+        # to have files silently rewritten.
+        run: npx eslint "{src,apps,libs,test}/**/*.ts"
+
+      - name: Build (also the typecheck gate - there is no separate tsc script)
+        run: npm run build
+
+      - name: Unit tests
+        run: npm test
+
+      - name: E2E tests
+        run: npm run test:e2e
+
+  frontend:
+    name: frontend (Next.js)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build (also the typecheck gate - next build type-checks the app)
+        # BACKEND_URL is not needed to build: page.tsx falls back to
+        # http://localhost:3000 and the fetch only runs at request time.
+        run: npm run build
+
+  # Repo-wide checks that belong to neither app.
+  conventions:
+    name: conventions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # commitlint needs history to see the range of commits being merged.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - run: npm ci
+
+      - name: Commit messages follow Conventional Commits
+        # On a PR, check every commit in the branch. The commit-msg hook does
+        # this locally, but hooks can be skipped with --no-verify.
+        if: github.event_name == 'pull_request'
+        run: >-
+          npx commitlint
+          --from ${{ github.event.pull_request.base.sha }}
+          --to ${{ github.event.pull_request.head.sha }}
+          --verbose
+
+      # A repo-wide Prettier gate is deliberately NOT enabled yet: 55 existing
+      # files predate the Prettier config and would fail immediately. Run
+      # `npx prettier --write .` once, commit that, then uncomment this:
+      #
+      # - name: Formatting matches Prettier
+      #   run: npx prettier --check .

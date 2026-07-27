@@ -1,0 +1,14 @@
+{
+  "version": "1.0.0",
+  "organization": "Next.js 16 (App Router) Best Practices",
+  "date": "January 2026",
+  "abstract": "Best practices and architecture guide for modern Next.js 16 applications using the App Router, designed for AI agents and LLMs. Contains 16 rules across 10 categories, prioritized by impact from critical (App Router structure, Server/Client Component boundaries, server-first data fetching) to incremental (accessibility). Each rule includes a brief rationale, real-world examples comparing incorrect vs. correct implementations, and an impact level to guide automated code generation and review. Targets the Server-Components-first, App Router idioms of Next.js 16 with React 19.",
+  "references": [
+    "https://nextjs.org/docs",
+    "https://nextjs.org/docs/app",
+    "https://react.dev",
+    "https://nextjs.org/docs/app/building-your-application/data-fetching",
+    "https://nextjs.org/docs/app/building-your-application/rendering/server-components",
+    "https://nextjs.org/docs/app/guides/testing/jest"
+  ]
+}

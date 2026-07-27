@@ -1,0 +1,19 @@
+{
+  "name": "decode-academy-demo",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Repo-level dev tooling (Husky hooks, commitlint, lint-staged, Prettier). The backend/ and frontend/ apps keep their own package.json - this root does not manage them.",
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "scripts": {
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^19.6.0",
+    "@commitlint/config-conventional": "^19.6.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.2.10",
+    "prettier": "^3.4.2"
+  }
+}

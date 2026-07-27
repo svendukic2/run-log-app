@@ -1,0 +1,12 @@
+# Generated artefacts. A lock file is written by npm, never by hand, and running
+# a formatter over it produces thousands of lines of diff noise on every install
+# while changing nothing that matters. Worse, it makes a genuine dependency
+# change impossible to spot in review.
+package-lock.json
+**/package-lock.json
+
+# Build output and coverage reports.
+dist/
+.next/
+coverage/
+node_modules/
