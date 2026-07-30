@@ -1,0 +1,19 @@
+name: pr-source-check
+
+on:
+  pull_request:
+
+jobs:
+  pr-source-check:
+    name: pr-source-check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check PR source branch
+        run: |
+          echo "Checking PR source -> target..."
+          if [ "${{ github.event.pull_request.base.ref }}" = "master" ] && [ "${{ github.event.pull_request.head.ref }}" != "develop" ]; then
+            echo "PR to 'master' must come from 'develop' (head is: ${{ github.event.pull_request.head.ref }})."
+            exit 1
+          fi
+          echo "PR source OK: ${{ github.event.pull_request.head.ref }} -> ${{ github.event.pull_request.base.ref }}"
