@@ -1,5 +1,11 @@
 const path = require('path');
 
+// Paths must be single-quoted for the inner bash shell: route-group folders
+// like frontend/src/app/(app) contain parentheses that break unquoted bash
+// words, and Windows backslash separators would be eaten as escapes.
+const bashQuote = (files) => files.map((f) => `'${f.split(path.sep).join('/')}'`).join(' ');
+const argQuote = (files) => files.map((f) => `"${f.split(path.sep).join('/')}"`).join(' ');
+
 // Two independent apps, each with its own ESLint config and its own
 // node_modules. Run each app's eslint from that app's directory (paths made
 // relative to it) so the right config + plugins resolve. Prettier is shared and
@@ -10,8 +16,8 @@ module.exports = {
     const cwd = path.join(process.cwd(), 'backend');
     const files = filenames.map((f) => path.relative(cwd, f));
     return [
-      `bash -c "cd backend && npx eslint --fix ${files.join(' ')}"`,
-      `prettier --write ${filenames.join(' ')}`,
+      `bash -c "cd backend && npx eslint --fix ${bashQuote(files)}"`,
+      `prettier --write ${argQuote(filenames)}`,
     ];
   },
 
@@ -20,8 +26,8 @@ module.exports = {
     const cwd = path.join(process.cwd(), 'frontend');
     const files = filenames.map((f) => path.relative(cwd, f));
     return [
-      `bash -c "cd frontend && npx eslint --fix ${files.join(' ')}"`,
-      `prettier --write ${filenames.join(' ')}`,
+      `bash -c "cd frontend && npx eslint --fix ${bashQuote(files)}"`,
+      `prettier --write ${argQuote(filenames)}`,
     ];
   },
 
@@ -31,6 +37,6 @@ module.exports = {
   // made the hook log read as if it were reformatting them on every install.
   '{backend,frontend}/**/*.{js,html,css,scss,json,md}': (filenames) => {
     const files = filenames.filter((f) => !f.endsWith('package-lock.json'));
-    return files.length ? [`prettier --write ${files.join(' ')}`] : [];
+    return files.length ? [`prettier --write ${argQuote(files)}`] : [];
   },
 };
