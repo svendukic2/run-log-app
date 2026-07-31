@@ -1,5 +1,23 @@
 @import 'tailwindcss';
 
+@theme {
+  /* Design tokens from the Figma library (Run Log Tracker). */
+  --font-sans: var(--font-inter), -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-display: var(--font-space-grotesk), var(--font-inter), sans-serif;
+
+  --color-accent: #ec4e36; /* Brand / Accent */
+  --color-canvas: #f6f6f3; /* Surface / Canvas */
+  --color-ink: #14161c; /* Surface / Ink */
+  --color-ink-raised: #1c1f27; /* Surface / Ink Raised */
+  --color-ink-elevated: #2e323d; /* Surface / Ink Elevated */
+  --color-ink-border: #262a34; /* Border / On Dark */
+  --color-on-dark-soft: #e4e6eb; /* Text / On Dark Soft */
+  --color-on-dark-muted: #b8bdc9; /* Text / On Dark Muted */
+  --color-on-dark-subtle: #7a8194; /* Text / On Dark Subtle */
+  --color-on-dark-faint: #565d6e; /* Text / On Dark Faint */
+  --color-text-primary: #16181d; /* Text / Primary */
+}
+
 :root {
   --background: #ffffff;
   --foreground: #171717;
@@ -15,5 +33,14 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(
+    --font-inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    Helvetica,
+    Arial,
+    sans-serif
+  );
 }
