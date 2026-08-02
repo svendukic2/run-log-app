@@ -1,21 +1,57 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Badge from '@/components/Badge';
 import Brand from '@/components/Brand';
-import { getProfile, isOnboardingComplete } from '@/lib/onboarding';
+import TextField from '@/components/TextField';
+import { getProfile, isOnboardingComplete, saveProfile } from '@/lib/onboarding';
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+interface FormErrors {
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+}
 
 // 01 · Welcome (Figma node 78:145). First-launch entry point only: once a
 // profile exists there is no way back to this screen.
 export default function WelcomePage() {
   const router = useRouter();
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [email, setEmail] = useState('');
+  const [errors, setErrors] = useState<FormErrors>({});
 
   useEffect(() => {
     if (getProfile()) {
       router.replace(isOnboardingComplete() ? '/dashboard' : '/setup/goal');
     }
   }, [router]);
+
+  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    const nextErrors: FormErrors = {};
+    if (!firstName.trim()) nextErrors.firstName = 'First name is required';
+    if (!lastName.trim()) nextErrors.lastName = 'Last name is required';
+    if (!email.trim()) {
+      nextErrors.email = 'Email is required';
+    } else if (!EMAIL_PATTERN.test(email.trim())) {
+      nextErrors.email = 'Enter a valid email address';
+    }
+
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) return;
+
+    saveProfile({
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
+      email: email.trim(),
+    });
+    router.push('/setup/goal');
+  };
 
   return (
     <main className="flex flex-1 flex-col bg-canvas">
@@ -32,47 +68,40 @@ export default function WelcomePage() {
             Track every run, hit your weekly goals and get simple AI coaching. First, tell us who
             you are.
           </p>
-          <div className="mt-8 flex w-full flex-col gap-[18px] rounded-[22px] border border-line bg-white px-6 py-7 md:px-[38px] md:py-[34px]">
+          <form
+            noValidate
+            onSubmit={handleSubmit}
+            className="mt-8 flex w-full flex-col gap-[18px] rounded-[22px] border border-line bg-white px-6 py-7 md:px-[38px] md:py-[34px]"
+          >
             <div className="flex flex-col gap-[18px] md:flex-row md:gap-4">
-              <div className="flex flex-1 flex-col gap-2">
-                <label htmlFor="first-name" className="text-[13px] font-medium text-secondary">
-                  First name
-                </label>
-                <input
-                  id="first-name"
-                  name="firstName"
-                  type="text"
-                  placeholder="Your first name"
-                  className="w-full rounded-[12px] border border-line-strong bg-white px-[15px] py-[13px] text-[15px] leading-[1.55] text-ink placeholder:text-tertiary"
-                />
-              </div>
-              <div className="flex flex-1 flex-col gap-2">
-                <label htmlFor="last-name" className="text-[13px] font-medium text-secondary">
-                  Last name
-                </label>
-                <input
-                  id="last-name"
-                  name="lastName"
-                  type="text"
-                  placeholder="Your last name"
-                  className="w-full rounded-[12px] border border-line-strong bg-white px-[15px] py-[13px] text-[15px] leading-[1.55] text-ink placeholder:text-tertiary"
-                />
-              </div>
-            </div>
-            <div className="flex flex-col gap-2">
-              <label htmlFor="email" className="text-[13px] font-medium text-secondary">
-                Email
-              </label>
-              <input
-                id="email"
-                name="email"
-                type="email"
-                placeholder="you@email.com"
-                className="w-full rounded-[12px] border border-line-strong bg-white px-[15px] py-[13px] text-[15px] leading-[1.55] text-ink placeholder:text-tertiary"
+              <TextField
+                id="first-name"
+                label="First name"
+                placeholder="Your first name"
+                value={firstName}
+                onChange={setFirstName}
+                error={errors.firstName}
+              />
+              <TextField
+                id="last-name"
+                label="Last name"
+                placeholder="Your last name"
+                value={lastName}
+                onChange={setLastName}
+                error={errors.lastName}
               />
             </div>
+            <TextField
+              id="email"
+              type="email"
+              label="Email"
+              placeholder="you@email.com"
+              value={email}
+              onChange={setEmail}
+              error={errors.email}
+            />
             <button
-              type="button"
+              type="submit"
               className="flex w-full items-center justify-center gap-[9px] rounded-[14px] bg-accent px-7 py-4 font-semibold text-white hover:bg-accent-pressed"
             >
               <span className="text-[16px]">Get started</span>
@@ -80,7 +109,7 @@ export default function WelcomePage() {
                 →
               </span>
             </button>
-          </div>
+          </form>
           <p className="mt-[18px] text-center text-[13px] text-tertiary">
             No password needed - your runs stay on this device.
           </p>
