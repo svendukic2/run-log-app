@@ -1,19 +1,41 @@
 @import 'tailwindcss';
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/* Run Log design tokens, mirrored from the Figma library
+   (Run-Log-Tracker, styles like "Surface / Canvas", "Brand / Accent"). */
+@theme {
+  --font-sans: var(--font-inter), -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-display: var(--font-space-grotesk), var(--font-inter), sans-serif;
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-canvas: #f6f6f3;
+  --color-ink: #16181d;
+  --color-ink-deep: #14161c;
+  --color-accent: #ec4e36;
+  --color-accent-soft: #fdeae6;
+  --color-accent-pressed: #b23522;
+  --color-secondary: #5d6472;
+  --color-tertiary: #9aa0ac;
+  --color-line: #e7e7e2;
+  --color-line-strong: #d9d9d2;
+  --color-muted: #efefec;
+
+  /* Dark sidebar surfaces and on-dark text (RUN-12). */
+  --color-ink-raised: #1c1f27;
+  --color-ink-elevated: #2e323d;
+  --color-ink-border: #262a34;
+  --color-on-dark-soft: #e4e6eb;
+  --color-on-dark-muted: #b8bdc9;
+  --color-on-dark-subtle: #7a8194;
+  --color-on-dark-faint: #565d6e;
+  --color-text-primary: #16181d;
+
+  /* Effort levels: Easy, Medium and Hard read by colour as well as label
+     (RUN-23). */
+  --color-success: #22a06b;
+  --color-warning: #e0a020;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
 }

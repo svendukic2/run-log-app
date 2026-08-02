@@ -1,53 +1,131 @@
-// Same shape the backend returns from GET /api/hello (backend is the source
-// of truth for this contract - see backend/src/app.service.ts).
-interface HelloResponse {
-  message: string;
+'use client';
+
+import { useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import Badge from '@/components/Badge';
+import Brand from '@/components/Brand';
+import TextField from '@/components/TextField';
+import { saveProfile, useLandingRoute } from '@/lib/onboarding';
+import { ROUTES } from '@/lib/routes';
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+interface FormErrors {
+  firstName?: string;
+  lastName?: string;
+  email?: string;
 }
 
-async function getHello(): Promise<HelloResponse> {
-  const baseUrl = process.env.BACKEND_URL ?? 'http://localhost:3000';
-  // no-store: always hit the API so the page reflects the live backend.
-  const res = await fetch(`${baseUrl}/api/hello`, { cache: 'no-store' });
-  if (!res.ok) {
-    throw new Error(`API responded with ${res.status}`);
-  }
-  return res.json();
-}
+// 01 · Welcome (Figma node 78:145). First-launch entry point only: once a
+// profile exists there is no way back to this screen.
+export default function WelcomePage() {
+  const router = useRouter();
+  const landing = useLandingRoute();
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [email, setEmail] = useState('');
+  const [errors, setErrors] = useState<FormErrors>({});
+  const hasNavigated = useRef(false);
 
-// Async Server Component: the fetch runs on the server at request time, so
-// there is no CORS involved and no client-side loading state to manage.
-export default async function Home() {
-  let message: string;
-  let reachable = true;
+  // Send a visitor who does not belong on this screen where they do (RUN-13
+  // AC1). Guarded so that submitting the form, which also changes the stored
+  // landing route, does not fire a second navigation on top of its own push.
+  useEffect(() => {
+    if (hasNavigated.current || !landing || landing === ROUTES.welcome) return;
+    hasNavigated.current = true;
+    router.replace(landing);
+  }, [landing, router]);
 
-  try {
-    const data = await getHello();
-    message = data.message;
-  } catch {
-    reachable = false;
-    message = 'Could not reach the API. Is the backend running on port 3000?';
-  }
+  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    const nextErrors: FormErrors = {};
+    if (!firstName.trim()) nextErrors.firstName = 'First name is required';
+    if (!lastName.trim()) nextErrors.lastName = 'Last name is required';
+    if (!email.trim()) {
+      nextErrors.email = 'Email is required';
+    } else if (!EMAIL_PATTERN.test(email.trim())) {
+      nextErrors.email = 'Enter a valid email address';
+    }
+
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) return;
+
+    saveProfile({
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
+      email: email.trim(),
+    });
+    hasNavigated.current = true;
+    router.push(ROUTES.setupGoal);
+  };
+
+  // Rendering nothing until the landing route is known keeps an onboarded
+  // visitor from seeing this form flash before the Dashboard (RUN-13 AC1).
+  if (landing !== ROUTES.welcome) return null;
 
   return (
-    <main className="flex flex-1 flex-col items-center justify-center gap-6 px-6 py-24 text-center">
-      <span className="rounded-full border border-black/10 px-3 py-1 text-sm font-medium text-zinc-600 dark:border-white/15 dark:text-zinc-400">
-        Decode Academy Demo
-      </span>
-      <h1 className="max-w-2xl text-4xl font-semibold tracking-tight sm:text-5xl">
-        Frontend + Backend connected 🎉
-      </h1>
-      <p className="max-w-md text-lg text-zinc-600 dark:text-zinc-400">
-        {reachable ? 'Message fetched from the NestJS API:' : 'Backend unreachable:'}
-      </p>
-      <p
-        className={`max-w-md rounded-lg border px-4 py-3 font-mono text-base ${
-          reachable
-            ? 'border-black/10 bg-black/5 dark:border-white/15 dark:bg-white/10'
-            : 'border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400'
-        }`}
-      >
-        {message}
-      </p>
+    <main className="flex flex-1 flex-col bg-canvas">
+      <header className="px-6 pt-[30px] md:px-12">
+        <Brand />
+      </header>
+      <div className="flex flex-1 flex-col items-center justify-center px-6 pt-5 pb-16 md:px-12">
+        <div className="flex w-full max-w-[520px] flex-col items-center">
+          <Badge>Welcome</Badge>
+          <h1 className="mt-[22px] text-center font-display text-[32px] leading-[1.08] font-bold tracking-[-0.8px] text-ink md:text-[40px]">
+            Welcome to Run Log
+          </h1>
+          <p className="mt-[14px] max-w-[440px] text-center text-[15px] leading-[1.55] text-secondary">
+            Track every run, hit your weekly goals and get simple AI coaching. First, tell us who
+            you are.
+          </p>
+          <form
+            noValidate
+            onSubmit={handleSubmit}
+            className="mt-8 flex w-full flex-col gap-[18px] rounded-[22px] border border-line bg-white px-6 py-7 md:px-[38px] md:py-[34px]"
+          >
+            <div className="flex flex-col gap-[18px] md:flex-row md:gap-4">
+              <TextField
+                id="first-name"
+                label="First name"
+                placeholder="Your first name"
+                value={firstName}
+                onChange={setFirstName}
+                error={errors.firstName}
+              />
+              <TextField
+                id="last-name"
+                label="Last name"
+                placeholder="Your last name"
+                value={lastName}
+                onChange={setLastName}
+                error={errors.lastName}
+              />
+            </div>
+            <TextField
+              id="email"
+              type="email"
+              label="Email"
+              placeholder="you@email.com"
+              value={email}
+              onChange={setEmail}
+              error={errors.email}
+            />
+            <button
+              type="submit"
+              className="flex w-full items-center justify-center gap-[9px] rounded-[14px] bg-accent px-7 py-4 font-semibold text-white hover:bg-accent-pressed"
+            >
+              <span className="text-[16px]">Get started</span>
+              <span aria-hidden className="text-[17px]">
+                →
+              </span>
+            </button>
+          </form>
+          <p className="mt-[18px] text-center text-[13px] text-tertiary">
+            No password needed - your runs stay on this device.
+          </p>
+        </div>
+      </div>
     </main>
   );
 }
