@@ -50,6 +50,18 @@ export default function DateField({
           type="date"
           value={shownValue}
           onChange={(event) => onChange(event.target.value)}
+          onClick={(event) => {
+            // Clicking the body of a native date input only focuses its hidden
+            // dd/mm/yyyy segments; the picker opens from the indicator at the
+            // far right edge. The whole box advertises a pointer cursor, so
+            // make the whole box deliver: open the picker explicitly.
+            try {
+              event.currentTarget.showPicker();
+            } catch {
+              // showPicker needs a user gesture and a visible input; if the
+              // browser refuses, the native indicator still works.
+            }
+          }}
           aria-invalid={error ? true : undefined}
           aria-describedby={error ? `${id}-error` : undefined}
           className="absolute inset-0 size-full cursor-pointer opacity-0"
