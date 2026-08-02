@@ -1,6 +1,7 @@
 // Local persistence for onboarding. Run Log has no accounts: the profile
 // lives in localStorage only ("your runs stay on this device").
 import { useSyncExternalStore } from 'react';
+import { ROUTES } from './routes';
 
 export interface Profile {
   firstName: string;
@@ -52,4 +53,19 @@ export function isOnboardingComplete(): boolean {
 
 export function markOnboardingComplete(): void {
   window.localStorage.setItem(ONBOARDING_COMPLETE_KEY, 'true');
+}
+
+// Where a visitor belongs when the app opens (RUN-13 AC1): the Dashboard once
+// onboarding is finished, the unfinished setup step when a profile exists, and
+// the Welcome screen on a first launch.
+export function resolveLandingRoute(): string {
+  if (isOnboardingComplete()) return ROUTES.dashboard;
+  return getProfile() ? ROUTES.setupGoal : ROUTES.welcome;
+}
+
+// The landing route can only be known on the client, so like useProfile the
+// server snapshot is null and the real answer arrives right after hydration.
+// Callers should render nothing while it is null rather than guess.
+export function useLandingRoute(): string | null {
+  return useSyncExternalStore(subscribeToStorage, resolveLandingRoute, () => null);
 }

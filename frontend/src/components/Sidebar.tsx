@@ -1,7 +1,9 @@
 'use client';
 
+import { useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { ROUTES, isActiveRoute } from '@/lib/routes';
 
 // Icon geometry is taken 1:1 from the Figma exports (20x20 viewBox, node 47:40);
 // fills are currentColor so the active state can recolor them via CSS.
@@ -48,6 +50,14 @@ function SettingsIcon() {
   );
 }
 
+function CloseIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <path d="M1 1L17 17M17 1L1 17" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 interface NavItem {
   label: string;
   href: string;
@@ -63,25 +73,49 @@ const NAV_SECTIONS: NavSection[] = [
   {
     label: 'MENU',
     items: [
-      { label: 'Dashboard', href: '/dashboard', icon: <DashboardIcon /> },
-      { label: 'Runs', href: '/runs', icon: <RunsIcon /> },
+      { label: 'Dashboard', href: ROUTES.dashboard, icon: <DashboardIcon /> },
+      { label: 'Runs', href: ROUTES.runs, icon: <RunsIcon /> },
     ],
   },
   {
     label: 'ASSISTANT',
-    items: [{ label: 'AI Coach', href: '/coach', icon: <CoachIcon /> }],
+    items: [{ label: 'AI Coach', href: ROUTES.coach, icon: <CoachIcon /> }],
   },
   {
     label: 'ACCOUNT',
-    items: [{ label: 'Settings', href: '/settings', icon: <SettingsIcon /> }],
+    items: [{ label: 'Settings', href: ROUTES.settings, icon: <SettingsIcon /> }],
   },
 ];
 
-export default function Sidebar() {
+// The element id AppShell points its toggle button at with aria-controls.
+export const SIDEBAR_ID = 'app-navigation';
+
+interface SidebarProps {
+  // Drawer state. Ignored from `lg` up, where the sidebar is always a column.
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+// The dark navigation column from the Figma frames (node 47:40). Below `lg`
+// the 264px column does not fit next to the content, so the same markup slides
+// in as an off-canvas drawer (RUN-13, responsive addendum).
+export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   const pathname = usePathname();
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+  // Opening the drawer moves focus into it so keyboard and screen-reader users
+  // land on the navigation instead of staying behind the backdrop.
+  useEffect(() => {
+    if (isOpen) closeButtonRef.current?.focus();
+  }, [isOpen]);
 
   return (
-    <aside className="sticky top-0 flex h-screen w-[264px] shrink-0 flex-col bg-ink px-[18px] py-[26px]">
+    <aside
+      id={SIDEBAR_ID}
+      className={`fixed inset-y-0 left-0 z-50 flex w-[264px] max-w-[85vw] shrink-0 flex-col overflow-y-auto bg-ink px-[18px] py-[26px] transition-[transform,visibility] duration-200 ease-out lg:sticky lg:top-0 lg:h-screen lg:max-w-none lg:visible lg:translate-x-0 ${
+        isOpen ? 'visible translate-x-0' : 'invisible -translate-x-full'
+      }`}
+    >
       <div className="flex items-center gap-[11px] pb-[26px] pl-[10px]">
         <div className="flex size-[38px] items-center justify-center rounded-[11px] bg-accent">
           <span className="font-display text-[20px] font-bold text-white">R</span>
@@ -92,16 +126,25 @@ export default function Sidebar() {
           </span>
           <span className="text-[11.5px] text-on-dark-subtle">TRAINING TRACKER</span>
         </div>
+        <button
+          ref={closeButtonRef}
+          type="button"
+          onClick={onClose}
+          aria-label="Close navigation"
+          className="ml-auto flex size-9 shrink-0 items-center justify-center rounded-[10px] text-on-dark-subtle hover:bg-ink-raised hover:text-white lg:hidden"
+        >
+          <CloseIcon />
+        </button>
       </div>
 
-      <nav className="flex w-full flex-col gap-[2px]">
+      <nav aria-label="Main" className="flex w-full flex-col gap-[2px]">
         {NAV_SECTIONS.map((section) => (
           <div key={section.label} className="flex w-full flex-col gap-[2px]">
             <p className="pt-[14px] pb-[8px] pl-[12px] text-[11px] font-medium tracking-[0.66px] text-on-dark-faint">
               {section.label}
             </p>
             {section.items.map((item) => {
-              const isActive = pathname === item.href || pathname.startsWith(`${item.href}/`);
+              const isActive = isActiveRoute(pathname, item.href);
               return (
                 <Link
                   key={item.href}
@@ -135,7 +178,7 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      <div className="flex-1" />
+      <div className="min-h-[26px] flex-1" />
 
       <div className="flex w-full items-center gap-[11px] border-t border-ink-border px-[10px] pt-[14px] pb-[6px]">
         <div className="flex size-[36px] items-center justify-center rounded-full bg-ink-elevated">
