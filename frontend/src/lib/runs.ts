@@ -154,7 +154,14 @@ export function validateRunForm(values: RunFormValues): RunFormErrors {
     errors.duration = 'Enter a duration greater than 0';
   }
 
-  if (!values.date) errors.date = 'Date is required';
+  if (!values.date) {
+    errors.date = 'Date is required';
+  } else if (values.date > todayIso()) {
+    // A run is a thing that happened; the past is fine (ADD edge case), the
+    // future is a typo. Not in the spec (A25 leaves validation open), raised
+    // during Sprint 1 review - see RUN-23 AC7.
+    errors.date = 'Date cannot be in the future';
+  }
 
   return errors;
 }
