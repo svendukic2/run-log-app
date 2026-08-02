@@ -30,7 +30,8 @@ describe('Add run button (RUN-15)', () => {
 
     const dialog = screen.getByRole('dialog', { name: 'Add run' });
     expect(dialog).toHaveAttribute('aria-modal', 'true');
-    expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
+    // Focus lands on the first field now that the form is there (RUN-23).
+    expect(screen.getByLabelText('Route name')).toHaveFocus();
     expect(document.body.style.overflow).toBe('hidden');
   });
 
@@ -66,6 +67,18 @@ describe('Add run button (RUN-15)', () => {
     await user.click(screen.getByRole('button', { name: 'Close' }));
 
     expect(button).toHaveFocus();
+  });
+
+  it('reopens on a clean form rather than the abandoned one (RUN-23 AC1)', async () => {
+    const { user, open } = openModal();
+    render(<AddRunButton />);
+
+    await open();
+    await user.type(screen.getByLabelText('Route name'), 'Abandoned draft');
+    await user.click(screen.getByRole('button', { name: /^cancel$/i }));
+    await open();
+
+    expect(screen.getByLabelText('Route name')).toHaveValue('');
   });
 
   it('spans the full width below `sm` and shrinks to its label above it (responsive)', () => {

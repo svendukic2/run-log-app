@@ -31,7 +31,9 @@ export default function AddRunButton() {
         </span>
       </button>
 
-      <AddRunModal isOpen={isModalOpen} onClose={closeModal} />
+      {/* Mounted only while open, so each opening starts from a clean form
+          (RUN-23 AC1). */}
+      {isModalOpen ? <AddRunModal onClose={closeModal} /> : null}
     </>
   );
 }

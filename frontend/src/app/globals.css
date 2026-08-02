@@ -27,6 +27,11 @@
   --color-on-dark-subtle: #7a8194;
   --color-on-dark-faint: #565d6e;
   --color-text-primary: #16181d;
+
+  /* Effort levels: Easy, Medium and Hard read by colour as well as label
+     (RUN-23). */
+  --color-success: #22a06b;
+  --color-warning: #e0a020;
 }
 
 body {

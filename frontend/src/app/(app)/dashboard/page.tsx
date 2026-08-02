@@ -1,5 +1,7 @@
 import AddRunButton from '@/components/AddRunButton';
 import PageHeader from '@/components/PageHeader';
+import RunList from '@/components/RunList';
+import WeekSummary from '@/components/WeekSummary';
 
 // 05 · Dashboard. The header is rendered by the page itself, above the body, so
 // the empty (04) and filled (05) states cannot render different headers between
@@ -16,9 +18,20 @@ export default function DashboardPage() {
         action={<AddRunButton />}
       />
 
-      <div data-testid="dashboard-body" className="px-5 pb-6 sm:px-8 lg:px-[40px] lg:pb-[32px]">
-        {/* Weekly goal card, chart and recent runs (RUN-17, RUN-19, RUN-20) or
-            the first-run prompt (RUN-18) render here. */}
+      <div
+        data-testid="dashboard-body"
+        className="flex flex-col gap-5 px-5 pb-6 sm:px-8 lg:px-[40px] lg:pb-[32px]"
+      >
+        {/* Provisional stand-ins for the weekly goal card, chart and recent
+            runs (RUN-17, RUN-19, RUN-20) and the first-run prompt (RUN-18):
+            they read the store the Add run modal writes to, so a saved run
+            shows up here immediately (RUN-23 AC2, AC6). */}
+        <WeekSummary />
+        <RunList
+          title="Recent runs"
+          emptyMessage="No runs logged yet. Add your first one to get started."
+          limit={5}
+        />
       </div>
     </>
   );
