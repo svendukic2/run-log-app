@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Badge from '@/components/Badge';
 import Brand from '@/components/Brand';
 import TextField from '@/components/TextField';
-import { getProfile, isOnboardingComplete, saveProfile } from '@/lib/onboarding';
+import { saveProfile, useLandingRoute } from '@/lib/onboarding';
+import { ROUTES } from '@/lib/routes';
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -19,16 +20,21 @@ interface FormErrors {
 // profile exists there is no way back to this screen.
 export default function WelcomePage() {
   const router = useRouter();
+  const landing = useLandingRoute();
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
   const [errors, setErrors] = useState<FormErrors>({});
+  const hasNavigated = useRef(false);
 
+  // Send a visitor who does not belong on this screen where they do (RUN-13
+  // AC1). Guarded so that submitting the form, which also changes the stored
+  // landing route, does not fire a second navigation on top of its own push.
   useEffect(() => {
-    if (getProfile()) {
-      router.replace(isOnboardingComplete() ? '/dashboard' : '/setup/goal');
-    }
-  }, [router]);
+    if (hasNavigated.current || !landing || landing === ROUTES.welcome) return;
+    hasNavigated.current = true;
+    router.replace(landing);
+  }, [landing, router]);
 
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -50,8 +56,13 @@ export default function WelcomePage() {
       lastName: lastName.trim(),
       email: email.trim(),
     });
-    router.push('/setup/goal');
+    hasNavigated.current = true;
+    router.push(ROUTES.setupGoal);
   };
+
+  // Rendering nothing until the landing route is known keeps an onboarded
+  // visitor from seeing this form flash before the Dashboard (RUN-13 AC1).
+  if (landing !== ROUTES.welcome) return null;
 
   return (
     <main className="flex flex-1 flex-col bg-canvas">

@@ -1,0 +1,41 @@
+import { APP_ROUTES, DEFAULT_APP_ROUTE, ROUTES, isActiveRoute } from './routes';
+
+describe('app routes (RUN-13)', () => {
+  it('opens on the Dashboard by default (AC1)', () => {
+    expect(DEFAULT_APP_ROUTE).toBe(ROUTES.dashboard);
+  });
+
+  it('lists exactly the four views that live behind the shell', () => {
+    expect(APP_ROUTES).toEqual(['/dashboard', '/runs', '/coach', '/settings']);
+  });
+
+  it('keeps onboarding outside the four shell routes (AC4)', () => {
+    expect(APP_ROUTES).not.toContain(ROUTES.welcome);
+    expect(APP_ROUTES).not.toContain(ROUTES.setupGoal);
+  });
+});
+
+describe('isActiveRoute (RUN-13 AC3)', () => {
+  it.each(APP_ROUTES)('marks %s active for its own path', (href) => {
+    expect(isActiveRoute(href, href)).toBe(true);
+  });
+
+  it('marks only one of the four views active at a time', () => {
+    const active = APP_ROUTES.filter((href) => isActiveRoute('/runs', href));
+
+    expect(active).toEqual([ROUTES.runs]);
+  });
+
+  it('keeps a nested route inside its section', () => {
+    expect(isActiveRoute('/runs/42', ROUTES.runs)).toBe(true);
+  });
+
+  it('does not match a route that merely shares a prefix', () => {
+    expect(isActiveRoute('/runs-archive', ROUTES.runs)).toBe(false);
+  });
+
+  it('does not let the welcome route swallow every path', () => {
+    expect(isActiveRoute('/dashboard', ROUTES.welcome)).toBe(false);
+    expect(isActiveRoute('/', ROUTES.welcome)).toBe(true);
+  });
+});

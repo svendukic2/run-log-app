@@ -1,16 +1,13 @@
-import Sidebar from '@/components/Sidebar';
+import AppShell from '@/components/AppShell';
 
-// Shared shell for the four main app views (RUN-12): the fixed dark sidebar
-// plus a light content area. Onboarding screens live outside this group.
+// Route group for the four views behind the shared shell (RUN-13). Next.js
+// keeps this layout mounted across /dashboard, /runs, /coach and /settings, so
+// only the page below it re-renders on navigation. Onboarding lives outside the
+// group and therefore renders without a sidebar (AC4).
 export default function AppLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  return (
-    <div className="flex flex-1 items-start bg-canvas">
-      <Sidebar />
-      <main className="min-w-0 flex-1">{children}</main>
-    </div>
-  );
+  return <AppShell>{children}</AppShell>;
 }

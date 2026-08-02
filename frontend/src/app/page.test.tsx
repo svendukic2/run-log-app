@@ -92,6 +92,34 @@ describe('Welcome screen (RUN-7)', () => {
   });
 });
 
+describe('Onboarding is outside the app shell (RUN-13)', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    replace.mockClear();
+    push.mockClear();
+  });
+
+  it('renders no sidebar on the Welcome screen (AC4)', () => {
+    render(<WelcomePage />);
+
+    expect(screen.queryByRole('navigation')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open navigation' })).toBeNull();
+  });
+
+  it('does not flash the Welcome form on the way to the Dashboard (AC1)', () => {
+    window.localStorage.setItem(
+      'runlog.profile',
+      JSON.stringify({ firstName: 'Marko', lastName: 'Horvat', email: 'marko@email.com' }),
+    );
+    window.localStorage.setItem('runlog.onboardingComplete', 'true');
+
+    render(<WelcomePage />);
+
+    expect(replace).toHaveBeenCalledWith('/dashboard');
+    expect(screen.queryByRole('heading', { name: 'Welcome to Run Log' })).toBeNull();
+  });
+});
+
 describe('Welcome profile form (RUN-8)', () => {
   beforeEach(() => {
     window.localStorage.clear();

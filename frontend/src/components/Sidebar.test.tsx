@@ -1,4 +1,5 @@
 import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import Sidebar from './Sidebar';
 
 // usePathname drives the active state; mock it per test.
@@ -7,13 +8,22 @@ jest.mock('next/navigation', () => ({
   usePathname: () => mockUsePathname(),
 }));
 
+const onClose = jest.fn();
+
+// The drawer state only matters below `lg`; these tests render the open
+// sidebar, which is what the desktop column renders too.
+function renderSidebar() {
+  return render(<Sidebar isOpen onClose={onClose} />);
+}
+
 describe('Sidebar', () => {
   beforeEach(() => {
     mockUsePathname.mockReturnValue('/dashboard');
+    onClose.mockClear();
   });
 
   it('renders the logo and all sections with their items (AC1)', () => {
-    render(<Sidebar />);
+    renderSidebar();
 
     expect(screen.getByText('Run Log')).toBeInTheDocument();
     expect(screen.getByText('TRAINING TRACKER')).toBeInTheDocument();
@@ -30,7 +40,7 @@ describe('Sidebar', () => {
 
   it('highlights exactly the current view and gives it the dot (AC2)', () => {
     mockUsePathname.mockReturnValue('/runs');
-    render(<Sidebar />);
+    renderSidebar();
 
     const active = screen.getByRole('link', { name: /runs/i });
     expect(active).toHaveAttribute('aria-current', 'page');
@@ -49,7 +59,7 @@ describe('Sidebar', () => {
     ['/settings', 'Settings'],
   ])('marks %s as active for the %s item (AC4)', (pathname, label) => {
     mockUsePathname.mockReturnValue(pathname);
-    render(<Sidebar />);
+    renderSidebar();
 
     expect(screen.getByRole('link', { name: new RegExp(label, 'i') })).toHaveAttribute(
       'aria-current',
@@ -59,8 +69,17 @@ describe('Sidebar', () => {
 
   it('treats nested routes as part of their section', () => {
     mockUsePathname.mockReturnValue('/runs/42');
-    render(<Sidebar />);
+    renderSidebar();
 
     expect(screen.getByRole('link', { name: /runs/i })).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('dismisses the mobile drawer from its close button (RUN-13, responsive)', async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+
+    await user.click(screen.getByRole('button', { name: 'Close navigation' }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

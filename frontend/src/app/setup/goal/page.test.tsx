@@ -16,4 +16,11 @@ describe('Weekly goal step badge (RUN-8)', () => {
 
     expect(screen.getByText('Welcome, Marko')).toBeInTheDocument();
   });
+
+  it('renders no sidebar, onboarding sits outside the app shell (RUN-13 AC4)', () => {
+    render(<WeeklyGoalPage />);
+
+    expect(screen.queryByRole('navigation')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open navigation' })).toBeNull();
+  });
 });
