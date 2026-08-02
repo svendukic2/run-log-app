@@ -8,6 +8,7 @@ import DateField from '@/components/DateField';
 import StepDots from '@/components/StepDots';
 import {
   clampGoal,
+  getGoal,
   GOAL_DEFAULT_KM,
   GOAL_MAX_KM,
   GOAL_MIN_KM,
@@ -16,16 +17,19 @@ import {
 } from '@/lib/goal';
 import { useProfile } from '@/lib/onboarding';
 import { ROUTES } from '@/lib/routes';
+import { useHydrated } from '@/lib/useHydrated';
 
 // 02 · Setup - Weekly goal (Figma node 5:2). Stepper and slider edit the same
 // clamped value; start/end dates and both continue actions save the goal and
-// open Setup - Running level (03).
+// open Setup - Running level (03). A goal already stored (e.g. after coming
+// Back from step 03) refills the controls so entered values are kept (RUN-11).
 export default function WeeklyGoalPage() {
   const router = useRouter();
   const profile = useProfile();
-  const [km, setKm] = useState(GOAL_DEFAULT_KM);
-  const [startDate, setStartDate] = useState(() => todayIso());
-  const [endDate, setEndDate] = useState('');
+  const hydrated = useHydrated();
+  const [km, setKm] = useState(() => getGoal()?.km ?? GOAL_DEFAULT_KM);
+  const [startDate, setStartDate] = useState(() => getGoal()?.startDate ?? todayIso());
+  const [endDate, setEndDate] = useState(() => getGoal()?.endDate ?? '');
   const [dateError, setDateError] = useState('');
 
   const handleStartTracking = () => {
@@ -44,6 +48,10 @@ export default function WeeklyGoalPage() {
     saveGoal({ km: GOAL_DEFAULT_KM, startDate: todayIso(), endDate: null });
     router.push(ROUTES.setupLevel);
   };
+
+  // The stored goal and "today" only exist on the client; render after
+  // hydration so the prerendered HTML never disagrees with restored values.
+  if (!hydrated) return null;
 
   return (
     <main className="flex flex-1 flex-col bg-canvas">

@@ -46,6 +46,22 @@ export function useProfile(): Profile | null {
   }
 }
 
+// Running level chosen on setup step 03. Not editable after onboarding
+// (flagged for the designer on RUN-11).
+export type RunningLevel = 'beginner' | 'intermediate' | 'advanced';
+
+const LEVEL_KEY = 'runlog.level';
+
+export function getLevel(): RunningLevel | null {
+  if (typeof window === 'undefined') return null;
+  const raw = window.localStorage.getItem(LEVEL_KEY);
+  return raw === 'beginner' || raw === 'intermediate' || raw === 'advanced' ? raw : null;
+}
+
+export function saveLevel(level: RunningLevel): void {
+  window.localStorage.setItem(LEVEL_KEY, level);
+}
+
 export function isOnboardingComplete(): boolean {
   if (typeof window === 'undefined') return false;
   return window.localStorage.getItem(ONBOARDING_COMPLETE_KEY) === 'true';

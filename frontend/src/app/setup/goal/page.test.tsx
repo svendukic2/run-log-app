@@ -162,4 +162,22 @@ describe('Goal dates and step navigation (RUN-10)', () => {
     expect(storedGoal()).toEqual({ km: 20, startDate: todayIso(), endDate: null });
     expect(push).toHaveBeenCalledWith('/setup/level');
   });
+
+  it('keeps values entered earlier when returning from step 03 (RUN-11 AC4)', () => {
+    window.localStorage.setItem(
+      'runlog.goal',
+      JSON.stringify({
+        km: 42,
+        startDate: isoDaysFromToday(1),
+        endDate: isoDaysFromToday(21),
+      }),
+    );
+
+    render(<WeeklyGoalPage />);
+
+    expect(screen.getByText('42')).toBeInTheDocument();
+    expect(screen.getByRole('slider')).toHaveValue('42');
+    expect(screen.getByLabelText('Start date')).toHaveValue(isoDaysFromToday(1));
+    expect(screen.getByLabelText('End date (optional)')).toHaveValue(isoDaysFromToday(21));
+  });
 });
