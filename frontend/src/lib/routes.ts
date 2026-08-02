@@ -3,6 +3,7 @@
 export const ROUTES = {
   welcome: '/',
   setupGoal: '/setup/goal',
+  setupLevel: '/setup/level',
   dashboard: '/dashboard',
   runs: '/runs',
   coach: '/coach',
