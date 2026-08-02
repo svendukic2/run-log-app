@@ -136,8 +136,23 @@ describe('validateRunForm (AC4, ADD-5, ADD-7)', () => {
     ['duration', makeForm({ duration: '0:00' })],
     ['duration', makeForm({ duration: 'ages' })],
     ['date', makeForm({ date: '' })],
+    ['date', makeForm({ date: '2999-01-01' })],
   ])('flags %s', (field, values) => {
     expect(validateRunForm(values)).toHaveProperty(field);
+  });
+
+  it('accepts today but rejects tomorrow (RUN-23 AC7)', () => {
+    const today = new Date();
+    const iso = (date: Date) =>
+      `${date.getFullYear()}-${`${date.getMonth() + 1}`.padStart(2, '0')}-${`${date.getDate()}`.padStart(2, '0')}`;
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+
+    expect(validateRunForm(makeForm({ date: iso(today) }))).toEqual({});
+    expect(validateRunForm(makeForm({ date: iso(tomorrow) }))).toHaveProperty(
+      'date',
+      'Date cannot be in the future',
+    );
   });
 
   it('reports every problem at once', () => {
