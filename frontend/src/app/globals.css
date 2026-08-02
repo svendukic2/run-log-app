@@ -17,6 +17,16 @@
   --color-line: #e7e7e2;
   --color-line-strong: #d9d9d2;
   --color-muted: #efefec;
+
+  /* Dark sidebar surfaces and on-dark text (RUN-12). */
+  --color-ink-raised: #1c1f27;
+  --color-ink-elevated: #2e323d;
+  --color-ink-border: #262a34;
+  --color-on-dark-soft: #e4e6eb;
+  --color-on-dark-muted: #b8bdc9;
+  --color-on-dark-subtle: #7a8194;
+  --color-on-dark-faint: #565d6e;
+  --color-text-primary: #16181d;
 }
 
 body {

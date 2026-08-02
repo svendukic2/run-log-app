@@ -6,8 +6,8 @@ const inter = Inter({ subsets: ['latin'], variable: '--font-inter' });
 const spaceGrotesk = Space_Grotesk({ subsets: ['latin'], variable: '--font-space-grotesk' });
 
 export const metadata: Metadata = {
-  title: 'Run Log',
-  description: 'Track every run, hit your weekly goals and get simple AI coaching.',
+  title: 'Run Log · Training Tracker',
+  description: 'Log your runs, track weekly goals and get AI coaching advice.',
 };
 
 export default function RootLayout({
