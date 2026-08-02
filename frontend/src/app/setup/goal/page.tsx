@@ -1,17 +1,49 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import Badge from '@/components/Badge';
 import Brand from '@/components/Brand';
+import DateField from '@/components/DateField';
 import StepDots from '@/components/StepDots';
-import { clampGoal, GOAL_DEFAULT_KM, GOAL_MAX_KM, GOAL_MIN_KM } from '@/lib/goal';
+import {
+  clampGoal,
+  GOAL_DEFAULT_KM,
+  GOAL_MAX_KM,
+  GOAL_MIN_KM,
+  saveGoal,
+  todayIso,
+} from '@/lib/goal';
 import { useProfile } from '@/lib/onboarding';
+import { ROUTES } from '@/lib/routes';
 
 // 02 · Setup - Weekly goal (Figma node 5:2). Stepper and slider edit the same
-// clamped value; dates and step navigation arrive with RUN-10.
+// clamped value; start/end dates and both continue actions save the goal and
+// open Setup - Running level (03).
 export default function WeeklyGoalPage() {
+  const router = useRouter();
   const profile = useProfile();
   const [km, setKm] = useState(GOAL_DEFAULT_KM);
+  const [startDate, setStartDate] = useState(() => todayIso());
+  const [endDate, setEndDate] = useState('');
+  const [dateError, setDateError] = useState('');
+
+  const handleStartTracking = () => {
+    // ISO day strings (yyyy-mm-dd) compare chronologically as plain strings.
+    if (endDate && endDate < startDate) {
+      setDateError('End date must be on or after the start date');
+      return;
+    }
+    setDateError('');
+    saveGoal({ km, startDate, endDate: endDate || null });
+    router.push(ROUTES.setupLevel);
+  };
+
+  const handleSkip = () => {
+    // Skipping keeps the shown default of 20 km (assumption A2).
+    saveGoal({ km: GOAL_DEFAULT_KM, startDate: todayIso(), endDate: null });
+    router.push(ROUTES.setupLevel);
+  };
 
   return (
     <main className="flex flex-1 flex-col bg-canvas">
@@ -75,6 +107,39 @@ export default function WeeklyGoalPage() {
               <span>30 km</span>
               <span>60 km</span>
             </div>
+            <div className="mt-[30px] flex w-full flex-col gap-[18px] md:flex-row">
+              <DateField
+                id="start-date"
+                label="Start date"
+                value={startDate}
+                onChange={setStartDate}
+              />
+              <DateField
+                id="end-date"
+                label="End date (optional)"
+                value={endDate}
+                onChange={setEndDate}
+                emptyText="No end date"
+                error={dateError}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={handleStartTracking}
+              className="mt-[30px] flex w-full items-center justify-center gap-[9px] rounded-[14px] bg-accent px-7 py-4 font-semibold text-white hover:bg-accent-pressed"
+            >
+              <span className="text-[16px]">Start tracking</span>
+              <span aria-hidden className="text-[17px]">
+                →
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={handleSkip}
+              className="mt-[18px] w-full text-center text-[14.5px] font-medium text-secondary hover:text-ink"
+            >
+              Skip for now
+            </button>
           </div>
         </div>
       </div>
