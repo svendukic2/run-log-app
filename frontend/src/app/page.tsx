@@ -1,53 +1,91 @@
-// Same shape the backend returns from GET /api/hello (backend is the source
-// of truth for this contract - see backend/src/app.service.ts).
-interface HelloResponse {
-  message: string;
-}
+'use client';
 
-async function getHello(): Promise<HelloResponse> {
-  const baseUrl = process.env.BACKEND_URL ?? 'http://localhost:3000';
-  // no-store: always hit the API so the page reflects the live backend.
-  const res = await fetch(`${baseUrl}/api/hello`, { cache: 'no-store' });
-  if (!res.ok) {
-    throw new Error(`API responded with ${res.status}`);
-  }
-  return res.json();
-}
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import Badge from '@/components/Badge';
+import Brand from '@/components/Brand';
+import { getProfile, isOnboardingComplete } from '@/lib/onboarding';
 
-// Async Server Component: the fetch runs on the server at request time, so
-// there is no CORS involved and no client-side loading state to manage.
-export default async function Home() {
-  let message: string;
-  let reachable = true;
+// 01 · Welcome (Figma node 78:145). First-launch entry point only: once a
+// profile exists there is no way back to this screen.
+export default function WelcomePage() {
+  const router = useRouter();
 
-  try {
-    const data = await getHello();
-    message = data.message;
-  } catch {
-    reachable = false;
-    message = 'Could not reach the API. Is the backend running on port 3000?';
-  }
+  useEffect(() => {
+    if (getProfile()) {
+      router.replace(isOnboardingComplete() ? '/dashboard' : '/setup/goal');
+    }
+  }, [router]);
 
   return (
-    <main className="flex flex-1 flex-col items-center justify-center gap-6 px-6 py-24 text-center">
-      <span className="rounded-full border border-black/10 px-3 py-1 text-sm font-medium text-zinc-600 dark:border-white/15 dark:text-zinc-400">
-        Decode Academy Demo
-      </span>
-      <h1 className="max-w-2xl text-4xl font-semibold tracking-tight sm:text-5xl">
-        Frontend + Backend connected 🎉
-      </h1>
-      <p className="max-w-md text-lg text-zinc-600 dark:text-zinc-400">
-        {reachable ? 'Message fetched from the NestJS API:' : 'Backend unreachable:'}
-      </p>
-      <p
-        className={`max-w-md rounded-lg border px-4 py-3 font-mono text-base ${
-          reachable
-            ? 'border-black/10 bg-black/5 dark:border-white/15 dark:bg-white/10'
-            : 'border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400'
-        }`}
-      >
-        {message}
-      </p>
+    <main className="flex flex-1 flex-col bg-canvas">
+      <header className="px-6 pt-[30px] md:px-12">
+        <Brand />
+      </header>
+      <div className="flex flex-1 flex-col items-center justify-center px-6 pt-5 pb-16 md:px-12">
+        <div className="flex w-full max-w-[520px] flex-col items-center">
+          <Badge>Welcome</Badge>
+          <h1 className="mt-[22px] text-center font-display text-[32px] leading-[1.08] font-bold tracking-[-0.8px] text-ink md:text-[40px]">
+            Welcome to Run Log
+          </h1>
+          <p className="mt-[14px] max-w-[440px] text-center text-[15px] leading-[1.55] text-secondary">
+            Track every run, hit your weekly goals and get simple AI coaching. First, tell us who
+            you are.
+          </p>
+          <div className="mt-8 flex w-full flex-col gap-[18px] rounded-[22px] border border-line bg-white px-6 py-7 md:px-[38px] md:py-[34px]">
+            <div className="flex flex-col gap-[18px] md:flex-row md:gap-4">
+              <div className="flex flex-1 flex-col gap-2">
+                <label htmlFor="first-name" className="text-[13px] font-medium text-secondary">
+                  First name
+                </label>
+                <input
+                  id="first-name"
+                  name="firstName"
+                  type="text"
+                  placeholder="Your first name"
+                  className="w-full rounded-[12px] border border-line-strong bg-white px-[15px] py-[13px] text-[15px] leading-[1.55] text-ink placeholder:text-tertiary"
+                />
+              </div>
+              <div className="flex flex-1 flex-col gap-2">
+                <label htmlFor="last-name" className="text-[13px] font-medium text-secondary">
+                  Last name
+                </label>
+                <input
+                  id="last-name"
+                  name="lastName"
+                  type="text"
+                  placeholder="Your last name"
+                  className="w-full rounded-[12px] border border-line-strong bg-white px-[15px] py-[13px] text-[15px] leading-[1.55] text-ink placeholder:text-tertiary"
+                />
+              </div>
+            </div>
+            <div className="flex flex-col gap-2">
+              <label htmlFor="email" className="text-[13px] font-medium text-secondary">
+                Email
+              </label>
+              <input
+                id="email"
+                name="email"
+                type="email"
+                placeholder="you@email.com"
+                className="w-full rounded-[12px] border border-line-strong bg-white px-[15px] py-[13px] text-[15px] leading-[1.55] text-ink placeholder:text-tertiary"
+              />
+            </div>
+            <button
+              type="button"
+              className="flex w-full items-center justify-center gap-[9px] rounded-[14px] bg-accent px-7 py-4 font-semibold text-white hover:bg-accent-pressed"
+            >
+              <span className="text-[16px]">Get started</span>
+              <span aria-hidden className="text-[17px]">
+                →
+              </span>
+            </button>
+          </div>
+          <p className="mt-[18px] text-center text-[13px] text-tertiary">
+            No password needed - your runs stay on this device.
+          </p>
+        </div>
+      </div>
     </main>
   );
 }

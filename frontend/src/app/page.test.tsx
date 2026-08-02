@@ -1,35 +1,77 @@
 import { render, screen } from '@testing-library/react';
-import Home from './page';
+import WelcomePage from './page';
 
-describe('Home page', () => {
-  const originalFetch = global.fetch;
+const replace = jest.fn();
 
-  afterEach(() => {
-    global.fetch = originalFetch;
+jest.mock('next/navigation', () => ({
+  useRouter: () => ({ replace, push: jest.fn() }),
+}));
+
+describe('Welcome screen (RUN-7)', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    replace.mockClear();
   });
 
-  it('renders the greeting fetched from the API', async () => {
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ message: 'Hello from the API' }),
-    }) as unknown as typeof fetch;
+  it('shows the logo, Welcome badge, heading and intro copy', () => {
+    render(<WelcomePage />);
 
-    // Home is an async Server Component, so await it to get the element tree.
-    render(await Home());
+    expect(screen.getByText('Run Log')).toBeInTheDocument();
+    expect(screen.getByText('R')).toBeInTheDocument();
+    expect(screen.getByText('Welcome')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Welcome to Run Log' })).toBeInTheDocument();
+    expect(screen.getByText(/track every run, hit your weekly goals/i)).toBeInTheDocument();
+  });
+
+  it('shows the no-password caption under the form card', () => {
+    render(<WelcomePage />);
 
     expect(
-      screen.getByRole('heading', { name: /frontend \+ backend connected/i }),
+      screen.getByText('No password needed - your runs stay on this device.'),
     ).toBeInTheDocument();
-    expect(screen.getByText('Decode Academy Demo')).toBeInTheDocument();
-    expect(screen.getByText('Hello from the API')).toBeInTheDocument();
   });
 
-  it('shows an error message when the API is unreachable', async () => {
-    global.fetch = jest.fn().mockRejectedValue(new Error('network down')) as unknown as typeof fetch;
+  it('has no password field anywhere on the screen', () => {
+    const { container } = render(<WelcomePage />);
 
-    render(await Home());
+    expect(container.querySelector('input[type="password"]')).toBeNull();
+    expect(screen.queryByLabelText(/password/i)).toBeNull();
+  });
 
-    expect(screen.getByText(/backend unreachable/i)).toBeInTheDocument();
-    expect(screen.getByText(/could not reach the api/i)).toBeInTheDocument();
+  it('shows the three profile inputs with the designed placeholders', () => {
+    render(<WelcomePage />);
+
+    expect(screen.getByLabelText('First name')).toHaveAttribute('placeholder', 'Your first name');
+    expect(screen.getByLabelText('Last name')).toHaveAttribute('placeholder', 'Your last name');
+    expect(screen.getByLabelText('Email')).toHaveAttribute('placeholder', 'you@email.com');
+  });
+
+  it('does not redirect on first launch (no stored profile)', () => {
+    render(<WelcomePage />);
+
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it('skips the Welcome screen when onboarding was already completed', () => {
+    window.localStorage.setItem(
+      'runlog.profile',
+      JSON.stringify({ firstName: 'Marko', lastName: 'Horvat', email: 'marko@email.com' }),
+    );
+    window.localStorage.setItem('runlog.onboardingComplete', 'true');
+
+    render(<WelcomePage />);
+
+    expect(replace).toHaveBeenCalledWith('/dashboard');
+  });
+
+  it('resumes setup when a profile exists but onboarding is unfinished', () => {
+    window.localStorage.setItem(
+      'runlog.profile',
+      JSON.stringify({ firstName: 'Marko', lastName: 'Horvat', email: 'marko@email.com' }),
+    );
+
+    render(<WelcomePage />);
+
+    expect(replace).toHaveBeenCalledWith('/setup/goal');
   });
 });
