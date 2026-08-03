@@ -5,13 +5,16 @@ import DashboardPage from './page';
 describe('Dashboard header (RUN-15)', () => {
   beforeEach(() => {
     document.body.style.overflow = '';
+    window.localStorage.clear();
   });
 
   it('shows the overline greeting, the title and the Add run button (AC1)', () => {
     render(<DashboardPage />);
 
+    // The greeting's exact copy (name, time-of-day variants) is pinned in
+    // DashboardGreeting.test.tsx (RUN-16); here only the composition matters.
     const header = screen.getByTestId('page-header');
-    expect(within(header).getByText('Good morning, Marko')).toBeInTheDocument();
+    expect(within(header).getByText(/^Good (morning|afternoon|evening)/)).toBeInTheDocument();
     expect(within(header).getByRole('heading', { name: 'Dashboard' })).toBeInTheDocument();
     expect(within(header).getByRole('button', { name: /add run/i })).toBeInTheDocument();
   });

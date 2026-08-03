@@ -1,7 +1,11 @@
+import type { ReactNode } from 'react';
+
 interface PageHeaderProps {
   // The small grey line above the title ("Good morning, Marko" on the
-  // Dashboard, "Your activity" on Runs).
-  overline: string;
+  // Dashboard, "Your activity" on Runs). A node, not a string, so client-only
+  // content like the time-of-day greeting (RUN-16) can slot in. It renders
+  // inside a <p>, so pass phrasing content only - no block elements.
+  overline: ReactNode;
   title: string;
   // Primary action, top right from `sm` up. Passed in as a slot so this stays a
   // server component and only the action itself has to run on the client.
@@ -19,7 +23,9 @@ export default function PageHeader({ overline, title, action }: PageHeaderProps)
       className="flex flex-col items-stretch gap-4 px-5 pt-6 pb-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:px-8 lg:px-[40px] lg:pt-[32px] lg:pb-[22px]"
     >
       <div className="flex min-w-0 flex-col gap-[3px]">
-        <p className="text-[13px] text-tertiary">{overline}</p>
+        {/* min-h reserves the overline's line while client-only content (the
+            greeting) waits for hydration, so the title does not jump. */}
+        <p className="min-h-[1lh] text-[13px] text-tertiary">{overline}</p>
         <h1 className="font-display text-[24px] font-bold tracking-[-0.6px] text-text-primary lg:text-[30px]">
           {title}
         </h1>
