@@ -1,0 +1,208 @@
+import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import RunsView from './RunsView';
+import type { Run } from '@/lib/runs';
+
+// Row clicks navigate imperatively; the route-name links do not need the rest
+// of next/navigation in a jsdom test.
+const push = jest.fn();
+jest.mock('next/navigation', () => ({
+  useRouter: () => ({ push }),
+}));
+
+const RUNS: Run[] = [
+  {
+    id: 'run-newest',
+    routeName: 'Morning loop',
+    distanceKm: 8.2,
+    durationSeconds: 2535, // 42:15
+    date: '2026-07-07',
+    effort: 'Medium',
+    note: '',
+  },
+  {
+    id: 'run-middle',
+    routeName: 'River trail',
+    distanceKm: 5.4,
+    durationSeconds: 1720,
+    date: '2026-07-05',
+    effort: 'Easy',
+    note: '',
+  },
+  {
+    id: 'run-oldest',
+    routeName: 'Long run',
+    distanceKm: 14.2,
+    durationSeconds: 4724, // 1:18:44
+    date: '2026-06-24',
+    effort: 'Hard',
+    note: '',
+  },
+];
+
+function storeRuns(runs: Run[]) {
+  window.localStorage.setItem('runlog.runs', JSON.stringify(runs));
+}
+
+// The route column holds the only links in the table, so their order is the
+// row order.
+function tableRouteOrder(): Array<string | null> {
+  const table = screen.getByRole('table');
+  return within(table)
+    .getAllByRole('link')
+    .map((link) => link.textContent);
+}
+
+describe('Runs view (RUN-24)', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    push.mockClear();
+  });
+
+  it('shows both tabs, the total count badge and the controls (AC2, AC7)', () => {
+    storeRuns(RUNS);
+    render(<RunsView />);
+
+    const allRuns = screen.getByRole('tab', { name: /all runs/i });
+    expect(allRuns).toHaveAttribute('aria-selected', 'true');
+    expect(within(allRuns).getByText('3')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Records' })).toHaveAttribute('aria-selected', 'false');
+
+    expect(screen.getByLabelText('Sort runs')).toHaveValue('newest');
+    expect(screen.getByRole('button', { name: 'Filter' })).toBeInTheDocument();
+  });
+
+  it('keeps the table unchanged when Filter is pressed (AC7, A19)', async () => {
+    storeRuns(RUNS);
+    const user = userEvent.setup();
+    render(<RunsView />);
+
+    await user.click(screen.getByRole('button', { name: 'Filter' }));
+
+    expect(screen.getByRole('table')).toBeInTheDocument();
+    expect(tableRouteOrder()).toEqual(['Morning loop', 'River trail', 'Long run']);
+  });
+
+  it('renders every column, the effort chips and a kebab per row (AC3)', () => {
+    storeRuns(RUNS);
+    render(<RunsView />);
+
+    for (const column of ['Route', 'Date', 'Distance', 'Duration', 'Pace', 'Effort']) {
+      expect(screen.getByRole('columnheader', { name: new RegExp(column, 'i') })).toBeVisible();
+    }
+
+    const table = screen.getByRole('table');
+    // One chip per row on top of the effort dots: the chip carries the label.
+    expect(within(table).getByText('Easy')).toBeInTheDocument();
+    expect(within(table).getByText('Medium')).toBeInTheDocument();
+    expect(within(table).getByText('Hard')).toBeInTheDocument();
+    expect(within(table).getAllByRole('button', { name: /open menu for/i })).toHaveLength(3);
+  });
+
+  it('orders newest first by default and reverses on "Oldest first" (AC4)', async () => {
+    storeRuns(RUNS);
+    const user = userEvent.setup();
+    render(<RunsView />);
+
+    expect(tableRouteOrder()).toEqual(['Morning loop', 'River trail', 'Long run']);
+
+    await user.selectOptions(screen.getByLabelText('Sort runs'), 'oldest');
+    expect(tableRouteOrder()).toEqual(['Long run', 'River trail', 'Morning loop']);
+
+    await user.selectOptions(screen.getByLabelText('Sort runs'), 'newest');
+    expect(tableRouteOrder()).toEqual(['Morning loop', 'River trail', 'Long run']);
+  });
+
+  it('shows hour-long durations as h:mm:ss (AC5)', () => {
+    storeRuns(RUNS);
+    render(<RunsView />);
+
+    const table = screen.getByRole('table');
+    expect(within(table).getByText('1:18:44')).toBeInTheDocument();
+    expect(within(table).getByText('42:15')).toBeInTheDocument();
+  });
+
+  it('opens run detail from the row but not from the kebab (AC6)', async () => {
+    storeRuns(RUNS);
+    const user = userEvent.setup();
+    render(<RunsView />);
+
+    const table = screen.getByRole('table');
+    const [firstRow] = within(table).getAllByTestId('run-row');
+
+    // Click the row itself (a plain cell), not the route-name link.
+    await user.click(within(firstRow).getByText('Jul 7, 2026'));
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(push).toHaveBeenCalledWith('/runs/run-newest');
+
+    await user.click(within(firstRow).getByRole('button', { name: /open menu for/i }));
+    expect(push).toHaveBeenCalledTimes(1);
+
+    // The route name doubles as a real link for keyboard and screen readers.
+    expect(within(firstRow).getByRole('link', { name: 'Morning loop' })).toHaveAttribute(
+      'href',
+      '/runs/run-newest',
+    );
+  });
+
+  it('swaps the table for the records panel and back (AC2)', async () => {
+    storeRuns(RUNS);
+    const user = userEvent.setup();
+    render(<RunsView />);
+
+    expect(screen.getByText(/personal records are coming soon/i)).not.toBeVisible();
+
+    await user.click(screen.getByRole('tab', { name: 'Records' }));
+    // Both panels stay mounted; `hidden` drops the table out of the
+    // accessibility tree, which is what role queries see.
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    expect(screen.getByText(/personal records are coming soon/i)).toBeVisible();
+    expect(screen.getByRole('tab', { name: 'Records' })).toHaveAttribute('aria-selected', 'true');
+
+    // The badge keeps showing the total while Records is active.
+    expect(within(screen.getByRole('tab', { name: /all runs/i })).getByText('3')).toBeVisible();
+
+    await user.click(screen.getByRole('tab', { name: /all runs/i }));
+    expect(screen.getByRole('table')).toBeInTheDocument();
+  });
+
+  it('moves between the tabs with the arrow keys', async () => {
+    storeRuns(RUNS);
+    const user = userEvent.setup();
+    render(<RunsView />);
+
+    screen.getByRole('tab', { name: /all runs/i }).focus();
+    await user.keyboard('{ArrowRight}');
+
+    const records = screen.getByRole('tab', { name: 'Records' });
+    expect(records).toHaveFocus();
+    expect(records).toHaveAttribute('aria-selected', 'true');
+
+    await user.keyboard('{ArrowLeft}');
+    expect(screen.getByRole('tab', { name: /all runs/i })).toHaveFocus();
+    expect(screen.getByRole('table')).toBeInTheDocument();
+  });
+
+  it('renders the same rows as cards for narrow screens (responsive addendum)', () => {
+    storeRuns(RUNS);
+    render(<RunsView />);
+
+    const cards = screen.getByTestId('runs-cards');
+    expect(within(cards).getAllByRole('listitem')).toHaveLength(3);
+    expect(within(cards).getByText('Morning loop')).toBeInTheDocument();
+    expect(within(cards).getByRole('link', { name: /long run/i })).toHaveAttribute(
+      'href',
+      '/runs/run-oldest',
+    );
+  });
+
+  it('shows the empty message and a zero badge with nothing logged', () => {
+    render(<RunsView />);
+
+    expect(screen.getByText(/no runs logged yet/i)).toBeInTheDocument();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    expect(
+      within(screen.getByRole('tab', { name: /all runs/i })).getByText('0'),
+    ).toBeInTheDocument();
+  });
+});

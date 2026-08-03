@@ -11,9 +11,9 @@ interface RunListProps {
 }
 
 // Provisional readout of the stored runs, so a run saved in the modal is
-// visible on the page underneath it straight away (RUN-23 AC2). The designed
-// surfaces replace it: the recent-runs card with RUN-20 and the sortable,
-// filterable table with RUN-24.
+// visible on the page underneath it straight away (RUN-23 AC2). The Runs page
+// now renders the designed table instead (RUN-24); the Dashboard keeps this
+// until the recent-runs card arrives with RUN-20.
 export default function RunList({ title, emptyMessage, limit }: RunListProps) {
   const runs = useRuns();
   const visible = limit ? runs.slice(0, limit) : runs;

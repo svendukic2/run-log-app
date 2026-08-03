@@ -8,6 +8,7 @@ import {
   formatTimeCompact,
   getRuns,
   parseDuration,
+  sortRuns,
   startOfWeek,
   toRunDraft,
   totalsForWeek,
@@ -259,5 +260,46 @@ describe('store', () => {
 
     window.localStorage.setItem('runlog.runs', JSON.stringify([{ id: 'x' }, makeRun()]));
     expect(getRuns()).toEqual([makeRun()]);
+  });
+});
+
+describe('sortRuns (RUN-24 AC4)', () => {
+  const runs = [
+    makeRun({ id: 'older', date: '2026-06-24' }),
+    makeRun({ id: 'newest', date: '2026-07-07' }),
+    makeRun({ id: 'middle', date: '2026-07-05' }),
+  ];
+
+  it('puts the newest run first', () => {
+    expect(sortRuns(runs, 'newest').map((run) => run.id)).toEqual(['newest', 'middle', 'older']);
+  });
+
+  it('reverses to oldest first', () => {
+    expect(sortRuns(runs, 'oldest').map((run) => run.id)).toEqual(['older', 'middle', 'newest']);
+  });
+
+  it('leaves the given array untouched', () => {
+    const before = [...runs];
+    sortRuns(runs, 'oldest');
+    expect(runs).toEqual(before);
+  });
+
+  it('keeps same-day runs in their stored order under either sort', () => {
+    const sameDay = [
+      makeRun({ id: 'stored-first', date: '2026-07-07' }),
+      makeRun({ id: 'stored-second', date: '2026-07-07' }),
+      makeRun({ id: 'older', date: '2026-06-24' }),
+    ];
+
+    expect(sortRuns(sameDay, 'newest').map((run) => run.id)).toEqual([
+      'stored-first',
+      'stored-second',
+      'older',
+    ]);
+    expect(sortRuns(sameDay, 'oldest').map((run) => run.id)).toEqual([
+      'older',
+      'stored-first',
+      'stored-second',
+    ]);
   });
 });
