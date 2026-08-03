@@ -57,6 +57,12 @@ export function startOfWeek(isoDate: string): string {
   return toIsoDate(date);
 }
 
+// Days of the Mon-Sun week still available, counting the given day itself:
+// 7 on Monday, 1 on Sunday. Feeds the "{n} days left" caption (RUN-17).
+export function daysLeftInWeek(isoDate: string): number {
+  return 7 - ((fromIsoDate(isoDate).getDay() + 6) % 7);
+}
+
 const DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
   month: 'short',
   day: 'numeric',
@@ -94,6 +100,15 @@ export function formatDuration(totalSeconds: number): string {
   const tail = `${seconds % 60}`.padStart(2, '0');
   if (minutes < 60) return `${minutes}:${tail}`;
   return `${Math.floor(minutes / 60)}:${`${minutes % 60}`.padStart(2, '0')}:${tail}`;
+}
+
+// The Weekly goal card's Time stat: "1h 12m" over an hour, "42m" under it
+// (RUN-17, DSH-5). Coarser than formatDuration on purpose - at week scale the
+// seconds are noise.
+export function formatTimeCompact(totalSeconds: number): string {
+  const minutes = Math.round(totalSeconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
 // Pace is never entered, only derived (ADD-4, AC5).

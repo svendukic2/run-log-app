@@ -1,9 +1,11 @@
 import {
   addRun,
+  daysLeftInWeek,
   emptyRunForm,
   formatDate,
   formatDuration,
   formatPace,
+  formatTimeCompact,
   getRuns,
   parseDuration,
   startOfWeek,
@@ -71,6 +73,20 @@ describe('formatting', () => {
   it('renders the date the way the designs write it', () => {
     expect(formatDate('2026-07-14')).toBe('Jul 14, 2026');
   });
+
+  // The Weekly goal card's Time stat (RUN-17, DSH-5).
+  it.each([
+    [0, '0m'],
+    [30, '1m'],
+    [3540, '59m'],
+    // 59.5 minutes rounds across the hour boundary.
+    [3570, '1h 0m'],
+    [3600, '1h 0m'],
+    [4560, '1h 16m'],
+    [4335, '1h 12m'],
+  ])('compacts %i seconds to "%s"', (seconds, formatted) => {
+    expect(formatTimeCompact(seconds)).toBe(formatted);
+  });
 });
 
 describe('pace (AC5, ADD-4)', () => {
@@ -94,6 +110,20 @@ describe('weeks (AC6)', () => {
     ['2026-07-20', '2026-07-20'],
   ])('puts %s in the week starting %s', (date, monday) => {
     expect(startOfWeek(date)).toBe(monday);
+  });
+
+  // Every weekday of the week 2026-08-03 (Mon) .. 2026-08-09 (Sun), pinned so
+  // the "{n} days left" caption (RUN-17) cannot drift off by one.
+  it.each([
+    ['2026-08-03', 7],
+    ['2026-08-04', 6],
+    ['2026-08-05', 5],
+    ['2026-08-06', 4],
+    ['2026-08-07', 3],
+    ['2026-08-08', 2],
+    ['2026-08-09', 1],
+  ])('counts %s as having %i days of its week left', (date, expected) => {
+    expect(daysLeftInWeek(date)).toBe(expected);
   });
 
   it('totals only the runs in the requested week', () => {
