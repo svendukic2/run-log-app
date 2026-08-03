@@ -32,6 +32,10 @@
      (RUN-23). */
   --color-success: #22a06b;
   --color-warning: #e0a020;
+
+  /* Soft green fill behind the "On track" status tag (RUN-17), the success
+     counterpart of --color-accent-soft. */
+  --color-success-soft: #e6f4ed;
 }
 
 body {
