@@ -1,4 +1,5 @@
 import AddRunButton from '@/components/AddRunButton';
+import DashboardGreeting from '@/components/DashboardGreeting';
 import PageHeader from '@/components/PageHeader';
 import RunList from '@/components/RunList';
 import WeekSummary from '@/components/WeekSummary';
@@ -10,13 +11,7 @@ import WeekSummary from '@/components/WeekSummary';
 export default function DashboardPage() {
   return (
     <>
-      <PageHeader
-        // Static designed copy for now: the time-of-day variants and the real
-        // first name arrive with RUN-16.
-        overline="Good morning, Marko"
-        title="Dashboard"
-        action={<AddRunButton />}
-      />
+      <PageHeader overline={<DashboardGreeting />} title="Dashboard" action={<AddRunButton />} />
 
       <div
         data-testid="dashboard-body"
