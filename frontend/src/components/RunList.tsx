@@ -5,7 +5,10 @@ import { formatDate, formatDuration, formatPace, useRuns } from '@/lib/runs';
 
 interface RunListProps {
   title: string;
-  emptyMessage: string;
+  // What to say when there is nothing to list. Callers that only render the
+  // list once runs exist (the dashboard, whose zero-runs UI is the first-run
+  // prompt) omit it and the empty list renders nothing.
+  emptyMessage?: string;
   // Dashboard shows a handful; the Runs page shows the lot.
   limit?: number;
 }
@@ -23,7 +26,7 @@ export default function RunList({ title, emptyMessage, limit }: RunListProps) {
       <h2 className="text-[11px] font-medium tracking-[0.66px] text-tertiary uppercase">{title}</h2>
 
       {visible.length === 0 ? (
-        <p className="text-[14.5px] text-secondary">{emptyMessage}</p>
+        emptyMessage ? <p className="text-[14.5px] text-secondary">{emptyMessage}</p> : null
       ) : (
         <ul className="flex flex-col overflow-hidden rounded-[18px] border border-line bg-white">
           {visible.map((run) => (
