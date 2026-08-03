@@ -16,6 +16,7 @@
   --color-tertiary: #9aa0ac;
   --color-line: #e7e7e2;
   --color-line-strong: #d9d9d2;
+  --color-line-subtle: #f0f0ec;
   --color-muted: #efefec;
 
   /* Dark sidebar surfaces and on-dark text (RUN-12). */
@@ -29,9 +30,16 @@
   --color-text-primary: #16181d;
 
   /* Effort levels: Easy, Medium and Hard read by colour as well as label
-     (RUN-23). */
+     (RUN-23). The soft/text pairs are the chip fills and chip text of the runs
+     table (RUN-24), mirrored 1:1 from the "Status / *" styles in the library.
+     Known wart: the Easy and Medium pairs measure under the 4.5:1 AA contrast
+     at chip size - a design-token question, so kept faithful here. */
   --color-success: #22a06b;
+  --color-success-soft: #e3f3ec;
+  --color-success-text: #1f8f5f;
   --color-warning: #e0a020;
+  --color-warning-soft: #fbf0d9;
+  --color-warning-text: #b4820e;
 }
 
 body {

@@ -242,6 +242,17 @@ export function useRuns(): Run[] {
 
 /* Selectors ---------------------------------------------------------------- */
 
+// The sort dropdown on the Runs page offers newest and oldest (RUN-24 AC4,
+// assumption A7). One comparator per direction rather than sort-then-reverse,
+// so same-day runs keep their stored order under either sort, and the copy
+// leaves the caller's array untouched.
+export type RunSortOrder = 'newest' | 'oldest';
+
+export function sortRuns(runs: Run[], order: RunSortOrder): Run[] {
+  const direction = order === 'oldest' ? 1 : -1;
+  return [...runs].sort((a, b) => direction * a.date.localeCompare(b.date));
+}
+
 export interface WeekTotals {
   runCount: number;
   distanceKm: number;
