@@ -3,10 +3,23 @@
 Sprint plan for the [ACADEMY] Run log tracker Jira project (`RUN`), board:
 <https://decode.atlassian.net/jira/software/projects/RUN/boards/2328/backlog>
 
-Scope: 6 epics (RUN-1 to RUN-6), 34 tasks (RUN-7 to RUN-40), 86 story points total.
-Assumed cadence: 4 sprints of 2 weeks each. Sprint dates are intentionally not set
-here; fill them in once the sprint calendar is shared, then copy them to the epic and
-task due dates in Jira (never invent a date).
+Scope, phase 1 (the graded assignment): 6 epics (RUN-1 to RUN-6), 34 tasks (RUN-7 to
+RUN-40), 86 story points total. Assumed cadence: 4 sprints of 2 weeks each. Sprint
+dates are intentionally not set here; fill them in once the sprint calendar is shared,
+then copy them to the epic and task due dates in Jira (never invent a date).
+
+Phase 2 (database, accounts, social platform) is planned separately in
+[v2-roadmap.md](v2-roadmap.md) and summarized at the bottom of this file. Hard rule:
+phase 2 never eats phase 1 sprint capacity.
+
+## Progress
+
+| Sprint | Status | Notes |
+| --- | --- | --- |
+| Sprint 1 | **Done** | All 9 tasks merged to develop (RUN-7..13, 15, 23). Review findings fixed in PR #12: date picker click target (RUN-10), future run dates rejected (RUN-23 AC7, flagged design-review). Velocity confirmed: 22 SP |
+| Sprint 2 | next | |
+| Sprint 3-4 | planned | |
+| Sprint 5-8 | proposal (phase 2) | pending teacher sign-off, see v2-roadmap.md |
 
 ---
 
@@ -174,6 +187,27 @@ exists.
   skipping designed states a trap, and every demo starts on a fresh profile.
 - **Recalibrate after Sprint 1.** 22 SP is a guess, not a velocity. Move the boundary
   between Sprints 2 and 3 first; keep Sprint 4's risk item (RUN-35) untouched.
+
+## Phase 2 - database, accounts, social (Sprints 5-8, proposal)
+
+Full detail in [v2-roadmap.md](v2-roadmap.md). Summary:
+
+| Sprint | Goal | Est. |
+| --- | --- | --- |
+| Sprint 5 | **Real database, same app**: Postgres + Prisma behind a NestJS API, Sprint 1-4 features migrated off localStorage (runs, profile, goal, coach). Prisma schema and type contract already exist (`docs/data-model.md`) | ~22 SP |
+| Sprint 6 | **Accounts**: sign up/in, JWT + guards, all data user-scoped, app deployed to a real host. Retires the v1 "No password needed" design - needs new Figma screens first | ~23 SP |
+| Sprint 7 | **Social core**: follow/followers, user search, public profiles with runs, in-app notifications | ~21 SP |
+| Sprint 8 | **Events + leaderboard**: create/join events, per-event and global weekly leaderboards, faker-seeded demo users | ~21 SP |
+
+Phase 2 rules:
+
+- Design first: every new screen (auth, leaderboard, events, people, notifications) is
+  drawn in Figma and agreed before its task starts, same as v1.
+- Jira: phase 2 epics exist now; only Sprint 5 (database) tasks are broken down,
+  because they are concrete today. Sprint 6-8 tasks get written when their features
+  are agreed and drawn.
+- Sprint 5 is the lowest-risk entry: it changes plumbing, not features, and everything
+  it needs (schema, type contract, thin-slice order: runs first) is already prepared.
 
 ## Definition of done for a sprint
 
