@@ -16,10 +16,15 @@ function renderSidebar() {
   return render(<Sidebar isOpen onClose={onClose} />);
 }
 
+function storeProfile(profile: { firstName: string; lastName: string; email: string }) {
+  window.localStorage.setItem('runlog.profile', JSON.stringify(profile));
+}
+
 describe('Sidebar', () => {
   beforeEach(() => {
     mockUsePathname.mockReturnValue('/dashboard');
     onClose.mockClear();
+    window.localStorage.clear();
   });
 
   it('renders the logo and all sections with their items (AC1)', () => {
@@ -72,6 +77,47 @@ describe('Sidebar', () => {
     renderSidebar();
 
     expect(screen.getByRole('link', { name: /runs/i })).toHaveAttribute('aria-current', 'page');
+  });
+
+  describe('profile footer (RUN-14)', () => {
+    it('shows initials, "{First name} {L}." and the email from the stored profile (AC1)', () => {
+      storeProfile({ firstName: 'Marko', lastName: 'Kovačić', email: 'marko@email.com' });
+      renderSidebar();
+
+      const footer = screen.getByTestId('profile-footer');
+      expect(within(footer).getByText('MK')).toBeInTheDocument();
+      expect(within(footer).getByText('Marko K.')).toBeInTheDocument();
+      expect(within(footer).getByText('marko@email.com')).toBeInTheDocument();
+    });
+
+    it('derives the initials from first and last name, not a hardcoded pair (AC2)', () => {
+      storeProfile({ firstName: 'ana', lastName: 'barić', email: 'ana@email.com' });
+      renderSidebar();
+
+      const footer = screen.getByTestId('profile-footer');
+      expect(within(footer).getByText('AB')).toBeInTheDocument();
+      expect(within(footer).getByText('ana B.')).toBeInTheDocument();
+    });
+
+    it.each(['/dashboard', '/runs', '/coach', '/settings'])(
+      'renders the same footer on %s (AC3)',
+      (pathname) => {
+        mockUsePathname.mockReturnValue(pathname);
+        storeProfile({ firstName: 'Marko', lastName: 'Kovačić', email: 'marko@email.com' });
+        renderSidebar();
+
+        const footer = screen.getByTestId('profile-footer');
+        expect(within(footer).getByText('MK')).toBeInTheDocument();
+        expect(within(footer).getByText('Marko K.')).toBeInTheDocument();
+        expect(within(footer).getByText('marko@email.com')).toBeInTheDocument();
+      },
+    );
+
+    it('renders no footer while no profile is stored', () => {
+      renderSidebar();
+
+      expect(screen.queryByTestId('profile-footer')).not.toBeInTheDocument();
+    });
   });
 
   it('dismisses the mobile drawer from its close button (RUN-13, responsive)', async () => {
