@@ -12,10 +12,12 @@ import {
   getRuns,
   lastWeekStarts,
   parseDuration,
+  runToForm,
   sortRuns,
   startOfWeek,
   toRunDraft,
   totalsForWeek,
+  updateRun,
   validateRunForm,
   type Run,
   type RunFormValues,
@@ -270,6 +272,23 @@ describe('toRunDraft', () => {
   });
 });
 
+describe('runToForm (RUN-28 AC1)', () => {
+  it('renders a stored run back into the shapes the form uses', () => {
+    expect(runToForm(makeRun({ note: 'Windy' }))).toEqual(
+      makeForm({ routeName: 'Morning loop', note: 'Windy' }),
+    );
+  });
+
+  it('writes a duration over an hour as h:mm:ss', () => {
+    expect(runToForm(makeRun({ durationSeconds: 4724 })).duration).toBe('1:18:44');
+  });
+
+  it('round-trips through toRunDraft without drift', () => {
+    const run = makeRun();
+    expect({ ...toRunDraft(runToForm(run)), id: run.id }).toEqual(run);
+  });
+});
+
 describe('emptyRunForm (AC1)', () => {
   beforeAll(() => {
     jest.useFakeTimers().setSystemTime(new Date(2026, 6, 14, 9, 30));
@@ -317,6 +336,37 @@ describe('store', () => {
 
     window.localStorage.setItem('runlog.runs', JSON.stringify([{ id: 'x' }, makeRun()]));
     expect(getRuns()).toEqual([makeRun()]);
+  });
+
+  it('updateRun replaces the run in place and keeps its id (RUN-28 AC2)', () => {
+    const other = addRun(toRunDraft(makeForm({ routeName: 'Other', date: '2026-07-01' })));
+    const target = addRun(toRunDraft(makeForm()));
+
+    const updated = updateRun(
+      target.id,
+      toRunDraft(makeForm({ routeName: 'Corrected', distance: '10' })),
+    );
+
+    expect(updated).toEqual({ ...target, routeName: 'Corrected', distanceKm: 10 });
+    // Still two runs: an edit never duplicates, and the other run is untouched.
+    expect(getRuns()).toEqual([updated, other]);
+  });
+
+  it('updateRun re-files the run when the edit moves its date', () => {
+    const other = addRun(toRunDraft(makeForm({ routeName: 'Other', date: '2026-07-10' })));
+    const target = addRun(toRunDraft(makeForm({ date: '2026-07-14' })));
+
+    updateRun(target.id, toRunDraft(makeForm({ date: '2026-07-01' })));
+
+    // Newest-first ordering follows the corrected date.
+    expect(getRuns().map((run) => run.id)).toEqual([other.id, target.id]);
+  });
+
+  it('updateRun writes nothing when the id matches no run', () => {
+    const run = addRun(toRunDraft(makeForm()));
+
+    expect(updateRun('missing', toRunDraft(makeForm({ routeName: 'Ghost' })))).toBeNull();
+    expect(getRuns()).toEqual([run]);
   });
 });
 
