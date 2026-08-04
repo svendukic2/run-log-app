@@ -1,6 +1,7 @@
 'use client';
 
-import { useId, useState, type KeyboardEvent } from 'react';
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
+import RunsEmptyState from '@/components/RunsEmptyState';
 import RunsTable from '@/components/RunsTable';
 import { sortRuns, useRuns, type RunSortOrder } from '@/lib/runs';
 
@@ -28,8 +29,27 @@ export default function RunsView() {
   const [order, setOrder] = useState<RunSortOrder>('newest');
   const baseId = useId();
 
+  // With nothing logged yet the tabs stay (the badge reads 0) but the table
+  // gives way to the designed empty state and the Filter and sort controls
+  // disappear with it - there is nothing for them to act on (RUN-25 AC1, AC3).
+  const isEmpty = runs.length === 0;
+
   const tabId = (key: TabKey) => `${baseId}-tab-${key}`;
   const panelId = (key: TabKey) => `${baseId}-panel-${key}`;
+
+  // Saving the first run unmounts the empty state together with the CTA that
+  // opened the modal, so the modal's return-focus target is gone and focus
+  // would silently fall to <body>. Only in that case (activeElement check)
+  // the "All runs" tab picks it up: it survives the swap and sits right above
+  // the table that just appeared. Saves from the header button keep their
+  // usual return-focus behavior.
+  const wasEmpty = useRef(isEmpty);
+  useEffect(() => {
+    if (wasEmpty.current && !isEmpty && document.activeElement === document.body) {
+      document.getElementById(tabId('all'))?.focus();
+    }
+    wasEmpty.current = isEmpty;
+  });
 
   // Arrow keys move between the two tabs, as the tablist pattern asks; with
   // only two of them, either arrow simply means "the other one".
@@ -83,31 +103,33 @@ export default function RunsView() {
           })}
         </div>
 
-        <div className="ml-auto flex items-center gap-[10px]">
-          {/* Visible but deliberately inert: Filter has no designed panel yet
-              (AC7, assumption A19). */}
-          <button
-            type="button"
-            className="rounded-[12px] border border-line-strong bg-white px-[18px] py-[9px] text-[14px] font-medium text-text-primary hover:bg-muted"
-          >
-            Filter
-          </button>
-
-          <label className="relative">
-            <span className="sr-only">Sort runs</span>
-            <select
-              value={order}
-              onChange={(event) => setOrder(event.target.value as RunSortOrder)}
-              className="appearance-none rounded-[12px] border border-line-strong bg-white py-[9px] pr-[34px] pl-[16px] text-[14px] font-medium text-text-primary hover:bg-muted"
+        {isEmpty ? null : (
+          <div className="ml-auto flex items-center gap-[10px]">
+            {/* Visible but deliberately inert: Filter has no designed panel yet
+                (AC7, assumption A19). */}
+            <button
+              type="button"
+              className="rounded-[12px] border border-line-strong bg-white px-[18px] py-[9px] text-[14px] font-medium text-text-primary hover:bg-muted"
             >
-              <option value="newest">Newest first</option>
-              <option value="oldest">Oldest first</option>
-            </select>
-            <span className="pointer-events-none absolute top-1/2 right-[14px] -translate-y-1/2 text-secondary">
-              <ChevronIcon />
-            </span>
-          </label>
-        </div>
+              Filter
+            </button>
+
+            <label className="relative">
+              <span className="sr-only">Sort runs</span>
+              <select
+                value={order}
+                onChange={(event) => setOrder(event.target.value as RunSortOrder)}
+                className="appearance-none rounded-[12px] border border-line-strong bg-white py-[9px] pr-[34px] pl-[16px] text-[14px] font-medium text-text-primary hover:bg-muted"
+              >
+                <option value="newest">Newest first</option>
+                <option value="oldest">Oldest first</option>
+              </select>
+              <span className="pointer-events-none absolute top-1/2 right-[14px] -translate-y-1/2 text-secondary">
+                <ChevronIcon />
+              </span>
+            </label>
+          </div>
+        )}
       </div>
 
       {/* Both panels stay mounted and toggle with `hidden`: the tabs'
@@ -119,14 +141,9 @@ export default function RunsView() {
         aria-labelledby={tabId('all')}
         hidden={tab !== 'all'}
       >
-        {runs.length === 0 ? (
-          // The designed empty state (illustration, copy, CTA) is RUN-25.
-          <p className="text-[14.5px] text-secondary">
-            No runs logged yet. Add your first one above.
-          </p>
-        ) : (
-          <RunsTable runs={sortRuns(runs, order)} />
-        )}
+        {/* The first saved run announces itself through the store, so the
+            table takes over from the empty state on its own (RUN-25 AC4). */}
+        {isEmpty ? <RunsEmptyState /> : <RunsTable runs={sortRuns(runs, order)} />}
       </div>
       <div
         role="tabpanel"

@@ -1,7 +1,7 @@
-import { render, screen, within } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import RunsView from './RunsView';
-import type { Run } from '@/lib/runs';
+import { addRun, type Run } from '@/lib/runs';
 
 // Row clicks navigate imperatively; the route-name links do not need the rest
 // of next/navigation in a jsdom test.
@@ -195,14 +195,71 @@ describe('Runs view (RUN-24)', () => {
       '/runs/run-oldest',
     );
   });
+});
 
-  it('shows the empty message and a zero badge with nothing logged', () => {
+describe('Runs empty state (RUN-25)', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  it('shows the heading, the designed copy and a zero badge (AC1)', () => {
     render(<RunsView />);
 
-    expect(screen.getByText(/no runs logged yet/i)).toBeInTheDocument();
-    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'No runs logged yet' })).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /add your first run and it will show up here with distance, pace and effort\. your records fill in automatically\./i,
+      ),
+    ).toBeInTheDocument();
     expect(
       within(screen.getByRole('tab', { name: /all runs/i })).getByText('0'),
     ).toBeInTheDocument();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('runs-cards')).not.toBeInTheDocument();
+  });
+
+  it('hides the Filter and sort controls (AC3)', () => {
+    render(<RunsView />);
+
+    expect(screen.queryByRole('button', { name: 'Filter' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Sort runs')).not.toBeInTheDocument();
+  });
+
+  it('opens the Add run modal from "Add your first run" (AC2)', async () => {
+    const user = userEvent.setup();
+    render(<RunsView />);
+
+    await user.click(screen.getByRole('button', { name: 'Add your first run' }));
+
+    expect(screen.getByRole('dialog', { name: 'Add run' })).toHaveAttribute('aria-modal', 'true');
+  });
+
+  it('swaps the empty state for the table once the first run is saved (AC4)', () => {
+    render(<RunsView />);
+    expect(screen.getByRole('heading', { name: 'No runs logged yet' })).toBeInTheDocument();
+
+    // Saving through the modal ends in this addRun call; the form on top of
+    // it is covered by the modal's own tests.
+    act(() => {
+      addRun({
+        routeName: 'Morning loop',
+        distanceKm: 8.2,
+        durationSeconds: 2535,
+        date: '2026-07-07',
+        effort: 'Medium',
+        note: '',
+      });
+    });
+
+    expect(screen.queryByRole('heading', { name: 'No runs logged yet' })).not.toBeInTheDocument();
+    expect(screen.getByRole('table')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Filter' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Sort runs')).toBeInTheDocument();
+    expect(
+      within(screen.getByRole('tab', { name: /all runs/i })).getByText('1'),
+    ).toBeInTheDocument();
+    // The CTA that had focus just unmounted; the tab picks the focus up
+    // instead of letting it fall to <body>.
+    expect(screen.getByRole('tab', { name: /all runs/i })).toHaveFocus();
   });
 });
