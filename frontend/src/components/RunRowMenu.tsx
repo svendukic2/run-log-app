@@ -77,10 +77,15 @@ export default function RunRowMenu({ run, sizeClassName = 'size-8' }: RunRowMenu
 
   const openMenu = () => {
     const rect = buttonRef.current!.getBoundingClientRect();
-    const right = window.innerWidth - rect.right;
+    // clientWidth/Height, not window.innerWidth/Height: fixed offsets resolve
+    // against the initial containing block, which excludes a classical
+    // scrollbar, while the window sizes include it - the menu would sit a
+    // scrollbar's width off the kebab on Windows.
+    const viewport = document.documentElement;
+    const right = viewport.clientWidth - rect.right;
     // Flip above the kebab when the viewport below cannot fit the menu.
-    if (window.innerHeight - rect.bottom < MENU_HEIGHT_ESTIMATE + 8) {
-      setPlacement({ bottom: window.innerHeight - rect.top + 4, right });
+    if (viewport.clientHeight - rect.bottom < MENU_HEIGHT_ESTIMATE + 8) {
+      setPlacement({ bottom: viewport.clientHeight - rect.top + 4, right });
     } else {
       setPlacement({ top: rect.bottom + 4, right });
     }
@@ -95,8 +100,11 @@ export default function RunRowMenu({ run, sizeClassName = 'size-8' }: RunRowMenu
     if (!isOpen) return;
 
     // The menu is a keyboard trap-free popup: focus lands on its first item,
-    // Escape and Tab hand focus straight back to the kebab.
-    menuRef.current?.querySelector('button')?.focus();
+    // Escape and Tab hand focus straight back to the kebab. preventScroll so
+    // this focus can never be the scroll that closes the menu below.
+    menuRef.current
+      ?.querySelector<HTMLButtonElement>('[role="menuitem"]')
+      ?.focus({ preventScroll: true });
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' && event.key !== 'Tab') return;
@@ -189,14 +197,16 @@ export default function RunRowMenu({ run, sizeClassName = 'size-8' }: RunRowMenu
               Edit
             </button>
             {/* Announces itself as unavailable rather than pretending to
-                work, exactly like Run detail's Delete; the confirmation
-                dialog it will open is RUN-30. */}
+                work, exactly like Run detail's Delete: no handler at all, so
+                a click visibly does nothing and the menu stays open - a menu
+                that closes is the signature of an action that succeeded. The
+                confirmation dialog it will open is RUN-30. Still focusable,
+                as the menu pattern asks of disabled items. */}
             <button
               type="button"
               role="menuitem"
               aria-disabled="true"
               title="Deleting arrives in an upcoming update"
-              onClick={() => closeMenu(true)}
               className="flex items-center gap-[10px] rounded-[8px] px-[12px] py-[9px] text-left text-[14px] font-medium text-accent hover:bg-accent-soft"
             >
               <TrashIcon />

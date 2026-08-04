@@ -28,6 +28,17 @@ describe('Run row menu (RUN-29)', () => {
   beforeEach(() => {
     window.localStorage.clear();
     storeRun(RUN);
+    // jsdom has no layout, so the viewport the placement maths reads is
+    // pinned to a sane size; the kebab's rect stays at zeros, which lands in
+    // the plenty-of-room-below branch.
+    Object.defineProperty(document.documentElement, 'clientWidth', {
+      value: 1024,
+      configurable: true,
+    });
+    Object.defineProperty(document.documentElement, 'clientHeight', {
+      value: 768,
+      configurable: true,
+    });
   });
 
   it('opens a menu with Edit and a danger Delete from the kebab (AC1)', async () => {
@@ -84,14 +95,15 @@ describe('Run row menu (RUN-29)', () => {
     const user = userEvent.setup();
     render(<RunRowMenu run={RUN} />);
 
-    await openMenu(user);
+    const menu = await openMenu(user);
     const del = screen.getByRole('menuitem', { name: 'Delete' });
     expect(del).toHaveAttribute('aria-disabled', 'true');
 
     await user.click(del);
 
-    // The menu closes without any dialog and without touching the store.
-    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    // A click visibly does nothing: the menu stays open - closing is the
+    // signature of an action that succeeded - and nothing else happens.
+    expect(menu).toBeInTheDocument();
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(getRuns()).toEqual([RUN]);
   });
@@ -139,6 +151,31 @@ describe('Run row menu (RUN-29)', () => {
 
     await user.keyboard('{ArrowUp}');
     expect(screen.getByRole('menuitem', { name: 'Delete' })).toHaveFocus();
+  });
+
+  it('flips above the kebab when the viewport below cannot fit it', async () => {
+    const user = userEvent.setup();
+    render(<RunRowMenu run={RUN} />);
+
+    // A kebab 36px off the bottom of the 768px viewport: no room below.
+    kebab().getBoundingClientRect = () =>
+      ({
+        top: 700,
+        bottom: 732,
+        left: 868,
+        right: 900,
+        width: 32,
+        height: 32,
+        x: 868,
+        y: 700,
+        toJSON: () => ({}),
+      }) as DOMRect;
+
+    const menu = await openMenu(user);
+
+    expect(menu.style.bottom).toBe(`${768 - 700 + 4}px`);
+    expect(menu.style.top).toBe('');
+    expect(menu.style.right).toBe(`${1024 - 900}px`);
   });
 
   it('closes when anything scrolls, since its anchor is gone', async () => {

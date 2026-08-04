@@ -208,6 +208,8 @@ describe('Runs view (RUN-24)', () => {
     const cards = screen.getByTestId('runs-cards');
     expect(within(cards).getAllByRole('listitem')).toHaveLength(3);
     expect(within(cards).getByText('Morning loop')).toBeInTheDocument();
+    // Each card carries the same row menu the table rows have (RUN-29).
+    expect(within(cards).getAllByRole('button', { name: /open menu for/i })).toHaveLength(3);
     expect(within(cards).getByRole('link', { name: /long run/i })).toHaveAttribute(
       'href',
       '/runs/run-oldest',
