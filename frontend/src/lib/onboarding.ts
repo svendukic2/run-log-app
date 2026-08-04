@@ -46,6 +46,25 @@ export function useProfile(): Profile | null {
   }
 }
 
+// Display helpers for the sidebar profile footer (RUN-14). There is no avatar
+// upload, so the "avatar" is always the derived initials. Settings edits reach
+// these through useProfile, so the footer follows renames automatically.
+function firstGrapheme(value: string): string {
+  // Spread instead of [0] so surrogate pairs ("Đurđa", emoji) stay intact.
+  return [...value.trim()][0] ?? '';
+}
+
+export function profileInitials(profile: Profile): string {
+  return (firstGrapheme(profile.firstName) + firstGrapheme(profile.lastName)).toUpperCase();
+}
+
+// "Marko Kovačić" renders as "Marko K." per the Figma footer (node 47:39).
+export function profileShortName(profile: Profile): string {
+  const lastInitial = firstGrapheme(profile.lastName);
+  const firstName = profile.firstName.trim();
+  return lastInitial ? `${firstName} ${lastInitial.toUpperCase()}.` : firstName;
+}
+
 // Running level chosen on setup step 03. Not editable after onboarding
 // (flagged for the designer on RUN-11).
 export type RunningLevel = 'beginner' | 'intermediate' | 'advanced';

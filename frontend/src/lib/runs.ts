@@ -5,6 +5,16 @@ import { useSyncExternalStore } from 'react';
 export const EFFORT_LEVELS = ['Easy', 'Medium', 'Hard'] as const;
 export type Effort = (typeof EFFORT_LEVELS)[number];
 
+// Chip fills for an effort badge (design node 57:51): Easy green, Medium
+// amber, Hard coral, on their soft fills with the darker "* Text" tokens.
+// Shared vocabulary next to the Effort type itself, so the runs table
+// (RUN-24) and the run detail header (RUN-27) cannot drift apart.
+export const EFFORT_CHIP: Record<Effort, string> = {
+  Easy: 'bg-success-soft text-success-text',
+  Medium: 'bg-warning-soft text-warning-text',
+  Hard: 'bg-accent-soft text-accent-pressed',
+};
+
 // Medium is preselected in the Add run modal (ADD-2, AC1).
 export const DEFAULT_EFFORT: Effort = 'Medium';
 
@@ -57,6 +67,12 @@ export function startOfWeek(isoDate: string): string {
   return toIsoDate(date);
 }
 
+// Days of the Mon-Sun week still available, counting the given day itself:
+// 7 on Monday, 1 on Sunday. Feeds the "{n} days left" caption (RUN-17).
+export function daysLeftInWeek(isoDate: string): number {
+  return 7 - ((fromIsoDate(isoDate).getDay() + 6) % 7);
+}
+
 const DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
   month: 'short',
   day: 'numeric',
@@ -66,6 +82,29 @@ const DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
 // "Jul 14, 2026", as the runs table and the modal show it.
 export function formatDate(isoDate: string): string {
   return DATE_FORMATTER.format(fromIsoDate(isoDate));
+}
+
+const SHORT_DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
+  month: 'short',
+  day: 'numeric',
+});
+
+// "Jul 14": DSH-8 shows no year on the recent-runs card (RUN-20). No timeZone
+// on the formatter is deliberate: fromIsoDate builds a local-midnight date, so
+// formatting in the local zone can never shift the day.
+export function formatDateShort(isoDate: string): string {
+  return SHORT_DATE_FORMATTER.format(fromIsoDate(isoDate));
+}
+
+// Row captions on the recent-runs card (RUN-20): "42 min" and "8.2 km". In
+// the shared lib so this card and the runs table cannot drift apart on
+// rounding.
+export function formatDurationMinutes(totalSeconds: number): string {
+  return `${Math.round(totalSeconds / 60)} min`;
+}
+
+export function formatDistanceKm(km: number): string {
+  return `${km.toFixed(1)} km`;
 }
 
 /* Duration and pace -------------------------------------------------------- */
@@ -94,6 +133,15 @@ export function formatDuration(totalSeconds: number): string {
   const tail = `${seconds % 60}`.padStart(2, '0');
   if (minutes < 60) return `${minutes}:${tail}`;
   return `${Math.floor(minutes / 60)}:${`${minutes % 60}`.padStart(2, '0')}:${tail}`;
+}
+
+// The Weekly goal card's Time stat: "1h 12m" over an hour, "42m" under it
+// (RUN-17, DSH-5). Coarser than formatDuration on purpose - at week scale the
+// seconds are noise.
+export function formatTimeCompact(totalSeconds: number): string {
+  const minutes = Math.round(totalSeconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
 // Pace is never entered, only derived (ADD-4, AC5).
@@ -241,6 +289,17 @@ export function useRuns(): Run[] {
 }
 
 /* Selectors ---------------------------------------------------------------- */
+
+// The sort dropdown on the Runs page offers newest and oldest (RUN-24 AC4,
+// assumption A7). One comparator per direction rather than sort-then-reverse,
+// so same-day runs keep their stored order under either sort, and the copy
+// leaves the caller's array untouched.
+export type RunSortOrder = 'newest' | 'oldest';
+
+export function sortRuns(runs: Run[], order: RunSortOrder): Run[] {
+  const direction = order === 'oldest' ? 1 : -1;
+  return [...runs].sort((a, b) => direction * a.date.localeCompare(b.date));
+}
 
 export interface WeekTotals {
   runCount: number;

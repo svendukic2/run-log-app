@@ -1,11 +1,17 @@
 import {
   addRun,
+  daysLeftInWeek,
   emptyRunForm,
   formatDate,
+  formatDateShort,
+  formatDistanceKm,
   formatDuration,
+  formatDurationMinutes,
   formatPace,
+  formatTimeCompact,
   getRuns,
   parseDuration,
+  sortRuns,
   startOfWeek,
   toRunDraft,
   totalsForWeek,
@@ -71,6 +77,40 @@ describe('formatting', () => {
   it('renders the date the way the designs write it', () => {
     expect(formatDate('2026-07-14')).toBe('Jul 14, 2026');
   });
+
+  // Recent-runs card captions (RUN-20, DSH-8).
+  it('renders the short date without a year', () => {
+    expect(formatDateShort('2026-07-07')).toBe('Jul 7');
+  });
+
+  it.each([
+    [2535, '42 min'],
+    [29, '0 min'],
+    [90, '2 min'],
+  ])('renders %i seconds as "%s" in the minutes caption', (seconds, formatted) => {
+    expect(formatDurationMinutes(seconds)).toBe(formatted);
+  });
+
+  it.each([
+    [8.2, '8.2 km'],
+    [5, '5.0 km'],
+  ])('renders %f km as "%s"', (km, formatted) => {
+    expect(formatDistanceKm(km)).toBe(formatted);
+  });
+
+  // The Weekly goal card's Time stat (RUN-17, DSH-5).
+  it.each([
+    [0, '0m'],
+    [30, '1m'],
+    [3540, '59m'],
+    // 59.5 minutes rounds across the hour boundary.
+    [3570, '1h 0m'],
+    [3600, '1h 0m'],
+    [4560, '1h 16m'],
+    [4335, '1h 12m'],
+  ])('compacts %i seconds to "%s"', (seconds, formatted) => {
+    expect(formatTimeCompact(seconds)).toBe(formatted);
+  });
 });
 
 describe('pace (AC5, ADD-4)', () => {
@@ -94,6 +134,20 @@ describe('weeks (AC6)', () => {
     ['2026-07-20', '2026-07-20'],
   ])('puts %s in the week starting %s', (date, monday) => {
     expect(startOfWeek(date)).toBe(monday);
+  });
+
+  // Every weekday of the week 2026-08-03 (Mon) .. 2026-08-09 (Sun), pinned so
+  // the "{n} days left" caption (RUN-17) cannot drift off by one.
+  it.each([
+    ['2026-08-03', 7],
+    ['2026-08-04', 6],
+    ['2026-08-05', 5],
+    ['2026-08-06', 4],
+    ['2026-08-07', 3],
+    ['2026-08-08', 2],
+    ['2026-08-09', 1],
+  ])('counts %s as having %i days of its week left', (date, expected) => {
+    expect(daysLeftInWeek(date)).toBe(expected);
   });
 
   it('totals only the runs in the requested week', () => {
@@ -229,5 +283,46 @@ describe('store', () => {
 
     window.localStorage.setItem('runlog.runs', JSON.stringify([{ id: 'x' }, makeRun()]));
     expect(getRuns()).toEqual([makeRun()]);
+  });
+});
+
+describe('sortRuns (RUN-24 AC4)', () => {
+  const runs = [
+    makeRun({ id: 'older', date: '2026-06-24' }),
+    makeRun({ id: 'newest', date: '2026-07-07' }),
+    makeRun({ id: 'middle', date: '2026-07-05' }),
+  ];
+
+  it('puts the newest run first', () => {
+    expect(sortRuns(runs, 'newest').map((run) => run.id)).toEqual(['newest', 'middle', 'older']);
+  });
+
+  it('reverses to oldest first', () => {
+    expect(sortRuns(runs, 'oldest').map((run) => run.id)).toEqual(['older', 'middle', 'newest']);
+  });
+
+  it('leaves the given array untouched', () => {
+    const before = [...runs];
+    sortRuns(runs, 'oldest');
+    expect(runs).toEqual(before);
+  });
+
+  it('keeps same-day runs in their stored order under either sort', () => {
+    const sameDay = [
+      makeRun({ id: 'stored-first', date: '2026-07-07' }),
+      makeRun({ id: 'stored-second', date: '2026-07-07' }),
+      makeRun({ id: 'older', date: '2026-06-24' }),
+    ];
+
+    expect(sortRuns(sameDay, 'newest').map((run) => run.id)).toEqual([
+      'stored-first',
+      'stored-second',
+      'older',
+    ]);
+    expect(sortRuns(sameDay, 'oldest').map((run) => run.id)).toEqual([
+      'older',
+      'stored-first',
+      'stored-second',
+    ]);
   });
 });
