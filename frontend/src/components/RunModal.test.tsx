@@ -1,12 +1,12 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import AddRunModal from './AddRunModal';
-import { getRuns, todayIso } from '@/lib/runs';
+import RunModal from './RunModal';
+import { addRun, getRuns, todayIso, type Run } from '@/lib/runs';
 
-function renderModal() {
+function renderModal(run?: Run) {
   const onClose = jest.fn();
   const user = userEvent.setup();
-  render(<AddRunModal onClose={onClose} />);
+  render(<RunModal run={run} onClose={onClose} />);
   return { user, onClose };
 }
 
@@ -180,5 +180,121 @@ describe('Add run modal (RUN-23)', () => {
     expect(screen.getByLabelText('Route name').closest('form')?.firstElementChild).toHaveClass(
       'overflow-y-auto',
     );
+  });
+});
+
+describe('Edit run modal (RUN-28)', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    document.body.style.overflow = '';
+  });
+
+  // The run the ticket's mock shows, stored first so edits have something to
+  // land on.
+  function seedRun(): Run {
+    return addRun({
+      routeName: 'Morning loop',
+      distanceKm: 8.2,
+      durationSeconds: 2535,
+      date: '2026-07-07',
+      effort: 'Medium',
+      note: 'Felt smooth, negative splits.',
+    });
+  }
+
+  const saveChanges = (user: ReturnType<typeof userEvent.setup>) =>
+    user.click(screen.getByRole('button', { name: /save changes/i }));
+
+  it('is titled "Edit run" with every field prefilled from the run (AC1, EDT-1)', () => {
+    renderModal(seedRun());
+
+    expect(screen.getByRole('dialog', { name: 'Edit run' })).toHaveAttribute('aria-modal', 'true');
+    expect(screen.getByLabelText('Route name')).toHaveValue('Morning loop');
+    expect(screen.getByLabelText('Distance (km)')).toHaveValue('8.2');
+    expect(screen.getByLabelText('Duration')).toHaveValue('42:15');
+    expect(screen.getByLabelText('Date')).toHaveValue('2026-07-07');
+    expect(screen.getByRole('radio', { name: 'Medium' })).toBeChecked();
+    // The prefilled note is the run's stored note: the mock's differing copy
+    // against Run detail is a flagged design conflict, not two notes (AC5, A20).
+    expect(screen.getByLabelText('Note (optional)')).toHaveValue('Felt smooth, negative splits.');
+    // The buttons are the edit pair, not Add run's.
+    expect(screen.getByRole('button', { name: /save changes/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /save run/i })).toBeNull();
+  });
+
+  it('persists the edit over the same run and closes (AC2, EDT-2)', async () => {
+    const run = seedRun();
+    const { user, onClose } = renderModal(run);
+
+    const routeName = screen.getByLabelText('Route name');
+    await user.clear(routeName);
+    await user.type(routeName, 'Evening tempo');
+    const distance = screen.getByLabelText('Distance (km)');
+    await user.clear(distance);
+    await user.type(distance, '10');
+    await user.click(screen.getByRole('radio', { name: 'Hard' }));
+    await saveChanges(user);
+
+    // Same id, updated values, still exactly one run: an edit, not a copy.
+    expect(getRuns()).toEqual([
+      {
+        id: run.id,
+        routeName: 'Evening tempo',
+        distanceKm: 10,
+        durationSeconds: 2535,
+        date: '2026-07-07',
+        effort: 'Hard',
+        note: 'Felt smooth, negative splits.',
+      },
+    ]);
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Cancel', /^cancel$/i],
+    ['the close button', /^close$/i],
+  ])('closes from %s and leaves the run unchanged (AC3)', async (_name, buttonName) => {
+    const run = seedRun();
+    const { user, onClose } = renderModal(run);
+    const routeName = screen.getByLabelText('Route name');
+    await user.clear(routeName);
+    await user.type(routeName, 'Something else');
+
+    await user.click(screen.getByRole('button', { name: buttonName }));
+
+    expect(getRuns()).toEqual([run]);
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it.each([
+    ['an empty route name', 'Route name', ''],
+    ['distance 0', 'Distance (km)', '0'],
+    ['duration 0', 'Duration', '0:00'],
+  ])('refuses to save %s and says so inline (AC4, EDT-3)', async (_name, label, value) => {
+    const run = seedRun();
+    const { user, onClose } = renderModal(run);
+    await user.clear(screen.getByLabelText(label));
+    if (value) await user.type(screen.getByLabelText(label), value);
+
+    await saveChanges(user);
+
+    const field = screen.getByLabelText(label);
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    expect(field).toHaveFocus();
+    // The stored run is untouched.
+    expect(getRuns()).toEqual([run]);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('keeps the Add run responsive shell: bottom sheet and stacked buttons on a phone', () => {
+    renderModal(seedRun());
+
+    const dialog = screen.getByRole('dialog', { name: 'Edit run' });
+    expect(dialog).toHaveClass('w-full', 'max-w-[560px]', 'max-h-[92dvh]');
+    expect(dialog.parentElement).toHaveClass('items-end', 'sm:items-center');
+    for (const name of [/^cancel$/i, /save changes/i]) {
+      expect(screen.getByRole('button', { name })).toHaveClass('w-full', 'sm:w-auto');
+    }
   });
 });

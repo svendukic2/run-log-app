@@ -1,6 +1,8 @@
 'use client';
 
 import Link from 'next/link';
+import { useRef, useState } from 'react';
+import RunModal from '@/components/RunModal';
 import { ROUTES } from '@/lib/routes';
 import {
   EFFORT_CHIP,
@@ -67,6 +69,15 @@ function StatCard({ label, value }: { label: string; value: React.ReactNode }) {
 export default function RunDetailView({ runId }: { runId: string }) {
   const hydrated = useHydrated();
   const runs = useRuns();
+  const [isEditing, setIsEditing] = useState(false);
+  const editButtonRef = useRef<HTMLButtonElement>(null);
+
+  // Dismissing the modal hands focus back to the button that opened it,
+  // mirroring AddRunButton.
+  const closeEditModal = () => {
+    setIsEditing(false);
+    editButtonRef.current?.focus();
+  };
 
   // Runs live in localStorage, which the server and the hydration pass cannot
   // see, so the shell stays neutral until the store has been read.
@@ -97,15 +108,14 @@ export default function RunDetailView({ runId }: { runId: string }) {
           <h1 className="font-display text-[28px] font-bold tracking-[-0.6px] text-text-primary lg:text-[30px]">
             {run.routeName}
           </h1>
-          {/* Visible seams for the two follow-up tickets: Edit wires up to
-              the Edit run modal with RUN-28 and Delete to the confirmation
-              dialog with RUN-30. Until then they announce themselves as
-              unavailable rather than pretending to work. */}
+          {/* Edit opens the Edit run modal (RUN-28, DET-2). Delete stays a
+              visible seam until the confirmation dialog lands with RUN-30,
+              announcing itself as unavailable rather than pretending to work. */}
           <div className="flex gap-[10px]">
             <button
+              ref={editButtonRef}
               type="button"
-              aria-disabled="true"
-              title="Editing arrives in an upcoming update"
+              onClick={() => setIsEditing(true)}
               className="rounded-[12px] border border-line-strong bg-white px-[22px] py-[11px] text-[14.5px] font-semibold text-text-primary hover:bg-muted"
             >
               Edit
@@ -206,6 +216,12 @@ export default function RunDetailView({ runId }: { runId: string }) {
           </section>
         </div>
       </div>
+
+      {/* Mounted only while open, so every opening prefills from the run as
+          currently stored (RUN-28 AC1). Saving writes the store and this view
+          re-reads it through useRuns, so the header, stats, Note and Details
+          all reflect the edit at once (AC2). */}
+      {isEditing ? <RunModal run={run} onClose={closeEditModal} /> : null}
     </div>
   );
 }

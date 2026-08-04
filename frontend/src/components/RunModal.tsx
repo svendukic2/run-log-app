@@ -7,8 +7,11 @@ import TextField from '@/components/TextField';
 import {
   addRun,
   emptyRunForm,
+  runToForm,
   toRunDraft,
+  updateRun,
   validateRunForm,
+  type Run,
   type RunFormErrors,
   type RunFormField,
   type RunFormValues,
@@ -22,7 +25,7 @@ function CloseIcon() {
   );
 }
 
-export const ADD_RUN_TITLE_ID = 'add-run-title';
+export const RUN_MODAL_TITLE_ID = 'run-modal-title';
 
 // Field ids double as the anchor for "focus the first thing that failed", so
 // they live in one place and in the order the form reads.
@@ -34,20 +37,27 @@ const FIELD_IDS: Record<RunFormField, string> = {
 };
 const FIELD_ORDER: RunFormField[] = ['routeName', 'distance', 'duration', 'date'];
 
-interface AddRunModalProps {
+interface RunModalProps {
+  // Without a run this is "Add run" (design node 67:345, RUN-23); with one it
+  // is the same form titled "Edit run" (node 69:88, RUN-28 EDT-1), prefilled
+  // with that run's values and saving over it instead of creating a new one.
+  run?: Run;
   onClose: () => void;
 }
 
-// "Add run" modal (design node 67:345). Rendered only while open, so every
-// opening is a fresh mount: the date is today's and the effort is Medium
-// without anything having to reset them (AC1).
+// The Add/Edit run modal. Rendered only while open, so every opening is a
+// fresh mount: adding starts from today's date and Medium effort without
+// anything having to reset them (RUN-23 AC1), editing from the run's stored
+// values (RUN-28 AC1).
 //
 // Dismissal mirrors the shell's navigation drawer (Escape, scrim click) so the
 // two overlays behave the same. Below `sm` the card is a bottom sheet, which
 // keeps it reachable one-handed instead of floating mid-screen, and the form
 // scrolls inside a capped card so the buttons stay on screen on a short phone.
-export default function AddRunModal({ onClose }: AddRunModalProps) {
-  const [values, setValues] = useState<RunFormValues>(emptyRunForm);
+export default function RunModal({ run, onClose }: RunModalProps) {
+  const [values, setValues] = useState<RunFormValues>(() =>
+    run ? runToForm(run) : emptyRunForm(),
+  );
   const [errors, setErrors] = useState<RunFormErrors>({});
   const routeNameRef = useRef<HTMLInputElement>(null);
 
@@ -78,6 +88,7 @@ export default function AddRunModal({ onClose }: AddRunModalProps) {
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
+    // Editing applies the same rules as adding (EDT-3: ADD-5 to ADD-8).
     const nextErrors = validateRunForm(values);
     setErrors(nextErrors);
 
@@ -89,8 +100,14 @@ export default function AddRunModal({ onClose }: AddRunModalProps) {
       return;
     }
 
-    // Pace is derived from what was entered, never asked for (ADD-4).
-    addRun(toRunDraft(values));
+    // Pace is derived from what was entered, never asked for (ADD-4). Saving
+    // an edit announces the change, so list, detail, dashboard and records
+    // all refresh (EDT-2).
+    if (run) {
+      updateRun(run.id, toRunDraft(values));
+    } else {
+      addRun(toRunDraft(values));
+    }
     onClose();
   };
 
@@ -98,7 +115,7 @@ export default function AddRunModal({ onClose }: AddRunModalProps) {
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-6">
       <div
         aria-hidden="true"
-        data-testid="add-run-backdrop"
+        data-testid="run-modal-backdrop"
         onClick={onClose}
         className="fixed inset-0 bg-ink/60"
       />
@@ -106,15 +123,15 @@ export default function AddRunModal({ onClose }: AddRunModalProps) {
       <div
         role="dialog"
         aria-modal="true"
-        aria-labelledby={ADD_RUN_TITLE_ID}
+        aria-labelledby={RUN_MODAL_TITLE_ID}
         className="relative z-10 flex max-h-[92dvh] w-full max-w-[560px] flex-col overflow-hidden rounded-t-[20px] bg-white shadow-[0_24px_60px_0_rgba(0,0,0,0.22)] sm:max-h-[calc(100dvh-48px)] sm:rounded-[20px]"
       >
         <div className="flex shrink-0 items-center justify-between gap-4 px-5 py-5 sm:pt-[24px] sm:pr-[24px] sm:pb-[24px] sm:pl-[28px]">
           <h2
-            id={ADD_RUN_TITLE_ID}
+            id={RUN_MODAL_TITLE_ID}
             className="font-display text-[20px] font-bold tracking-[-0.4px] text-text-primary"
           >
-            Add run
+            {run ? 'Edit run' : 'Add run'}
           </h2>
           <button
             type="button"
@@ -184,8 +201,8 @@ export default function AddRunModal({ onClose }: AddRunModalProps) {
             />
           </div>
 
-          {/* Full-width and stacked on a phone, which puts "Save run" closest
-              to the thumb without reordering it away from the design. */}
+          {/* Full-width and stacked on a phone, which puts the primary action
+              closest to the thumb without reordering it away from the design. */}
           <div className="flex shrink-0 flex-col gap-3 px-5 py-4 sm:flex-row sm:justify-end sm:gap-[12px] sm:px-[28px] sm:py-[18px]">
             <button
               type="button"
@@ -198,7 +215,7 @@ export default function AddRunModal({ onClose }: AddRunModalProps) {
               type="submit"
               className="flex w-full items-center justify-center gap-[9px] rounded-[14px] bg-accent px-[28px] py-[16px] text-[16px] font-semibold text-white hover:bg-accent-pressed sm:w-auto"
             >
-              Save run
+              {run ? 'Save changes' : 'Save run'}
               <span aria-hidden="true" className="text-[17px]">
                 →
               </span>

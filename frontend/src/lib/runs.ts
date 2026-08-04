@@ -214,6 +214,22 @@ export function validateRunForm(values: RunFormValues): RunFormErrors {
   return errors;
 }
 
+// The inverse of toRunDraft: a stored run as the form shows it, so Edit run
+// opens prefilled with exactly that run's values (RUN-28 AC1). The prefilled
+// note is the stored note - the mock's note differs from Run detail's for the
+// same run, which is a copy conflict flagged with the designer (EDT-4, A20);
+// the app has a single stored note, so both screens render that.
+export function runToForm(run: Run): RunFormValues {
+  return {
+    routeName: run.routeName,
+    distance: `${run.distanceKm}`,
+    duration: formatDuration(run.durationSeconds),
+    date: run.date,
+    effort: run.effort,
+    note: run.note,
+  };
+}
+
 // Only ever called with values that already passed validateRunForm.
 export function toRunDraft(values: RunFormValues): Omit<Run, 'id'> {
   return {
@@ -265,6 +281,23 @@ export function addRun(draft: Omit<Run, 'id'>): Run {
   window.localStorage.setItem(RUNS_KEY, JSON.stringify([run, ...getRuns()]));
   window.dispatchEvent(new Event(RUNS_CHANGED_EVENT));
   return run;
+}
+
+// Replaces the run in place and announces the change, so every screen reading
+// through useRuns - list, detail, dashboard, records - refreshes at once
+// (RUN-28 AC2). Returns null when the id matches nothing (deleted in another
+// tab); nothing is written in that case.
+export function updateRun(id: string, draft: Omit<Run, 'id'>): Run | null {
+  const runs = getRuns();
+  const index = runs.findIndex((run) => run.id === id);
+  if (index === -1) return null;
+
+  const updated: Run = { ...draft, id };
+  const next = [...runs];
+  next[index] = updated;
+  window.localStorage.setItem(RUNS_KEY, JSON.stringify(next));
+  window.dispatchEvent(new Event(RUNS_CHANGED_EVENT));
+  return updated;
 }
 
 function subscribeToRuns(onStoreChange: () => void): () => void {
