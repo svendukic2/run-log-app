@@ -1,8 +1,13 @@
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderToString } from 'react-dom/server';
-import { addRun, type Run } from '@/lib/runs';
+import { addRun, getRuns, type Run } from '@/lib/runs';
 import RunDetailView from './RunDetailView';
+
+const push = jest.fn();
+jest.mock('next/navigation', () => ({
+  useRouter: () => ({ push }),
+}));
 
 function seedRun(overrides: Partial<Omit<Run, 'id'>> = {}): Run {
   return addRun({
@@ -19,6 +24,7 @@ function seedRun(overrides: Partial<Omit<Run, 'id'>> = {}): Run {
 describe('Run detail (RUN-27)', () => {
   beforeEach(() => {
     window.localStorage.clear();
+    push.mockClear();
   });
 
   it('shows route name, date caption, effort badge and Edit/Delete (AC1)', () => {
@@ -30,10 +36,9 @@ describe('Run detail (RUN-27)', () => {
     const caption = screen.getByTestId('run-detail-caption');
     expect(within(caption).getByText('Jul 7, 2026')).toBeInTheDocument();
     expect(within(caption).getByText('Medium effort')).toBeInTheDocument();
-    // Edit is live since RUN-28; Delete stays a visible seam until RUN-30
-    // wires it up, announcing itself as not yet available.
+    // Edit is live since RUN-28, Delete since RUN-30.
     expect(screen.getByRole('button', { name: 'Edit' })).not.toHaveAttribute('aria-disabled');
-    expect(screen.getByRole('button', { name: 'Delete' })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('button', { name: 'Delete' })).not.toHaveAttribute('aria-disabled');
   });
 
   it('links the "All runs" breadcrumb back to the list (AC2)', () => {
@@ -169,6 +174,50 @@ describe('Run detail (RUN-27)', () => {
 
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.getByRole('heading', { level: 1, name: 'Morning loop' })).toBeInTheDocument();
+  });
+
+  it('opens the delete confirmation quoting this run (RUN-30 AC1, DEL-1)', async () => {
+    const user = userEvent.setup();
+    const run = seedRun();
+    render(<RunDetailView runId={run.id} />);
+
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+
+    const dialog = screen.getByRole('alertdialog', { name: 'Delete this run?' });
+    expect(dialog).toHaveTextContent('“Morning loop” will be permanently removed');
+    // Nothing is deleted until the dialog says so.
+    expect(getRuns()).toEqual([run]);
+  });
+
+  it('deletes the run and returns to the list on "Delete run" (RUN-30 AC2)', async () => {
+    const user = userEvent.setup();
+    const run = seedRun();
+    render(<RunDetailView runId={run.id} />);
+
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    await user.click(screen.getByRole('button', { name: 'Delete run' }));
+
+    // The run is gone and the page it lived on hands over to the list.
+    expect(getRuns()).toEqual([]);
+    expect(push).toHaveBeenCalledWith('/runs');
+    // No "Run not found" flash while the navigation is in flight: the view
+    // goes blank instead.
+    expect(screen.queryByText('Run not found')).toBeNull();
+  });
+
+  it('keeps the run and stays on the page when the delete is cancelled (RUN-30 AC3)', async () => {
+    const user = userEvent.setup();
+    const run = seedRun();
+    render(<RunDetailView runId={run.id} />);
+
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(getRuns()).toEqual([run]);
+    expect(push).not.toHaveBeenCalled();
+    // Focus lands back on the button that opened the dialog.
+    expect(screen.getByRole('button', { name: 'Delete' })).toHaveFocus();
   });
 
   it('explains itself when the id matches no stored run', () => {

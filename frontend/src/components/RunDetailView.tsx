@@ -1,7 +1,9 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useCallback, useRef, useState } from 'react';
+import DeleteRunDialog from '@/components/DeleteRunDialog';
 import RunModal from '@/components/RunModal';
 import { ROUTES } from '@/lib/routes';
 import {
@@ -69,8 +71,11 @@ function StatCard({ label, value }: { label: string; value: React.ReactNode }) {
 export default function RunDetailView({ runId }: { runId: string }) {
   const hydrated = useHydrated();
   const runs = useRuns();
+  const router = useRouter();
   const [isEditing, setIsEditing] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const editButtonRef = useRef<HTMLButtonElement>(null);
+  const deleteButtonRef = useRef<HTMLButtonElement>(null);
 
   // Dismissing the modal hands focus back to the button that opened it,
   // mirroring AddRunButton. Stable across renders: this view re-renders on
@@ -81,12 +86,27 @@ export default function RunDetailView({ runId }: { runId: string }) {
     editButtonRef.current?.focus();
   }, []);
 
+  // Cancelling the delete works the same way (RUN-30 AC3); confirming leaves
+  // the page instead - this run no longer exists, so the honest destination
+  // is the list it came from, minus one row.
+  const closeDeleteDialog = useCallback(() => {
+    setIsDeleting(false);
+    deleteButtonRef.current?.focus();
+  }, []);
+
+  const leaveAfterDelete = useCallback(() => {
+    router.push(ROUTES.runs);
+  }, [router]);
+
   // Runs live in localStorage, which the server and the hydration pass cannot
   // see, so the shell stays neutral until the store has been read.
   if (!hydrated) return null;
 
   const run = runs.find((candidate) => candidate.id === runId);
-  if (!run) return <NotFound />;
+  // A confirmed delete removes the run from the store before the navigation
+  // back to the list lands; isDeleting is still true in that window, so the
+  // page goes blank for a frame instead of flashing "Run not found".
+  if (!run) return isDeleting ? null : <NotFound />;
 
   const details: Array<{ label: string; value: string }> = [
     { label: 'Route name', value: run.routeName },
@@ -110,9 +130,8 @@ export default function RunDetailView({ runId }: { runId: string }) {
           <h1 className="font-display text-[28px] font-bold tracking-[-0.6px] text-text-primary lg:text-[30px]">
             {run.routeName}
           </h1>
-          {/* Edit opens the Edit run modal (RUN-28, DET-2). Delete stays a
-              visible seam until the confirmation dialog lands with RUN-30,
-              announcing itself as unavailable rather than pretending to work. */}
+          {/* Edit opens the Edit run modal (RUN-28, DET-2); Delete opens the
+              confirmation dialog quoting this run (RUN-30, DEL-1). */}
           <div className="flex gap-[10px]">
             <button
               ref={editButtonRef}
@@ -123,9 +142,9 @@ export default function RunDetailView({ runId }: { runId: string }) {
               Edit
             </button>
             <button
+              ref={deleteButtonRef}
               type="button"
-              aria-disabled="true"
-              title="Deleting arrives in an upcoming update"
+              onClick={() => setIsDeleting(true)}
               className="rounded-[12px] border border-line-strong bg-white px-[22px] py-[11px] text-[14.5px] font-semibold text-accent hover:bg-accent-soft"
             >
               Delete
@@ -224,6 +243,12 @@ export default function RunDetailView({ runId }: { runId: string }) {
           re-reads it through useRuns, so the header, stats, Note and Details
           all reflect the edit at once (AC2). */}
       {isEditing ? <RunModal run={run} onClose={closeEditModal} /> : null}
+
+      {/* Confirming deletes the run and returns to the list, which has
+          already recomputed without it (RUN-30 AC2, DEL-3). */}
+      {isDeleting ? (
+        <DeleteRunDialog run={run} onClose={closeDeleteDialog} onDeleted={leaveAfterDelete} />
+      ) : null}
     </div>
   );
 }

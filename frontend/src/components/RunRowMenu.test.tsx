@@ -91,21 +91,43 @@ describe('Run row menu (RUN-29)', () => {
     expect(kebab()).toHaveFocus();
   });
 
-  it('keeps Delete visible but inert until RUN-30 (AC3 seam)', async () => {
+  it('opens the delete confirmation quoting this run (RUN-30 AC1)', async () => {
     const user = userEvent.setup();
     render(<RunRowMenu run={RUN} />);
 
-    const menu = await openMenu(user);
-    const del = screen.getByRole('menuitem', { name: 'Delete' });
-    expect(del).toHaveAttribute('aria-disabled', 'true');
+    await openMenu(user);
+    await user.click(screen.getByRole('menuitem', { name: 'Delete' }));
 
-    await user.click(del);
-
-    // A click visibly does nothing: the menu stays open - closing is the
-    // signature of an action that succeeded - and nothing else happens.
-    expect(menu).toBeInTheDocument();
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    // The menu gives way to the dialog; nothing is deleted yet.
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    const dialog = screen.getByRole('alertdialog', { name: 'Delete this run?' });
+    expect(dialog).toHaveTextContent('“Morning loop” will be permanently removed');
     expect(getRuns()).toEqual([RUN]);
+  });
+
+  it('"Delete run" removes the run from the store (RUN-30 AC2)', async () => {
+    const user = userEvent.setup();
+    render(<RunRowMenu run={RUN} />);
+
+    await openMenu(user);
+    await user.click(screen.getByRole('menuitem', { name: 'Delete' }));
+    await user.click(screen.getByRole('button', { name: 'Delete run' }));
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(getRuns()).toEqual([]);
+  });
+
+  it('cancelling the delete keeps the run and refocuses the kebab (RUN-30 AC3)', async () => {
+    const user = userEvent.setup();
+    render(<RunRowMenu run={RUN} />);
+
+    await openMenu(user);
+    await user.click(screen.getByRole('menuitem', { name: 'Delete' }));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(getRuns()).toEqual([RUN]);
+    expect(kebab()).toHaveFocus();
   });
 
   it('closes without any action on Escape and returns focus to the kebab (AC4)', async () => {

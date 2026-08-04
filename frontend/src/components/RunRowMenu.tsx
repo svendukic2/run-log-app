@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import DeleteRunDialog from '@/components/DeleteRunDialog';
 import RunModal from '@/components/RunModal';
 import type { Run } from '@/lib/runs';
 
@@ -62,15 +63,15 @@ interface RunRowMenuProps {
 }
 
 // The kebab and the row menu it opens (RUN-29, 12 · Runs - Row menu): "Edit"
-// opens the Edit run modal prefilled with that row's run (AC2); "Delete" is
-// the designed danger item, inert until the confirmation dialog lands with
-// RUN-30 - the same visible seam Run detail's Delete button uses. Clicking
+// opens the Edit run modal prefilled with that row's run (AC2); "Delete"
+// opens the delete confirmation quoting that row's run (RUN-30 AC1). Clicking
 // elsewhere or pressing Escape closes the menu without any action (AC4): the
 // transparent backdrop swallows the click, so a dismissal on the table can
 // never fall through to the row navigation underneath.
 export default function RunRowMenu({ run, sizeClassName = 'size-8' }: RunRowMenuProps) {
   const [placement, setPlacement] = useState<MenuPlacement | null>(null);
   const [isEditing, setIsEditing] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const isOpen = placement !== null;
@@ -148,6 +149,13 @@ export default function RunRowMenu({ run, sizeClassName = 'size-8' }: RunRowMenu
     buttonRef.current?.focus();
   }, []);
 
+  // Cancelling the delete works the same way; confirming does not refocus,
+  // because the row - kebab included - unmounts together with the run.
+  const closeDeleteDialog = useCallback(() => {
+    setIsDeleting(false);
+    buttonRef.current?.focus();
+  }, []);
+
   return (
     // In the table the whole row is clickable, so every click inside this
     // subtree - kebab, backdrop, menu items, the modal on top - must stay out
@@ -196,17 +204,15 @@ export default function RunRowMenu({ run, sizeClassName = 'size-8' }: RunRowMenu
               <PencilIcon />
               Edit
             </button>
-            {/* Announces itself as unavailable rather than pretending to
-                work, exactly like Run detail's Delete: no handler at all, so
-                a click visibly does nothing and the menu stays open - a menu
-                that closes is the signature of an action that succeeded. The
-                confirmation dialog it will open is RUN-30. Still focusable,
-                as the menu pattern asks of disabled items. */}
+            {/* Opens the delete confirmation for this row's run (RUN-30 AC1);
+                nothing is removed until the dialog's "Delete run" says so. */}
             <button
               type="button"
               role="menuitem"
-              aria-disabled="true"
-              title="Deleting arrives in an upcoming update"
+              onClick={() => {
+                closeMenu(false);
+                setIsDeleting(true);
+              }}
               className="flex items-center gap-[10px] rounded-[8px] px-[12px] py-[9px] text-left text-[14px] font-medium text-accent hover:bg-accent-soft"
             >
               <TrashIcon />
@@ -219,6 +225,17 @@ export default function RunRowMenu({ run, sizeClassName = 'size-8' }: RunRowMenu
       {/* Mounted only while open, so every opening prefills from the run as
           currently stored (RUN-28 AC1). */}
       {isEditing ? <RunModal run={run} onClose={closeEditModal} /> : null}
+
+      {/* Confirming deletes the run from the store, and this row unmounts
+          with it - the "All runs" count and the records recompute from the
+          same announcement (RUN-30 AC2, AC4). */}
+      {isDeleting ? (
+        <DeleteRunDialog
+          run={run}
+          onClose={closeDeleteDialog}
+          onDeleted={() => setIsDeleting(false)}
+        />
+      ) : null}
     </span>
   );
 }

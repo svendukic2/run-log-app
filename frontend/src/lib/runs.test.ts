@@ -1,6 +1,7 @@
 import {
   addRun,
   daysLeftInWeek,
+  deleteRun,
   emptyRunForm,
   formatDate,
   formatDateShort,
@@ -389,6 +390,33 @@ describe('store', () => {
     const run = addRun(toRunDraft(makeForm()));
 
     expect(updateRun('missing', toRunDraft(makeForm({ routeName: 'Ghost' })))).toBeNull();
+    expect(getRuns()).toEqual([run]);
+  });
+
+  it('deleteRun removes exactly that run and keeps the rest (RUN-30 AC2)', () => {
+    const other = addRun(toRunDraft(makeForm({ routeName: 'Other', date: '2026-07-01' })));
+    const target = addRun(toRunDraft(makeForm()));
+
+    expect(deleteRun(target.id)).toBe(true);
+
+    expect(getRuns()).toEqual([other]);
+  });
+
+  it('deleteRun announces the change so derived screens recompute (DEL-3)', () => {
+    const target = addRun(toRunDraft(makeForm()));
+    const onChange = jest.fn();
+    window.addEventListener('runlog:runs-changed', onChange);
+
+    deleteRun(target.id);
+
+    expect(onChange).toHaveBeenCalled();
+    window.removeEventListener('runlog:runs-changed', onChange);
+  });
+
+  it('deleteRun writes nothing when the id matches no run', () => {
+    const run = addRun(toRunDraft(makeForm()));
+
+    expect(deleteRun('missing')).toBe(false);
     expect(getRuns()).toEqual([run]);
   });
 });
