@@ -1,10 +1,16 @@
-// Placeholder view: the AI Coach experience is built in later tickets (RUN-30+).
+import CoachView from '@/components/CoachView';
+import PageHeader from '@/components/PageHeader';
+
+// 14/15 · AI Coach. The header carries no page-level primary action (AIC-1):
+// the page's actions live inside its cards.
 export default function CoachPage() {
   return (
-    <div className="px-5 py-6 sm:px-8 lg:px-[40px] lg:py-[32px]">
-      <h1 className="font-display text-[24px] font-bold tracking-[-0.6px] text-text-primary lg:text-[30px]">
-        AI Coach
-      </h1>
-    </div>
+    <>
+      <PageHeader overline="Your training assistant" title="AI Coach" />
+
+      <div className="flex flex-col gap-5 px-5 pb-6 sm:px-8 lg:px-[40px] lg:pb-[32px]">
+        <CoachView />
+      </div>
+    </>
   );
 }

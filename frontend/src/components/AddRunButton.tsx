@@ -1,7 +1,7 @@
 'use client';
 
-import { useRef, useState } from 'react';
 import RunModal from '@/components/RunModal';
+import { useAddRunModal } from '@/lib/useAddRunModal';
 
 interface AddRunButtonProps {
   // The pill's label; the headers keep the library's "Add run", while the
@@ -23,21 +23,14 @@ export const ACCENT_PILL_CLASSES =
 // surface that renders it can open the modal without wiring state of its own.
 // Full width below `sm`, where the header stacks (RUN-15, responsive addendum).
 export default function AddRunButton({ label = 'Add run', fullWidth = false }: AddRunButtonProps) {
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const buttonRef = useRef<HTMLButtonElement>(null);
-
-  // Dismissing the modal hands focus back to the button that opened it.
-  const closeModal = () => {
-    setIsModalOpen(false);
-    buttonRef.current?.focus();
-  };
+  const { isOpen, open, close, triggerRef } = useAddRunModal<HTMLButtonElement>();
 
   return (
     <>
       <button
-        ref={buttonRef}
+        ref={triggerRef}
         type="button"
-        onClick={() => setIsModalOpen(true)}
+        onClick={open}
         className={fullWidth ? ACCENT_PILL_CLASSES : `${ACCENT_PILL_CLASSES} sm:w-auto`}
       >
         {label}
@@ -48,7 +41,7 @@ export default function AddRunButton({ label = 'Add run', fullWidth = false }: A
 
       {/* Mounted only while open, so each opening starts from a clean form
           (RUN-23 AC1). No `run` prop: this pill always adds. */}
-      {isModalOpen ? <RunModal onClose={closeModal} /> : null}
+      {isOpen ? <RunModal onClose={close} /> : null}
     </>
   );
 }
