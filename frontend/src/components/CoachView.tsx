@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import CoachEmptyState from '@/components/CoachEmptyState';
+import CurrentPlanCard from '@/components/CurrentPlanCard';
 import { useRuns } from '@/lib/runs';
 import { useHydrated } from '@/lib/useHydrated';
 
@@ -19,7 +20,7 @@ export default function CoachView() {
   // the content that replaced it. A returning runner never had the hero, so
   // their page load steals no focus.
   const heroWasShown = useRef(false);
-  const landingRef = useRef<HTMLParagraphElement>(null);
+  const landingRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -40,17 +41,11 @@ export default function CoachView() {
 
   if (!hasRuns) return <CoachEmptyState />;
 
-  // The current plan card and the rest of 15 land with RUN-32; until then
-  // this announced seam keeps the page from being blank and gives the
-  // post-save focus somewhere to land.
+  // The wrapper is the post-save focus landing (see the effect above); the
+  // insight cards and previous plans (RUN-34) will join the plan card here.
   return (
-    <p
-      ref={landingRef}
-      tabIndex={-1}
-      aria-live="polite"
-      className="text-[14.5px] text-secondary outline-none"
-    >
-      Your coaching plan arrives in an upcoming update.
-    </p>
+    <div ref={landingRef} tabIndex={-1} className="flex flex-col gap-5 outline-none">
+      <CurrentPlanCard />
+    </div>
   );
 }

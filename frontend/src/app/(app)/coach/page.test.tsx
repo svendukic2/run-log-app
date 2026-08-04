@@ -85,9 +85,11 @@ describe('AI Coach page (RUN-31)', () => {
     await user.click(screen.getByRole('button', { name: /save run/i }));
 
     expect(screen.queryByRole('region', { name: HERO_NAME })).toBeNull();
-    // The hero (and its button) unmounted, so focus must not fall onto body.
-    const landing = screen.getByText('Your coaching plan arrives in an upcoming update.');
-    expect(landing).toHaveFocus();
+    // The first plan generates right away (RUN-32, A16)...
+    const planTitle = screen.getByText("This week's plan");
+    // ...and the hero (with its button) unmounted, so focus lands on the
+    // content that replaced it rather than falling onto body.
+    expect(document.activeElement?.contains(planTitle)).toBe(true);
   });
 
   it('drops the hero once a run exists in the store', () => {
