@@ -5,6 +5,16 @@ import { useSyncExternalStore } from 'react';
 export const EFFORT_LEVELS = ['Easy', 'Medium', 'Hard'] as const;
 export type Effort = (typeof EFFORT_LEVELS)[number];
 
+// Chip fills for an effort badge (design node 57:51): Easy green, Medium
+// amber, Hard coral, on their soft fills with the darker "* Text" tokens.
+// Shared vocabulary next to the Effort type itself, so the runs table
+// (RUN-24) and the run detail header (RUN-27) cannot drift apart.
+export const EFFORT_CHIP: Record<Effort, string> = {
+  Easy: 'bg-success-soft text-success-text',
+  Medium: 'bg-warning-soft text-warning-text',
+  Hard: 'bg-accent-soft text-accent-pressed',
+};
+
 // Medium is preselected in the Add run modal (ADD-2, AC1).
 export const DEFAULT_EFFORT: Effort = 'Medium';
 
@@ -276,21 +286,6 @@ export function useRuns(): Run[] {
     () => null,
   );
   return parseRuns(raw);
-}
-
-// The standard useSyncExternalStore hydration probe: the server snapshot says
-// false, the client one says true, and nothing ever notifies, so it flips
-// exactly when hydration completes. Lives next to the store because that is
-// what it means here: useRuns returning [] is "not read yet" until this is
-// true, and only then "this device has no such run" (RUN-27).
-const emptySubscribe = () => () => {};
-
-export function useHydrated(): boolean {
-  return useSyncExternalStore(
-    emptySubscribe,
-    () => true,
-    () => false,
-  );
 }
 
 /* Selectors ---------------------------------------------------------------- */

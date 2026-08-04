@@ -8,16 +8,6 @@ export const EFFORT_DOT: Record<Effort, string> = {
   Hard: 'bg-accent',
 };
 
-// Chip fills for effort badges (design node 57:51): Easy green, Medium amber,
-// Hard coral. Text uses the darker "* Text" tokens so the chips stay readable
-// on their soft fills. Shared by the runs table (RUN-24) and the run detail
-// header (RUN-27) so an effort chip reads the same on both screens.
-export const EFFORT_CHIP: Record<Effort, string> = {
-  Easy: 'bg-success-soft text-success-text',
-  Medium: 'bg-warning-soft text-warning-text',
-  Hard: 'bg-accent-soft text-accent-pressed',
-};
-
 interface EffortFieldProps {
   value: Effort;
   onChange: (effort: Effort) => void;

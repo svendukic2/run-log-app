@@ -2,11 +2,19 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { EFFORT_CHIP, EFFORT_DOT } from '@/components/EffortField';
+import { EFFORT_DOT } from '@/components/EffortField';
 import { ROUTES } from '@/lib/routes';
-import { formatDate, formatDuration, formatPace, type Effort, type Run } from '@/lib/runs';
+import {
+  EFFORT_CHIP,
+  formatDate,
+  formatDuration,
+  formatPace,
+  type Effort,
+  type Run,
+} from '@/lib/runs';
 
-// Run detail is its own screen (09, RUN-27), served at /runs/[id].
+// Run detail is its own screen (09), built with RUN-27; until it lands this
+// path 404s, which is the agreed seam between the two tickets.
 function runDetailHref(run: Pick<Run, 'id'>): string {
   return `${ROUTES.runs}/${run.id}`;
 }

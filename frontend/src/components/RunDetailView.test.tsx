@@ -1,21 +1,18 @@
 import { render, screen, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { renderToString } from 'react-dom/server';
+import { addRun, type Run } from '@/lib/runs';
 import RunDetailView from './RunDetailView';
-import type { Run } from '@/lib/runs';
 
-const RUN: Run = {
-  id: 'run-detail',
-  routeName: 'Morning loop',
-  distanceKm: 8.2,
-  durationSeconds: 2535, // 42:15
-  date: '2026-07-07',
-  effort: 'Medium',
-  note: 'Felt strong today. Negative splits on the back half.',
-};
-
-function storeRuns(runs: Run[]) {
-  window.localStorage.setItem('runlog.runs', JSON.stringify(runs));
+function seedRun(overrides: Partial<Omit<Run, 'id'>> = {}): Run {
+  return addRun({
+    routeName: 'Morning loop',
+    distanceKm: 8.2,
+    durationSeconds: 2535,
+    date: '2026-07-07',
+    effort: 'Medium',
+    note: '',
+    ...overrides,
+  });
 }
 
 describe('Run detail (RUN-27)', () => {
@@ -23,98 +20,122 @@ describe('Run detail (RUN-27)', () => {
     window.localStorage.clear();
   });
 
-  it('shows the route name, date caption, effort badge and the Edit and Delete buttons (AC1)', () => {
-    storeRuns([RUN]);
-    render(<RunDetailView runId={RUN.id} />);
+  it('shows route name, date caption, effort badge and Edit/Delete (AC1)', () => {
+    const run = seedRun();
 
-    expect(screen.getByRole('heading', { name: 'Morning loop' })).toBeInTheDocument();
-    // The date also sits in the Details card, so the caption is read from the
-    // header landmark alone.
-    expect(within(screen.getByRole('banner')).getByText('Jul 7, 2026')).toBeInTheDocument();
-    expect(screen.getByText('Medium effort')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
+    render(<RunDetailView runId={run.id} />);
+
+    expect(screen.getByRole('heading', { level: 1, name: 'Morning loop' })).toBeInTheDocument();
+    const caption = screen.getByTestId('run-detail-caption');
+    expect(within(caption).getByText('Jul 7, 2026')).toBeInTheDocument();
+    expect(within(caption).getByText('Medium effort')).toBeInTheDocument();
+    // Visible seams until RUN-28/RUN-30 wire them up: present, but announcing
+    // themselves as not yet available.
+    expect(screen.getByRole('button', { name: 'Edit' })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('button', { name: 'Delete' })).toHaveAttribute('aria-disabled', 'true');
   });
 
-  it('links the "All runs" breadcrumb back to the runs list (AC2)', () => {
-    storeRuns([RUN]);
-    render(<RunDetailView runId={RUN.id} />);
+  it('links the "All runs" breadcrumb back to the list (AC2)', () => {
+    const run = seedRun();
+
+    render(<RunDetailView runId={run.id} />);
 
     expect(screen.getByRole('link', { name: /all runs/i })).toHaveAttribute('href', '/runs');
   });
 
-  it('shows the four stat cards, with elevation display-only (AC3, AC6)', () => {
-    storeRuns([RUN]);
-    render(<RunDetailView runId={RUN.id} />);
+  it('shows the four stat cards and the Details card (AC3)', () => {
+    const run = seedRun();
 
-    expect(screen.getByText('Distance').nextSibling).toHaveTextContent('8.2 km');
-    expect(screen.getByText('Duration').nextSibling).toHaveTextContent('42:15');
-    expect(screen.getByText('Avg pace').nextSibling).toHaveTextContent('5:09 /km');
-    // Elevation is never captured for user runs, so the card shows a dash and
-    // tells screen readers why (A10).
-    expect(screen.getByText('Elevation').nextSibling).toHaveTextContent('–');
-    expect(screen.getByText('Not recorded')).toBeInTheDocument();
-  });
+    render(<RunDetailView runId={run.id} />);
 
-  it('shows the Details card with route name, date, effort and manual-entry origin (AC3)', () => {
-    storeRuns([RUN]);
-    render(<RunDetailView runId={RUN.id} />);
+    expect(screen.getByText('Distance')).toBeInTheDocument();
+    expect(screen.getByText('8.2 km')).toBeInTheDocument();
+    expect(screen.getByText('Duration')).toBeInTheDocument();
+    expect(screen.getByText('42:15')).toBeInTheDocument();
+    expect(screen.getByText('Avg pace')).toBeInTheDocument();
+    // 2535 s over 8.2 km.
+    expect(screen.getByText('5:09 /km')).toBeInTheDocument();
+    expect(screen.getByText('Elevation')).toBeInTheDocument();
 
     const details = screen.getByRole('region', { name: 'Details' });
-    expect(within(details).getByText('Route name').nextSibling).toHaveTextContent('Morning loop');
-    expect(within(details).getByText('Date').nextSibling).toHaveTextContent('Jul 7, 2026');
-    expect(within(details).getByText('Effort').nextSibling).toHaveTextContent('Medium');
-    expect(within(details).getByText('Logged').nextSibling).toHaveTextContent('Manual entry');
+    expect(within(details).getByText('Route name')).toBeInTheDocument();
+    expect(within(details).getByText('Morning loop')).toBeInTheDocument();
+    expect(within(details).getByText('Date')).toBeInTheDocument();
+    expect(within(details).getByText('Jul 7, 2026')).toBeInTheDocument();
+    expect(within(details).getByText('Effort')).toBeInTheDocument();
+    expect(within(details).getByText('Medium')).toBeInTheDocument();
+    expect(within(details).getByText('Logged')).toBeInTheDocument();
+    expect(within(details).getByText('Manual entry')).toBeInTheDocument();
   });
 
-  it('shows a decorative route sketch, not a map (AC4)', () => {
-    storeRuns([RUN]);
-    render(<RunDetailView runId={RUN.id} />);
+  it('renders a decorative sketch in the Route card, not a map (AC4)', () => {
+    const run = seedRun();
 
-    expect(screen.getByTestId('route-sketch')).toHaveAttribute('aria-hidden', 'true');
+    render(<RunDetailView runId={run.id} />);
+
+    expect(screen.getByRole('region', { name: 'Route' })).toBeInTheDocument();
+    // The sketch is decorative and carries no accessible content of its own.
+    const sketch = screen.getByTestId('route-sketch');
+    expect(sketch).toHaveAttribute('aria-hidden', 'true');
+    // Start dot (filled) and end dot (ring).
+    expect(within(sketch).getByTestId('route-start')).toBeInTheDocument();
+    expect(within(sketch).getByTestId('route-end')).toBeInTheDocument();
   });
 
-  it('shows the note when the run has one, and no Note card otherwise (AC5)', () => {
-    storeRuns([RUN, { ...RUN, id: 'run-no-note', note: '' }]);
-
-    const { unmount } = render(<RunDetailView runId={RUN.id} />);
-    expect(screen.getByRole('heading', { name: 'Note' })).toBeInTheDocument();
-    expect(screen.getByText(RUN.note)).toBeInTheDocument();
+  it('shows the Note card only when the run has a note (AC5, A11)', () => {
+    const withNote = seedRun({ note: 'Felt strong today.\nNegative splits.' });
+    const { unmount } = render(<RunDetailView runId={withNote.id} />);
+    expect(screen.getByRole('region', { name: 'Note' })).toBeInTheDocument();
+    // The user's line breaks survive rendering.
+    const note = screen.getByText(/Felt strong today/);
+    expect(note).toHaveTextContent('Negative splits.');
+    expect(note).toHaveClass('whitespace-pre-line');
     unmount();
 
-    render(<RunDetailView runId="run-no-note" />);
-    expect(screen.queryByRole('heading', { name: 'Note' })).not.toBeInTheDocument();
+    window.localStorage.clear();
+    const withoutNote = seedRun();
+    render(<RunDetailView runId={withoutNote.id} />);
+    expect(screen.queryByRole('region', { name: 'Note' })).toBeNull();
   });
 
-  it('keeps Edit and Delete inert until their modals land (AC7 seam)', async () => {
-    storeRuns([RUN]);
-    const user = userEvent.setup();
-    render(<RunDetailView runId={RUN.id} />);
+  it('treats a whitespace-only note as no note (A11)', () => {
+    const run = seedRun({ note: '   ' });
 
-    await user.click(screen.getByRole('button', { name: 'Edit' }));
-    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    render(<RunDetailView runId={run.id} />);
 
-    // No modal exists yet, so the page simply stays as it is.
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Morning loop' })).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Note' })).toBeNull();
   });
 
-  it('shows the not-found state with the breadcrumb for an unknown id', () => {
-    storeRuns([RUN]);
-    render(<RunDetailView runId="missing" />);
+  it('keeps start time, elevation and route type empty for user runs (AC6, A10)', () => {
+    const run = seedRun();
+
+    render(<RunDetailView runId={run.id} />);
+
+    // Caption is the bare date, no "· 07:20" start time.
+    const caption = screen.getByTestId('run-detail-caption');
+    expect(within(caption).getByText('Jul 7, 2026')).toBeInTheDocument();
+    expect(within(caption).queryByText(/·/)).toBeNull();
+    // Elevation shows a placeholder, not a number.
+    expect(screen.getByText('Not captured')).toBeInTheDocument();
+    // The Route card carries no "Road · out & back" type caption.
+    const route = screen.getByRole('region', { name: 'Route' });
+    expect(within(route).queryByText(/road|trail|out & back/i)).toBeNull();
+  });
+
+  it('explains itself when the id matches no stored run', () => {
+    seedRun();
+
+    render(<RunDetailView runId="does-not-exist" />);
 
     expect(screen.getByRole('heading', { name: 'Run not found' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /all runs/i })).toHaveAttribute('href', '/runs');
   });
 
-  it('server-renders the breadcrumb without flashing the not-found state', () => {
-    // The dynamic route is never prerendered, so jsdom rendering alone would
-    // leave the SSR path unexercised. renderToString pins the store's server
-    // snapshot contract and the hydration gate: before the client store is
-    // read, the page shows the breadcrumb shell and no verdict on the id.
-    const html = renderToString(<RunDetailView runId={RUN.id} />);
+  it('renders an empty server shell before hydration', () => {
+    const run = seedRun();
 
-    expect(html).toContain('All runs');
-    expect(html).not.toContain('Run not found');
+    // localStorage is invisible to the server, so the contract is that the
+    // server ships nothing at all and the page appears after hydration.
+    expect(renderToString(<RunDetailView runId={run.id} />)).toBe('');
   });
 });
