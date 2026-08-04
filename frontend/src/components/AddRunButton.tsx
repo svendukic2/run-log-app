@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import AddRunModal from '@/components/AddRunModal';
+import RunModal from '@/components/RunModal';
 
 interface AddRunButtonProps {
   // The pill's label; the headers keep the library's "Add run", while the
@@ -47,8 +47,8 @@ export default function AddRunButton({ label = 'Add run', fullWidth = false }: A
       </button>
 
       {/* Mounted only while open, so each opening starts from a clean form
-          (RUN-23 AC1). */}
-      {isModalOpen ? <AddRunModal onClose={closeModal} /> : null}
+          (RUN-23 AC1). No `run` prop: this pill always adds. */}
+      {isModalOpen ? <RunModal onClose={closeModal} /> : null}
     </>
   );
 }

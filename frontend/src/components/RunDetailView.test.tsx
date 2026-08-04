@@ -1,4 +1,5 @@
 import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { renderToString } from 'react-dom/server';
 import { addRun, type Run } from '@/lib/runs';
 import RunDetailView from './RunDetailView';
@@ -29,9 +30,9 @@ describe('Run detail (RUN-27)', () => {
     const caption = screen.getByTestId('run-detail-caption');
     expect(within(caption).getByText('Jul 7, 2026')).toBeInTheDocument();
     expect(within(caption).getByText('Medium effort')).toBeInTheDocument();
-    // Visible seams until RUN-28/RUN-30 wire them up: present, but announcing
-    // themselves as not yet available.
-    expect(screen.getByRole('button', { name: 'Edit' })).toHaveAttribute('aria-disabled', 'true');
+    // Edit is live since RUN-28; Delete stays a visible seam until RUN-30
+    // wires it up, announcing itself as not yet available.
+    expect(screen.getByRole('button', { name: 'Edit' })).not.toHaveAttribute('aria-disabled');
     expect(screen.getByRole('button', { name: 'Delete' })).toHaveAttribute('aria-disabled', 'true');
   });
 
@@ -120,6 +121,54 @@ describe('Run detail (RUN-27)', () => {
     // The Route card carries no "Road · out & back" type caption.
     const route = screen.getByRole('region', { name: 'Route' });
     expect(within(route).queryByText(/road|trail|out & back/i)).toBeNull();
+  });
+
+  it('opens the Edit run modal prefilled from this run (RUN-28 AC1, DET-2)', async () => {
+    const user = userEvent.setup();
+    const run = seedRun({ note: 'Windy' });
+    render(<RunDetailView runId={run.id} />);
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+
+    expect(screen.getByRole('dialog', { name: 'Edit run' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Route name')).toHaveValue('Morning loop');
+    expect(screen.getByLabelText('Distance (km)')).toHaveValue('8.2');
+    expect(screen.getByLabelText('Duration')).toHaveValue('42:15');
+    expect(screen.getByLabelText('Date')).toHaveValue('2026-07-07');
+    expect(screen.getByLabelText('Note (optional)')).toHaveValue('Windy');
+  });
+
+  it('reflects a saved edit immediately, without leaving the page (RUN-28 AC2)', async () => {
+    const user = userEvent.setup();
+    const run = seedRun();
+    render(<RunDetailView runId={run.id} />);
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    const routeName = screen.getByLabelText('Route name');
+    await user.clear(routeName);
+    await user.type(routeName, 'Corrected loop');
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+
+    // The modal is gone and the detail re-read the store.
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('heading', { level: 1, name: 'Corrected loop' })).toBeInTheDocument();
+    // Focus lands back on the button that opened the modal.
+    expect(screen.getByRole('button', { name: 'Edit' })).toHaveFocus();
+  });
+
+  it('leaves the run unchanged when the edit is cancelled (RUN-28 AC3)', async () => {
+    const user = userEvent.setup();
+    const run = seedRun();
+    render(<RunDetailView runId={run.id} />);
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    const routeName = screen.getByLabelText('Route name');
+    await user.clear(routeName);
+    await user.type(routeName, 'Discarded');
+    await user.click(screen.getByRole('button', { name: /^cancel$/i }));
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('heading', { level: 1, name: 'Morning loop' })).toBeInTheDocument();
   });
 
   it('explains itself when the id matches no stored run', () => {

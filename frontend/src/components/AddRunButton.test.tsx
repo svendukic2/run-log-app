@@ -44,7 +44,7 @@ describe('Add run button (RUN-15)', () => {
     [
       'the backdrop',
       async (user: ReturnType<typeof userEvent.setup>) =>
-        user.click(screen.getByTestId('add-run-backdrop')),
+        user.click(screen.getByTestId('run-modal-backdrop')),
     ],
     ['Escape', async (user: ReturnType<typeof userEvent.setup>) => user.keyboard('{Escape}')],
   ])('closes the modal with %s', async (_name, close) => {
