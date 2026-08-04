@@ -287,6 +287,18 @@ describe('Edit run modal (RUN-28)', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it('refuses to save a future date and says so inline (AC4, EDT-3)', async () => {
+    const run = seedRun();
+    const { user, onClose } = renderModal(run);
+    setDate('2999-01-01');
+
+    await saveChanges(user);
+
+    expect(screen.getByText('Date cannot be in the future')).toBeInTheDocument();
+    expect(getRuns()).toEqual([run]);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it('keeps the Add run responsive shell: bottom sheet and stacked buttons on a phone', () => {
     renderModal(seedRun());
 

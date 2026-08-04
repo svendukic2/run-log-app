@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import RunModal from '@/components/RunModal';
 import { ROUTES } from '@/lib/routes';
 import {
@@ -73,11 +73,13 @@ export default function RunDetailView({ runId }: { runId: string }) {
   const editButtonRef = useRef<HTMLButtonElement>(null);
 
   // Dismissing the modal hands focus back to the button that opened it,
-  // mirroring AddRunButton.
-  const closeEditModal = () => {
+  // mirroring AddRunButton. Stable across renders: this view re-renders on
+  // every store change, and a fresh callback would re-run the modal's mount
+  // effect and yank focus back to its first field mid-typing.
+  const closeEditModal = useCallback(() => {
     setIsEditing(false);
     editButtonRef.current?.focus();
-  };
+  }, []);
 
   // Runs live in localStorage, which the server and the hydration pass cannot
   // see, so the shell stays neutral until the store has been read.

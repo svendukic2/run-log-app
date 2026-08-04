@@ -226,7 +226,9 @@ export function runToForm(run: Run): RunFormValues {
     duration: formatDuration(run.durationSeconds),
     date: run.date,
     effort: run.effort,
-    note: run.note,
+    // isRun never checks the note, so a hand-edited or older stored run can
+    // arrive without one; the form still needs a string.
+    note: run.note ?? '',
   };
 }
 
