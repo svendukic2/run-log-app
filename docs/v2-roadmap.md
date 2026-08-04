@@ -22,9 +22,19 @@ no v2 screen gets built before it is drawn and agreed.
    permission), see their profile.
 4. **Notifications** - get notified when someone you follow logs a run, when someone
    joins your event, when someone follows you.
+5. **Route maps** - a run can carry a real route: the user places start, finish and a
+   few waypoints on a map, a routing service snaps them to actual streets and paths,
+   and the resulting polyline replaces the decorative sketch on the run detail and
+   appears on public profiles.
 
-Deliberately out of v2 scope until these four work: comments, likes, direct messages,
-media uploads, GPS import. Scope creep is the main way v2 fails.
+Deliberately out of v2 scope until these five work: comments, likes, direct messages,
+media uploads, GPX/GPS import. Scope creep is the main way v2 fails. GPX import is the
+long-term *exact* route source (a GPS trace beats any reconstruction) and the route
+data model below is designed so it can slot in later without a migration; it stays out
+of v2 only to bound the scope. The Strava *API* specifically is ruled out further than
+that: since late 2024 its terms forbid showing a user's API-fetched data to anyone but
+that user, which is incompatible with leaderboards and follower feeds. User-exported
+GPX files carry no such restriction.
 
 ## 2. What each pillar needs
 
@@ -61,6 +71,27 @@ media uploads, GPS import. Scope creep is the main way v2 fails.
 - Notifications: new run by someone you follow, new follower, someone joined your
   event. In-app only to start (bell + list); e-mail/push much later.
 
+### Route maps
+
+- **Drawing**: an optional "Route" step on the Add/Edit run modal. A Leaflet map
+  (OpenStreetMap tiles, free, no API key) where the user taps start, finish and 0-3
+  waypoints; the map is never mandatory, a run without a route keeps the v1 sketch.
+- **Routing**: the frontend never calls the routing service directly. A NestJS
+  endpoint (`POST /api/routes/plan`) forwards the waypoints to the service with the
+  `foot`/walking profile and returns the snapped polyline. Keeps any API key
+  server-side (ConfigService), allows caching, and lets us swap providers freely.
+- **Provider**: OSRM public demo server (free, keyless, fine for an academy demo) or
+  OpenRouteService (free key, ~2000 req/day) - decided by a spike task; GraphHopper's
+  round-trip mode is the upgrade path if we ever generate routes from distance alone.
+- **Honesty check**: the routed polyline's length is compared with the distance the
+  user entered; a large mismatch shows a hint ("route is 3.1 km but you logged 8 km -
+  add waypoints?"). The user's entered distance stays the source of truth, the map
+  never overrides it.
+- **Display**: run detail renders the polyline on a Leaflet map instead of the sketch;
+  routed routes are drawn dashed to signal "reconstruction, not GPS truth" (a solid
+  line is reserved for future GPX imports). The same polyline renders on public
+  profiles and follower feeds - one `RouteMap` component, three screens.
+
 ## 3. New screens to design (Figma, before building)
 
 | Screen | Pillar | Notes |
@@ -72,8 +103,10 @@ media uploads, GPS import. Scope creep is the main way v2 fails.
 | Create event (modal) | Events | Mirrors the Add run modal pattern |
 | People - search + profile | Friends | Search, follow button, public profile with runs |
 | Notifications (panel) | Notifications | Bell in the topbar, list of notification rows |
-| Settings - privacy section | all | Leaderboard opt-out, profile visibility |
+| Settings - privacy section | all | Leaderboard opt-out, profile visibility, route visibility |
 | Sidebar update | all | New "COMMUNITY" section: Leaderboard, Events, People |
+| Add/Edit run - route step | Route maps | Map with tap-to-place start/finish/waypoints, mismatch hint |
+| Run detail - map card | Route maps | Replaces the decorative sketch when a route exists |
 
 Design tokens, components (Badge, Stat, Section header, table rows) and layout shell
 are all reused from the v1 Figma file - v2 screens are new compositions of the same
@@ -87,6 +120,10 @@ New entities (Prisma sketch, final shapes decided when the phase starts):
 User            id, email (unique), passwordHash, firstName, lastName,
                 runningLevel, defaultWeeklyGoalKm, showOnLeaderboard, profilePublic
 Run             + userId (every v1 entity gains an owner)
+                + routeSource ('routed' | 'gps' | null = no route, sketch stays),
+                  routePolyline (encoded polyline string, ~KBs even for long runs),
+                  routeWaypoints (json, the user's tapped points, kept so the route
+                  stays editable; a future GPX import sets source='gps' and no waypoints)
 WeekTarget      + userId
 CoachPlan       + userId
 Follow          followerId, followeeId, createdAt  (@@unique both)
@@ -111,8 +148,15 @@ Pair velocity assumption: ~21 SP per two-week sprint (calibrated in v1).
 | B - Accounts | Sprint 6 | Sign up/in, JWT, user-scoped data, deployed to a real host | ~23 SP |
 | C1 - Social core | Sprint 7 | Follow, user search, public profiles, notifications | ~21 SP |
 | C2 - Events + leaderboard | Sprint 8 | Events CRUD+join, event and global leaderboards, seeded demo data | ~21 SP |
+| D - Route maps | Sprint 8 tail / Sprint 9 | Provider spike, waypoint picker in Add/Edit run, routing endpoint, map on run detail and profiles | ~10 SP |
 
-Total: ~87 SP over 4 sprints - effectively a second project the size of v1. Phase A is
+Phase D breakdown: routing provider spike + `POST /api/routes/plan` endpoint (3 SP),
+route step in the Add/Edit run modal with the mismatch hint (5 SP), `RouteMap` display
+on run detail and public profiles (2 SP). The schema columns land already in Phase A
+(three nullable columns cost nothing), so D is pure feature work with no migration.
+D depends only on A (storage); it does not block, and is not blocked by, B or C.
+
+Total: ~97 SP over 4-5 sprints - effectively a second project the size of v1. Phase A is
 already fully prepared (the Prisma schema in `backend/prisma/schema.prisma` and the
 type contract in `docs/data-model.md` were written for exactly this move).
 
@@ -129,6 +173,13 @@ discipline as v1.
   board.
 - **Privacy defaults**: opt-in or opt-out for leaderboards? Proposal: profile private
   and leaderboard opt-in by default.
+- **Route privacy**: a route map on a public profile can reveal where someone lives
+  (runs tend to start at the front door). Proposal: routes are private by default,
+  a per-user "show my routes" setting, and consider trimming/blurring the first and
+  last ~300 m on public views. Decide before Phase D ships to profiles.
+- **Routing service limits**: the OSRM demo server has no SLA and free tiers have
+  daily caps. Fine for the demo; a real deployment would self-host OSRM or pay. The
+  backend proxy endpoint is what keeps this swap invisible to the frontend.
 - **Hosting**: where does it run (Railway/Render/Fly + managed Postgres) and who pays
   the ~free-tier setup? Decide in Phase A.
 - **Teacher sign-off**: v2 exceeds the graded assignment; confirm whether it counts,
