@@ -3,6 +3,7 @@ import CoachTeaserCard from '@/components/CoachTeaserCard';
 import DashboardGreeting from '@/components/DashboardGreeting';
 import DashboardRunsSection from '@/components/DashboardRunsSection';
 import PageHeader from '@/components/PageHeader';
+import PersonalRecordsCard from '@/components/PersonalRecordsCard';
 import WeeklyGoalCard from '@/components/WeeklyGoalCard';
 
 // 05 · Dashboard. The header is rendered by the page itself, above the body, so
@@ -27,6 +28,7 @@ export default function DashboardPage() {
         </div>
         <div className="flex min-w-0 flex-col gap-5">
           <CoachTeaserCard />
+          <PersonalRecordsCard />
         </div>
       </div>
     </>
