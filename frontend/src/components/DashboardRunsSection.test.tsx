@@ -88,4 +88,15 @@ describe('Dashboard empty state (RUN-18)', () => {
     expect(screen.getByText('Recent runs')).toBeInTheDocument();
     expect(screen.getByText('Morning loop')).toBeInTheDocument();
   });
+
+  it('stacks the distance chart above the recent runs card (RUN-19)', () => {
+    addRun(firstRun());
+
+    render(<DashboardRunsSection />);
+
+    const chart = screen.getByRole('region', { name: 'Distance' });
+    const runsCard = screen.getByRole('region', { name: 'Recent runs' });
+    // The chart precedes the card in the DOM, matching 05's left column.
+    expect(chart.compareDocumentPosition(runsCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
 });

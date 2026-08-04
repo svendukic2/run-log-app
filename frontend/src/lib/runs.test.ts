@@ -10,6 +10,7 @@ import {
   formatPace,
   formatTimeCompact,
   getRuns,
+  lastWeekStarts,
   parseDuration,
   sortRuns,
   startOfWeek,
@@ -148,6 +149,39 @@ describe('weeks (AC6)', () => {
     ['2026-08-09', 1],
   ])('counts %s as having %i days of its week left', (date, expected) => {
     expect(daysLeftInWeek(date)).toBe(expected);
+  });
+
+  it('lists the last week starts oldest first, seven days apart (RUN-19)', () => {
+    // Tue 14 Jul 2026 sits in the week of Mon 13 Jul.
+    expect(lastWeekStarts('2026-07-14', 8)).toEqual([
+      '2026-05-25',
+      '2026-06-01',
+      '2026-06-08',
+      '2026-06-15',
+      '2026-06-22',
+      '2026-06-29',
+      '2026-07-06',
+      '2026-07-13',
+    ]);
+  });
+
+  it('ends the week-start list with the current week even on a Monday', () => {
+    expect(lastWeekStarts('2026-08-03', 2)).toEqual(['2026-07-27', '2026-08-03']);
+  });
+
+  it('treats a Sunday as closing its week, not opening the next', () => {
+    // Sun 19 Jul 2026 belongs to the week of Mon 13 Jul.
+    expect(lastWeekStarts('2026-07-19', 2)).toEqual(['2026-07-06', '2026-07-13']);
+  });
+
+  it('crosses a year boundary without skipping weeks', () => {
+    // Mon 5 Jan 2026; three weeks back reaches into December 2025.
+    expect(lastWeekStarts('2026-01-05', 4)).toEqual([
+      '2025-12-15',
+      '2025-12-22',
+      '2025-12-29',
+      '2026-01-05',
+    ]);
   });
 
   it('totals only the runs in the requested week', () => {
