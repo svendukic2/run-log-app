@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
+import RecordCards from '@/components/RecordCards';
 import RunsEmptyState from '@/components/RunsEmptyState';
 import RunsTable from '@/components/RunsTable';
 import { sortRuns, useRuns, type RunSortOrder } from '@/lib/runs';
@@ -22,7 +23,7 @@ function ChevronIcon() {
 
 // Tab row, controls and panels of 07 · Runs (RUN-24). "All runs" carries the
 // total count and shows the sortable table; "Records" swaps it for the record
-// cards, which arrive with RUN-26 and are a placeholder until then (AC2).
+// cards of 08 · Runs - Records (RUN-26, AC2).
 export default function RunsView() {
   const runs = useRuns();
   const [tab, setTab] = useState<TabKey>('all');
@@ -149,13 +150,15 @@ export default function RunsView() {
         role="tabpanel"
         id={panelId('records')}
         aria-labelledby={tabId('records')}
-        // Nothing inside is focusable yet, so the panel itself takes the tab
-        // stop, as the tabpanel pattern asks.
+        // Nothing inside the cards is focusable, so the panel itself takes
+        // the tab stop, as the tabpanel pattern asks.
         tabIndex={0}
         hidden={tab !== 'records'}
       >
-        {/* The record cards and their recomputation are RUN-26. */}
-        <p className="text-[14.5px] text-secondary">Personal records are coming soon.</p>
+        {/* The cards derive from the same `runs` the table shows, so any
+            change to the store recomputes them on this very render
+            (RUN-26 AC2). */}
+        <RecordCards runs={runs} />
       </div>
     </section>
   );
