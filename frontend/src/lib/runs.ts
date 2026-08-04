@@ -5,6 +5,16 @@ import { useSyncExternalStore } from 'react';
 export const EFFORT_LEVELS = ['Easy', 'Medium', 'Hard'] as const;
 export type Effort = (typeof EFFORT_LEVELS)[number];
 
+// Chip fills for an effort badge (design node 57:51): Easy green, Medium
+// amber, Hard coral, on their soft fills with the darker "* Text" tokens.
+// Shared vocabulary next to the Effort type itself, so the runs table
+// (RUN-24) and the run detail header (RUN-27) cannot drift apart.
+export const EFFORT_CHIP: Record<Effort, string> = {
+  Easy: 'bg-success-soft text-success-text',
+  Medium: 'bg-warning-soft text-warning-text',
+  Hard: 'bg-accent-soft text-accent-pressed',
+};
+
 // Medium is preselected in the Add run modal (ADD-2, AC1).
 export const DEFAULT_EFFORT: Effort = 'Medium';
 
