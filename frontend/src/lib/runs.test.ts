@@ -9,9 +9,11 @@ import {
   formatDurationMinutes,
   formatPace,
   formatTimeCompact,
+  formatKm,
   getRuns,
   lastWeekStarts,
   parseDuration,
+  roundKm,
   runToForm,
   sortRuns,
   startOfWeek,
@@ -99,6 +101,27 @@ describe('formatting', () => {
     [5, '5.0 km'],
   ])('renders %f km as "%s"', (km, formatted) => {
     expect(formatDistanceKm(km)).toBe(formatted);
+  });
+
+  // Shared rounding for goal readouts and chart bars (RUN-17, RUN-19, RUN-21).
+  it.each([
+    [0.0142857, 0],
+    [0.04, 0],
+    [0.05, 0.1],
+    [19.96, 20],
+    [13.649, 13.6],
+  ])('rounds %f km to %f', (km, rounded) => {
+    expect(roundKm(km)).toBe(rounded);
+  });
+
+  it.each([
+    [0, '0'],
+    [6, '6'],
+    [19.95, '20'],
+    [13.6, '13.6'],
+    [0.5, '0.5'],
+  ])('renders %f km as "%s" in goal readouts', (km, formatted) => {
+    expect(formatKm(km)).toBe(formatted);
   });
 
   // The Weekly goal card's Time stat (RUN-17, DSH-5).

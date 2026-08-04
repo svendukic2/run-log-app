@@ -1,16 +1,16 @@
 'use client';
 
-import { formatDateShort, formatDistanceKm, lastWeekStarts, totalsForWeek, useRuns } from '@/lib/runs';
+import {
+  formatDateShort,
+  formatDistanceKm,
+  lastWeekStarts,
+  roundKm,
+  totalsForWeek,
+  useRuns,
+} from '@/lib/runs';
 import { useToday } from '@/lib/useToday';
 
 const WEEK_COUNT = 8;
-
-// One decimal, once: heights, the max and the announced values all derive
-// from this same rounded number, so a 0.04 km week can never draw a tall bar
-// while announcing "0.0 km".
-function roundKm(km: number): number {
-  return Math.round(km * 10) / 10;
-}
 
 // The "Distance" card (RUN-19, DSH-7): weekly distance over the last 8
 // Mon-Sun weeks as a bar chart, with the current week highlighted. Display
