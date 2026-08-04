@@ -316,6 +316,22 @@ export function updateRun(id: string, draft: Omit<Run, 'id'>): Run | null {
   return updated;
 }
 
+// Removes the run and announces the change, so the list, the "All runs"
+// count, the dashboard and the records all recompute from the remaining runs
+// at once (RUN-30 DEL-2, DEL-3): records and weekly totals are derived on
+// render, never stored, so a deleted run cannot leave a stale number behind.
+// Returns false when the id matches nothing (already deleted in another tab);
+// nothing is written in that case.
+export function deleteRun(id: string): boolean {
+  const runs = getRuns();
+  const next = runs.filter((run) => run.id !== id);
+  if (next.length === runs.length) return false;
+
+  window.localStorage.setItem(RUNS_KEY, JSON.stringify(next));
+  window.dispatchEvent(new Event(RUNS_CHANGED_EVENT));
+  return true;
+}
+
 function subscribeToRuns(onStoreChange: () => void): () => void {
   window.addEventListener('storage', onStoreChange);
   window.addEventListener(RUNS_CHANGED_EVENT, onStoreChange);
