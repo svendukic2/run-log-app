@@ -3,7 +3,10 @@ import {
   daysLeftInWeek,
   emptyRunForm,
   formatDate,
+  formatDateShort,
+  formatDistanceKm,
   formatDuration,
+  formatDurationMinutes,
   formatPace,
   formatTimeCompact,
   getRuns,
@@ -73,6 +76,26 @@ describe('formatting', () => {
 
   it('renders the date the way the designs write it', () => {
     expect(formatDate('2026-07-14')).toBe('Jul 14, 2026');
+  });
+
+  // Recent-runs card captions (RUN-20, DSH-8).
+  it('renders the short date without a year', () => {
+    expect(formatDateShort('2026-07-07')).toBe('Jul 7');
+  });
+
+  it.each([
+    [2535, '42 min'],
+    [29, '0 min'],
+    [90, '2 min'],
+  ])('renders %i seconds as "%s" in the minutes caption', (seconds, formatted) => {
+    expect(formatDurationMinutes(seconds)).toBe(formatted);
+  });
+
+  it.each([
+    [8.2, '8.2 km'],
+    [5, '5.0 km'],
+  ])('renders %f km as "%s"', (km, formatted) => {
+    expect(formatDistanceKm(km)).toBe(formatted);
   });
 
   // The Weekly goal card's Time stat (RUN-17, DSH-5).

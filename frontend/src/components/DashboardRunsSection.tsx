@@ -1,7 +1,7 @@
 'use client';
 
 import FirstRunPrompt from '@/components/FirstRunPrompt';
-import RunList from '@/components/RunList';
+import RecentRunsCard from '@/components/RecentRunsCard';
 import { useRuns } from '@/lib/runs';
 import { useHydrated } from '@/lib/useHydrated';
 
@@ -19,7 +19,6 @@ export default function DashboardRunsSection() {
 
   if (runs.length === 0) return <FirstRunPrompt />;
 
-  // Provisional stand-in for the designed chart and recent-runs card; the
-  // chart arrives with RUN-19 and the card with RUN-20.
-  return <RunList title="Recent runs" limit={5} />;
+  // The designed chart still sits above this card once RUN-19 lands.
+  return <RecentRunsCard />;
 }

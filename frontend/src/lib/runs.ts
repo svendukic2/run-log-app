@@ -74,6 +74,29 @@ export function formatDate(isoDate: string): string {
   return DATE_FORMATTER.format(fromIsoDate(isoDate));
 }
 
+const SHORT_DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
+  month: 'short',
+  day: 'numeric',
+});
+
+// "Jul 14": DSH-8 shows no year on the recent-runs card (RUN-20). No timeZone
+// on the formatter is deliberate: fromIsoDate builds a local-midnight date, so
+// formatting in the local zone can never shift the day.
+export function formatDateShort(isoDate: string): string {
+  return SHORT_DATE_FORMATTER.format(fromIsoDate(isoDate));
+}
+
+// Row captions on the recent-runs card (RUN-20): "42 min" and "8.2 km". In
+// the shared lib so this card and the runs table cannot drift apart on
+// rounding.
+export function formatDurationMinutes(totalSeconds: number): string {
+  return `${Math.round(totalSeconds / 60)} min`;
+}
+
+export function formatDistanceKm(km: number): string {
+  return `${km.toFixed(1)} km`;
+}
+
 /* Duration and pace -------------------------------------------------------- */
 
 // Accepts the two shapes the designs use, `mm:ss` and `h:mm:ss` (ADD-6), and
