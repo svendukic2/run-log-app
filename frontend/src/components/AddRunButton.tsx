@@ -4,14 +4,15 @@ import { useRef, useState } from 'react';
 import AddRunModal from '@/components/AddRunModal';
 
 interface AddRunButtonProps {
-  // The headers keep the library's "Add run"; the Runs empty state re-labels
-  // the same pill "Add your first run" (RUN-25 AC2).
+  // The pill's label; the headers keep the library's "Add run", while the
+  // Dashboard (RUN-18) and Runs (RUN-25 AC2) empty states re-label the same
+  // pill "Add your first run".
   label?: string;
 }
 
 // The primary "Add run" action from the design library (node 48:38): accent
 // pill with the label and a trailing arrow. It owns the Add run modal, so every
-// header that renders it can open the modal without wiring state of its own.
+// surface that renders it can open the modal without wiring state of its own.
 // Full width below `sm`, where the header stacks (RUN-15, responsive addendum).
 export default function AddRunButton({ label = 'Add run' }: AddRunButtonProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
