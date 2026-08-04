@@ -278,6 +278,21 @@ export function useRuns(): Run[] {
   return parseRuns(raw);
 }
 
+// The standard useSyncExternalStore hydration probe: the server snapshot says
+// false, the client one says true, and nothing ever notifies, so it flips
+// exactly when hydration completes. Lives next to the store because that is
+// what it means here: useRuns returning [] is "not read yet" until this is
+// true, and only then "this device has no such run" (RUN-27).
+const emptySubscribe = () => () => {};
+
+export function useHydrated(): boolean {
+  return useSyncExternalStore(
+    emptySubscribe,
+    () => true,
+    () => false,
+  );
+}
+
 /* Selectors ---------------------------------------------------------------- */
 
 // The sort dropdown on the Runs page offers newest and oldest (RUN-24 AC4,

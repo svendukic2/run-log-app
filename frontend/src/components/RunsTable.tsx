@@ -2,22 +2,11 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { EFFORT_DOT } from '@/components/EffortField';
+import { EFFORT_CHIP, EFFORT_DOT } from '@/components/EffortField';
 import { ROUTES } from '@/lib/routes';
 import { formatDate, formatDuration, formatPace, type Effort, type Run } from '@/lib/runs';
 
-// Chip fills for the EFFORT column (design node 57:51): Easy green, Medium
-// amber, Hard coral (RUN-24 AC3). Text uses the darker "* Text" tokens so the
-// chips stay readable on their soft fills, and the row dot reuses EFFORT_DOT
-// so an effort reads the same here as in the Add run modal.
-const EFFORT_CHIP: Record<Effort, string> = {
-  Easy: 'bg-success-soft text-success-text',
-  Medium: 'bg-warning-soft text-warning-text',
-  Hard: 'bg-accent-soft text-accent-pressed',
-};
-
-// Run detail is its own screen (09), built with RUN-27; until it lands this
-// path 404s, which is the agreed seam between the two tickets.
+// Run detail is its own screen (09, RUN-27), served at /runs/[id].
 function runDetailHref(run: Pick<Run, 'id'>): string {
   return `${ROUTES.runs}/${run.id}`;
 }
