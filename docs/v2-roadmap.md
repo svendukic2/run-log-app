@@ -91,6 +91,12 @@ GPX files carry no such restriction.
   routed routes are drawn dashed to signal "reconstruction, not GPS truth" (a solid
   line is reserved for future GPX imports). The same polyline renders on public
   profiles and follower feeds - one `RouteMap` component, three screens.
+- **Privacy (decided)**: routes are **private by default**. A "Show my routes"
+  toggle in the Settings privacy section (`User.showRoutes`, default false) controls
+  whether followers and profile visitors see route maps; distance/duration stats stay
+  visible either way. Public views additionally trim the first and last ~300 m of the
+  polyline, because runs tend to start and end at the runner's front door. The owner
+  always sees their own full route.
 
 ## 3. New screens to design (Figma, before building)
 
@@ -106,7 +112,16 @@ GPX files carry no such restriction.
 | Settings - privacy section | all | Leaderboard opt-out, profile visibility, route visibility |
 | Sidebar update | all | New "COMMUNITY" section: Leaderboard, Events, People |
 | Add/Edit run - route step | Route maps | Map with tap-to-place start/finish/waypoints, mismatch hint |
-| Run detail - map card | Route maps | Replaces the decorative sketch when a route exists |
+| Run detail - map card | Route maps | Adapt existing "M14 · Run — Map view" frame (see note) |
+
+A head start for route maps: the Figma file already contains **"M14 · Run — Map view"**
+(node `174:1704`) - the frame the v1 handout flagged as a trap. Its visual language
+(blue polyline over light map tiles, run header with Edit/Delete) is exactly what the
+map card should look like, so the design work is an adaptation, not a blank page. Two
+things must change: it is a **mobile** mockup (390x844 with a bottom tab bar) and needs
+recomposing as the Route card inside the desktop 09 · Run detail layout, and its
+"Jul 7, 2026 · 07:20" caption includes a start time that the waypoint flow does not
+capture (only a future GPX import would), so the caption stays date-only as in v1.
 
 Design tokens, components (Badge, Stat, Section header, table rows) and layout shell
 are all reused from the v1 Figma file - v2 screens are new compositions of the same
@@ -118,7 +133,8 @@ New entities (Prisma sketch, final shapes decided when the phase starts):
 
 ```
 User            id, email (unique), passwordHash, firstName, lastName,
-                runningLevel, defaultWeeklyGoalKm, showOnLeaderboard, profilePublic
+                runningLevel, defaultWeeklyGoalKm, showOnLeaderboard, profilePublic,
+                showRoutes (default false - see route privacy under section 2)
 Run             + userId (every v1 entity gains an owner)
                 + routeSource ('routed' | 'gps' | null = no route, sketch stays),
                   routePolyline (encoded polyline string, ~KBs even for long runs),
@@ -152,7 +168,8 @@ Pair velocity assumption: ~21 SP per two-week sprint (calibrated in v1).
 
 Phase D breakdown: routing provider spike + `POST /api/routes/plan` endpoint (3 SP),
 route step in the Add/Edit run modal with the mismatch hint (5 SP), `RouteMap` display
-on run detail and public profiles (2 SP). The schema columns land already in Phase A
+on run detail and public profiles including the `showRoutes` gating and the ~300 m
+public trim (2 SP). The schema columns land already in Phase A
 (three nullable columns cost nothing), so D is pure feature work with no migration.
 D depends only on A (storage); it does not block, and is not blocked by, B or C.
 
@@ -173,10 +190,8 @@ discipline as v1.
   board.
 - **Privacy defaults**: opt-in or opt-out for leaderboards? Proposal: profile private
   and leaderboard opt-in by default.
-- **Route privacy**: a route map on a public profile can reveal where someone lives
-  (runs tend to start at the front door). Proposal: routes are private by default,
-  a per-user "show my routes" setting, and consider trimming/blurring the first and
-  last ~300 m on public views. Decide before Phase D ships to profiles.
+- **Route privacy**: resolved - see "Privacy (decided)" under Route maps in section 2
+  (private by default, `showRoutes` setting, ~300 m trim on public views).
 - **Routing service limits**: the OSRM demo server has no SLA and free tiers have
   daily caps. Fine for the demo; a real deployment would self-host OSRM or pay. The
   backend proxy endpoint is what keeps this swap invisible to the frontend.
