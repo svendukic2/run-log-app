@@ -1,16 +1,15 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import { GOAL_DEFAULT_KM, useGoal } from '@/lib/goal';
 import {
   daysLeftInWeek,
   formatDuration,
   formatTimeCompact,
   paceSecondsPerKm,
-  todayIso,
   totalsForWeek,
   useRuns,
 } from '@/lib/runs';
+import { useToday } from '@/lib/useToday';
 
 // Distances round to one decimal exactly once, and every caption derives from
 // the rounded values, so "14.3 / 20 km" and "5.7 km to go" always add up.
@@ -32,20 +31,7 @@ function formatKm(km: number): string {
 export default function WeeklyGoalCard() {
   const runs = useRuns();
   const goal = useGoal();
-  // The date is state, not a render-body clock read: it seeds once on mount
-  // and refreshes when the user returns to a tab left open across midnight,
-  // so the card never keeps reporting last week against this week's goal.
-  const [today, setToday] = useState(() => todayIso());
-
-  useEffect(() => {
-    const refresh = () => setToday(todayIso());
-    window.addEventListener('focus', refresh);
-    document.addEventListener('visibilitychange', refresh);
-    return () => {
-      window.removeEventListener('focus', refresh);
-      document.removeEventListener('visibilitychange', refresh);
-    };
-  }, []);
+  const today = useToday();
 
   const totals = totalsForWeek(runs, today);
   // useGoal validates km, so target is always a positive number.

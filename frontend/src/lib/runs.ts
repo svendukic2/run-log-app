@@ -301,6 +301,17 @@ export function sortRuns(runs: Run[], order: RunSortOrder): Run[] {
   return [...runs].sort((a, b) => direction * a.date.localeCompare(b.date));
 }
 
+// The Mon-Sun week starts for the `count` weeks ending with the one `isoDate`
+// falls in, oldest first: the x-axis of the dashboard distance chart (RUN-19).
+export function lastWeekStarts(isoDate: string, count: number): string[] {
+  const monday = fromIsoDate(startOfWeek(isoDate));
+  return Array.from({ length: count }, (_, index) => {
+    const weekStart = new Date(monday);
+    weekStart.setDate(monday.getDate() - 7 * (count - 1 - index));
+    return toIsoDate(weekStart);
+  });
+}
+
 export interface WeekTotals {
   runCount: number;
   distanceKm: number;
