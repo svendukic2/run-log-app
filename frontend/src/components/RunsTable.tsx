@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { EFFORT_DOT } from '@/components/EffortField';
+import RunRowMenu from '@/components/RunRowMenu';
 import { ROUTES } from '@/lib/routes';
 import {
   EFFORT_CHIP,
@@ -20,40 +21,6 @@ function runDetailHref(run: Pick<Run, 'id'>): string {
 }
 
 const COLUMNS = ['Route', 'Date', 'Distance', 'Duration', 'Pace', 'Effort'];
-
-function KebabIcon() {
-  return (
-    <svg width="4" height="16" viewBox="0 0 4 16" fill="none" aria-hidden="true">
-      <circle cx="2" cy="2" r="1.7" fill="currentColor" />
-      <circle cx="2" cy="8" r="1.7" fill="currentColor" />
-      <circle cx="2" cy="14" r="1.7" fill="currentColor" />
-    </svg>
-  );
-}
-
-// Kebab per row (AC3, AC6). Visible and focusable now; the menu it opens is
-// RUN-29, so until then the press is deliberately inert. It still swallows the
-// click so a missed tap does not fall through to the row navigation. The card
-// variant passes a larger hit area: on a phone the button sits beside a
-// full-card link, where a missed 32px tap would navigate instead.
-function KebabButton({
-  routeName,
-  sizeClassName = 'size-8',
-}: {
-  routeName: string;
-  sizeClassName?: string;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={`Open menu for ${routeName}`}
-      onClick={(event) => event.stopPropagation()}
-      className={`flex shrink-0 items-center justify-center rounded-[8px] text-tertiary hover:bg-muted hover:text-text-primary ${sizeClassName}`}
-    >
-      <KebabIcon />
-    </button>
-  );
-}
 
 function EffortChip({ effort }: { effort: Effort }) {
   return (
@@ -147,8 +114,11 @@ export default function RunsTable({ runs }: RunsTableProps) {
                 <td className="border-b border-line-subtle px-4 py-[15px] group-last:border-b-0">
                   <EffortChip effort={run.effort} />
                 </td>
+                {/* The kebab opens the row menu with Edit and Delete
+                    (RUN-29); its subtree swallows clicks so nothing in it
+                    falls through to the row navigation. */}
                 <td className="border-b border-line-subtle py-[15px] pr-4 pl-2 text-right group-last:border-b-0">
-                  <KebabButton routeName={run.routeName} />
+                  <RunRowMenu run={run} />
                 </td>
               </tr>
             ))}
@@ -180,7 +150,7 @@ export default function RunsTable({ runs }: RunsTableProps) {
                 {formatDuration(run.durationSeconds)} · {formatPace(run)}
               </span>
             </Link>
-            <KebabButton routeName={run.routeName} sizeClassName="-mt-1 -mr-1 size-11" />
+            <RunRowMenu run={run} sizeClassName="-mt-1 -mr-1 size-11" />
           </li>
         ))}
       </ul>
