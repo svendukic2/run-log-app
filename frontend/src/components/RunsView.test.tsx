@@ -145,6 +145,24 @@ describe('Runs view (RUN-24)', () => {
     );
   });
 
+  it('opens the Edit run modal from the row menu without navigating (RUN-29)', async () => {
+    storeRuns(RUNS);
+    const user = userEvent.setup();
+    render(<RunsView />);
+
+    const table = screen.getByRole('table');
+    const [firstRow] = within(table).getAllByTestId('run-row');
+
+    await user.click(within(firstRow).getByRole('button', { name: /open menu for/i }));
+    await user.click(screen.getByRole('menuitem', { name: 'Edit' }));
+
+    // The modal opens for that exact run and nothing navigated: every click
+    // inside the menu subtree stays out of the row's onClick.
+    expect(screen.getByRole('dialog', { name: 'Edit run' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Route name')).toHaveValue('Morning loop');
+    expect(push).not.toHaveBeenCalled();
+  });
+
   it('swaps the table for the records panel and back (AC2)', async () => {
     storeRuns(RUNS);
     const user = userEvent.setup();
@@ -190,6 +208,8 @@ describe('Runs view (RUN-24)', () => {
     const cards = screen.getByTestId('runs-cards');
     expect(within(cards).getAllByRole('listitem')).toHaveLength(3);
     expect(within(cards).getByText('Morning loop')).toBeInTheDocument();
+    // Each card carries the same row menu the table rows have (RUN-29).
+    expect(within(cards).getAllByRole('button', { name: /open menu for/i })).toHaveLength(3);
     expect(within(cards).getByRole('link', { name: /long run/i })).toHaveAttribute(
       'href',
       '/runs/run-oldest',
