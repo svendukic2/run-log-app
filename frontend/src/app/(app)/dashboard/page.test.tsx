@@ -28,6 +28,36 @@ describe('Dashboard header (RUN-15)', () => {
     expect(screen.getByRole('dialog', { name: 'Add run' })).toBeInTheDocument();
   });
 
+  it('renders the AI Coach card in the right column in both dashboard states (RUN-21)', () => {
+    // Empty state (04): the coach card invites the first run.
+    const { unmount } = render(<DashboardPage />);
+    const body = screen.getByTestId('dashboard-body');
+    expect(within(body).getByRole('region', { name: 'AI Coach' })).toBeInTheDocument();
+    unmount();
+
+    // Filled state (05): still there, now pointing at the coach page.
+    window.localStorage.setItem(
+      'runlog.runs',
+      JSON.stringify([
+        {
+          id: 'a',
+          routeName: 'Morning loop',
+          distanceKm: 8.2,
+          durationSeconds: 2535,
+          date: '2026-07-14',
+          effort: 'Medium',
+          note: '',
+        },
+      ]),
+    );
+    render(<DashboardPage />);
+    expect(
+      within(screen.getByRole('region', { name: 'AI Coach' })).getByRole('link', {
+        name: /open coach/i,
+      }),
+    ).toBeInTheDocument();
+  });
+
   it('keeps the header out of the state-dependent body, so both states share it (AC3)', () => {
     render(<DashboardPage />);
 

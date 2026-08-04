@@ -107,6 +107,20 @@ export function formatDistanceKm(km: number): string {
   return `${km.toFixed(1)} km`;
 }
 
+// Distances round to one decimal exactly once, and every derived caption or
+// bar uses the rounded value, so "14.3 / 20 km" and "5.7 km to go" always add
+// up (RUN-17; shared since RUN-21).
+export function roundKm(km: number): number {
+  return Math.round(km * 10) / 10;
+}
+
+// Whole kilometres without a decimal ("14"), fractional ones with one
+// ("13.6"), matching the goal readouts in the mocks.
+export function formatKm(km: number): string {
+  const rounded = roundKm(km);
+  return Number.isInteger(rounded) ? `${rounded}` : rounded.toFixed(1);
+}
+
 /* Duration and pace -------------------------------------------------------- */
 
 // Accepts the two shapes the designs use, `mm:ss` and `h:mm:ss` (ADD-6), and
