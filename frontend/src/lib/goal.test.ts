@@ -113,6 +113,17 @@ describe('default weekly goal (RUN-38)', () => {
 
       expect(getDefaultGoal()).toEqual({ km: 60, effectiveFromWeek: NEXT_MONDAY, previousKm: 0 });
     });
+
+    it('snaps a hand-edited mid-week activation date back to its Monday', () => {
+      // A Wednesday would otherwise delay activation to the *following* week,
+      // since no week's Monday ever compares >= to it until then.
+      window.localStorage.setItem(
+        'runlog.defaultGoal',
+        '{"km":35,"effectiveFromWeek":"2026-08-12","previousKm":20}',
+      );
+
+      expect(getDefaultGoal()?.effectiveFromWeek).toBe(NEXT_MONDAY);
+    });
   });
 
   describe('getDefaultGoalKm', () => {

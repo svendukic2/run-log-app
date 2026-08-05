@@ -30,6 +30,8 @@ export function getGoal(): Goal | null {
   }
 }
 
+// No same-tab announcement here, unlike saveDefaultGoal: the onboarding flow
+// navigates away on save, so nothing in this tab is watching yet.
 export function saveGoal(goal: Goal): void {
   window.localStorage.setItem(GOAL_KEY, JSON.stringify(goal));
 }
@@ -115,7 +117,8 @@ const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 // localStorage is user-writable, so both km fields are verified as finite
 // numbers before consumers do arithmetic with them. Unlike the onboarding
 // goal, 0 is legal here: the stepper's bounds are 0-60 (A17). Out-of-range
-// values clamp instead of reading as "no default".
+// values clamp and a hand-edited mid-week date snaps back to its Monday,
+// instead of reading as "no default".
 function parseDefaultGoal(raw: string): DefaultGoal | null {
   try {
     const parsed = JSON.parse(raw) as DefaultGoal;
@@ -129,7 +132,11 @@ function parseDefaultGoal(raw: string): DefaultGoal | null {
     ) {
       return null;
     }
-    return { ...parsed, km: clampGoal(parsed.km), previousKm: clampGoal(parsed.previousKm) };
+    return {
+      km: clampGoal(parsed.km),
+      effectiveFromWeek: startOfWeek(parsed.effectiveFromWeek),
+      previousKm: clampGoal(parsed.previousKm),
+    };
   } catch {
     return null;
   }
@@ -161,6 +168,9 @@ export function nextWeekStart(isoDate: string): string {
 // onboarding goal (or the 20 km fallback) applies to every week; once one is
 // saved, weeks from its Monday on use it and earlier weeks keep the frozen
 // previous target. ISO day strings compare chronologically as plain strings.
+// Only two levels of history exist, so this is valid for the current week
+// onward; asking about weeks before the latest save would get that save's
+// frozen target, not what those weeks actually showed at the time.
 export function resolveGoalTarget(
   goal: Goal | null,
   defaultGoal: DefaultGoal | null,

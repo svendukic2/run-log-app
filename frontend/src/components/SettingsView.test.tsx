@@ -184,16 +184,24 @@ describe('Settings training card (RUN-38)', () => {
     expect(trainingCard().getByText('21 km')).toBeInTheDocument();
   });
 
-  it('stays within the 0-60 km bounds (AC2, A17)', async () => {
+  it('stays within the 0-60 km bounds, disabling the button at each bound (AC2, A17)', async () => {
     const user = userEvent.setup();
     saveDefaultGoal(60);
-    render(<SettingsView />);
+    const { unmount } = render(<SettingsView />);
 
+    // At the ceiling only plus is out of play; a click must not move it.
+    expect(increase()).toBeDisabled();
+    expect(decrease()).toBeEnabled();
     await user.click(increase());
     expect(trainingCard().getByText('60 km')).toBeInTheDocument();
+    unmount();
 
-    // 60 clicks walk the whole range down to the floor; one more must stick.
-    for (let i = 0; i < 61; i += 1) await user.click(decrease());
+    saveDefaultGoal(0);
+    render(<SettingsView />);
+
+    expect(decrease()).toBeDisabled();
+    expect(increase()).toBeEnabled();
+    await user.click(decrease());
     expect(trainingCard().getByText('0 km')).toBeInTheDocument();
   });
 
@@ -212,6 +220,17 @@ describe('Settings training card (RUN-38)', () => {
       effectiveFromWeek: nextWeekStart(todayIso()),
       previousKm: 20,
     });
+  });
+
+  it('writes no default record when the stepper was not touched', async () => {
+    const user = userEvent.setup();
+    render(<SettingsView />);
+
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+
+    // Creating the record permanently switches week resolution away from the
+    // onboarding goal, so a profile-only save must not create one.
+    expect(getDefaultGoal()).toBeNull();
   });
 
   it('does not persist the stepper value while the profile draft is invalid', async () => {

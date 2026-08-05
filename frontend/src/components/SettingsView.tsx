@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { ACCENT_PILL_CLASSES } from '@/components/accentPill';
 import TextField from '@/components/TextField';
-import { clampGoal, getDefaultGoalKm, saveDefaultGoal } from '@/lib/goal';
+import { clampGoal, getDefaultGoalKm, GOAL_MAX_KM, GOAL_MIN_KM, saveDefaultGoal } from '@/lib/goal';
 import { profileInitials, saveProfile, useProfile, type Profile } from '@/lib/onboarding';
 import { validateProfileForm, type ProfileFormErrors } from '@/lib/profileValidation';
 import { useHydrated } from '@/lib/useHydrated';
@@ -48,9 +48,11 @@ function AvatarBlock({ profile }: { profile: Profile | null }) {
 }
 
 // A stepper square (minus/plus): the onboarding stepper's buttons at the
-// Settings card's smaller scale (Figma node 75:129).
+// Settings card's smaller scale (Figma node 75:129). Unlike there, a bound
+// disables its button: this stepper has no slider next to it, so a silently
+// ignored click would be the only feedback.
 const STEPPER_BUTTON_CLASSES =
-  'flex size-[48px] shrink-0 items-center justify-center rounded-[14px] border border-line-strong bg-white text-[22px] text-ink hover:bg-muted';
+  'flex size-[48px] shrink-0 items-center justify-center rounded-[14px] border border-line-strong bg-white text-[22px] text-ink hover:bg-muted disabled:opacity-40 disabled:hover:bg-white';
 
 // The settings body owns the draft for every card because the page has a
 // single "Save changes" button (RUN-36): submit persists the profile (RUN-37)
@@ -84,7 +86,10 @@ function SettingsForm() {
     saveProfile(draft);
     // The default seeds *future* weeks only: saveDefaultGoal stamps next
     // Monday as its first week and freezes the current week's target (SET-6).
-    saveDefaultGoal(goalKm);
+    // An untouched stepper writes nothing: creating the record permanently
+    // switches week resolution away from the onboarding goal, which a
+    // profile-only edit has no business doing.
+    if (goalKm !== getDefaultGoalKm()) saveDefaultGoal(goalKm);
     // The inputs adopt the trimmed values that were actually stored, so what
     // the card shows is exactly what a reload would show.
     setFirstName(draft.firstName);
@@ -146,7 +151,9 @@ function SettingsForm() {
           className="mt-[26px] flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
         >
           <div className="flex min-w-0 flex-col gap-[3px]">
-            <p className="text-[15px] font-semibold text-text-primary">Default weekly goal</p>
+            <p id="default-goal-label" className="text-[15px] font-semibold text-text-primary">
+              Default weekly goal
+            </p>
             <p className="text-[13.5px] leading-[1.45] text-secondary">
               Applied to each new week. You can still adjust it per week.
             </p>
@@ -155,6 +162,7 @@ function SettingsForm() {
             <button
               type="button"
               aria-label="Decrease default weekly goal"
+              disabled={goalKm <= GOAL_MIN_KM}
               onClick={() => setGoalKm((value) => clampGoal(value - 1))}
               className={STEPPER_BUTTON_CLASSES}
             >
@@ -164,6 +172,7 @@ function SettingsForm() {
                 buttons' labels alone never say where the value landed. */}
             <output
               aria-live="polite"
+              aria-labelledby="default-goal-label"
               className="flex h-[48px] min-w-[92px] items-center justify-center rounded-[14px] border border-line-strong bg-white px-4 font-display text-[17px] font-bold text-text-primary"
             >
               {`${goalKm} km`}
@@ -171,6 +180,7 @@ function SettingsForm() {
             <button
               type="button"
               aria-label="Increase default weekly goal"
+              disabled={goalKm >= GOAL_MAX_KM}
               onClick={() => setGoalKm((value) => clampGoal(value + 1))}
               className={STEPPER_BUTTON_CLASSES}
             >
