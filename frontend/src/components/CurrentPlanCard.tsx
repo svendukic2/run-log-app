@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import SparkleIcon from '@/components/SparkleIcon';
-import { GOAL_DEFAULT_KM, useGoal } from '@/lib/goal';
+import { useGoalTarget } from '@/lib/goal';
 import { derivePlan, formatUpdatedAgo, stampPlanGenerated, usePlanGeneratedAt } from '@/lib/plan';
 import { useRuns } from '@/lib/runs';
 import { useToday } from '@/lib/useToday';
@@ -30,9 +30,11 @@ function RegenerateIcon() {
 // and "See the reasoning" (non-functional by design, A21).
 export default function CurrentPlanCard() {
   const runs = useRuns();
-  const goal = useGoal();
   const generatedAt = usePlanGeneratedAt();
   const today = useToday();
+  // Resolved per week (RUN-38): the plan builds on the same target the
+  // dashboard's goal card shows for this week.
+  const goalTargetKm = useGoalTarget(today);
   // Read once per mount: the caption does not need to tick live.
   const [now] = useState(() => Date.now());
 
@@ -48,7 +50,7 @@ export default function CurrentPlanCard() {
   // CoachView already gates on runs; this covers any other mount point.
   if (!hasRuns) return null;
 
-  const plan = derivePlan(runs, goal?.km ?? GOAL_DEFAULT_KM, today);
+  const plan = derivePlan(runs, goalTargetKm, today);
 
   const stats: Array<{ label: string; value: string }> = [
     { label: 'Suggested target', value: `${plan.targetKm} km` },

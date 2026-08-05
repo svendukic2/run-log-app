@@ -29,12 +29,16 @@ describe('Settings page header and layout (RUN-36)', () => {
     expect(training.compareDocumentPosition(save) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it('renders exactly one Save changes button and no other action (AC2)', () => {
+  it('renders exactly one Save changes button and no other page action (AC2)', () => {
     render(<SettingsPage />);
 
-    const buttons = screen.getAllByRole('button');
-    expect(buttons).toHaveLength(1);
-    expect(buttons[0]).toHaveTextContent('Save changes');
+    // The stepper pair inside the Training card (RUN-38) adjusts a value; the
+    // page-level action - the only submit - is still just Save changes.
+    const submits = screen
+      .getAllByRole('button')
+      .filter((button) => button.getAttribute('type') === 'submit');
+    expect(submits).toHaveLength(1);
+    expect(submits[0]).toHaveTextContent('Save changes');
   });
 
   it('offers no exit control, so navigation happens only via the sidebar (AC3)', () => {
