@@ -1,5 +1,5 @@
 import { act, render, screen, within } from '@testing-library/react';
-import { saveGoal } from '@/lib/goal';
+import { saveDefaultGoal, saveGoal } from '@/lib/goal';
 import { addRun } from '@/lib/runs';
 import WeeklyGoalCard from './WeeklyGoalCard';
 
@@ -180,6 +180,31 @@ describe('WeeklyGoalCard (RUN-17)', () => {
     expect(within(readout()).getByText('5')).toBeInTheDocument();
     expect(screen.getByText('15 km to go')).toBeInTheDocument();
     expect(progressFill()).toHaveStyle({ width: '25%' });
+  });
+
+  it('keeps the current week on its target when a new default is saved (RUN-38 AC4)', () => {
+    freezeDateAt(FRIDAY);
+    render(<WeeklyGoalCard />);
+
+    // Saved mid-week from Settings while the card is mounted: the running
+    // week must not move (SET-6).
+    act(() => {
+      saveDefaultGoal(35, '2026-08-07');
+    });
+
+    expect(within(readout()).getByText('/ 20 km')).toBeInTheDocument();
+  });
+
+  it('uses the new default once the next week starts (RUN-38 AC3)', () => {
+    freezeDateAt(FRIDAY);
+    saveDefaultGoal(35, '2026-08-07');
+
+    // The next Monday arrives; the fresh week seeds from the new default.
+    jest.setSystemTime(new Date(2026, 7, 10, 9, 0, 0));
+    render(<WeeklyGoalCard />);
+
+    expect(within(readout()).getByText('/ 35 km')).toBeInTheDocument();
+    expect(screen.getByText('35 km to go')).toBeInTheDocument();
   });
 
   it('clamps the bar and the remaining caption when the goal is exceeded', () => {

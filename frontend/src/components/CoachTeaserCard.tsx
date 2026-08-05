@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { ACCENT_PILL_CLASSES } from '@/components/accentPill';
 import AddRunButton from '@/components/AddRunButton';
 import SparkleIcon from '@/components/SparkleIcon';
-import { GOAL_DEFAULT_KM, useGoal } from '@/lib/goal';
+import { useGoalTarget } from '@/lib/goal';
 import { ROUTES } from '@/lib/routes';
 import { daysLeftInWeek, formatKm, roundKm, totalsForWeek, useRuns } from '@/lib/runs';
 import { useHydrated } from '@/lib/useHydrated';
@@ -18,8 +18,10 @@ import { useToday } from '@/lib/useToday';
 export default function CoachTeaserCard() {
   const hydrated = useHydrated();
   const runs = useRuns();
-  const goal = useGoal();
   const today = useToday();
+  // Resolved per week like the goal card, so both always quote the same
+  // target once a Settings default kicks in (RUN-38).
+  const target = useGoalTarget(today);
 
   // localStorage is invisible to the server and the hydration pass, so the
   // card waits for the store rather than flashing the empty copy at a
@@ -30,7 +32,6 @@ export default function CoachTeaserCard() {
   // anything" state (AC1). A runner with history but an empty current week
   // still gets a real coach message about this week's full remaining goal.
   const hasRuns = runs.length > 0;
-  const target = goal?.km ?? GOAL_DEFAULT_KM;
   // Deliberately derived from the rounded weekly total the goal card
   // displays, so this card can never say "6.1 km to go" while that one shows
   // "6 km to go". The displayed total is the total.

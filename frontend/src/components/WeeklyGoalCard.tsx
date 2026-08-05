@@ -1,6 +1,6 @@
 'use client';
 
-import { GOAL_DEFAULT_KM, useGoal } from '@/lib/goal';
+import { useGoalTarget } from '@/lib/goal';
 import {
   daysLeftInWeek,
   formatDuration,
@@ -19,15 +19,17 @@ import { useToday } from '@/lib/useToday';
 // modal and onboarding write to, so saved runs recompute everything (A18).
 export default function WeeklyGoalCard() {
   const runs = useRuns();
-  const goal = useGoal();
   const today = useToday();
 
   const totals = totalsForWeek(runs, today);
-  // useGoal validates km, so target is always a positive number.
-  const target = goal?.km ?? GOAL_DEFAULT_KM;
+  // This week's target: the onboarding goal until a Settings default takes
+  // effect, then that default from its first Monday on (RUN-38, SET-6).
+  const target = useGoalTarget(today);
   const done = roundKm(totals.distanceKm);
   const remaining = roundKm(Math.max(0, target - done));
-  const percent = Math.min(100, (done / target) * 100);
+  // A default of 0 km is legal (A17), and 0/0 is NaN: a zero target counts
+  // as met rather than poisoning the bar's width.
+  const percent = target > 0 ? Math.min(100, (done / target) * 100) : 100;
   const daysLeft = daysLeftInWeek(today);
 
   // hasRuns gates the stats that need data to exist; the status is a separate
@@ -102,7 +104,10 @@ export default function WeeklyGoalCard() {
         </span>
       </div>
 
-      <dl data-testid="goal-stats" className="mt-[20px] flex justify-between border-t border-line pt-[20px]">
+      <dl
+        data-testid="goal-stats"
+        className="mt-[20px] flex justify-between border-t border-line pt-[20px]"
+      >
         {stats.map((stat) => (
           <div key={stat.label} className={`flex flex-col gap-[2px] ${stat.align}`}>
             {/* dt precedes dd in the DOM as the content model requires; the

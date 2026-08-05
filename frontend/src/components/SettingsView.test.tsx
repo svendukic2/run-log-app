@@ -1,6 +1,7 @@
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderToString } from 'react-dom/server';
+import { getDefaultGoal, nextWeekStart, saveDefaultGoal, saveGoal, todayIso } from '@/lib/goal';
 import { getProfile, saveProfile, type Profile } from '@/lib/onboarding';
 import SettingsView from './SettingsView';
 
@@ -8,6 +9,18 @@ const STORED: Profile = { firstName: 'Marko', lastName: 'Kovač', email: 'marko@
 
 function profileCard() {
   return within(screen.getByRole('region', { name: 'Profile' }));
+}
+
+function trainingCard() {
+  return within(screen.getByRole('region', { name: 'Training' }));
+}
+
+function decrease() {
+  return trainingCard().getByRole('button', { name: 'Decrease default weekly goal' });
+}
+
+function increase() {
+  return trainingCard().getByRole('button', { name: 'Increase default weekly goal' });
 }
 
 describe('Settings profile card (RUN-37)', () => {
@@ -122,5 +135,95 @@ describe('Settings profile card (RUN-37)', () => {
     // The pre-hydration markup must not contain the prefilled inputs: the
     // draft is seeded from localStorage, which only the client can read.
     expect(renderToString(<SettingsView />)).not.toMatch(/Marko/);
+  });
+});
+
+describe('Settings training card (RUN-38)', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    saveProfile(STORED);
+  });
+
+  it('shows the label, the designed caption and the minus / value / plus stepper (AC1)', () => {
+    render(<SettingsView />);
+
+    expect(trainingCard().getByText('Default weekly goal')).toBeInTheDocument();
+    expect(
+      trainingCard().getByText('Applied to each new week. You can still adjust it per week.'),
+    ).toBeInTheDocument();
+    expect(decrease()).toBeInTheDocument();
+    expect(increase()).toBeInTheDocument();
+    expect(trainingCard().getByText('20 km')).toBeInTheDocument();
+  });
+
+  it('seeds the stepper from the onboarding goal when no default was saved yet', () => {
+    saveGoal({ km: 30, startDate: '2026-08-03', endDate: null });
+
+    render(<SettingsView />);
+
+    expect(trainingCard().getByText('30 km')).toBeInTheDocument();
+  });
+
+  it('seeds the stepper from the latest saved default', () => {
+    saveDefaultGoal(45);
+
+    render(<SettingsView />);
+
+    expect(trainingCard().getByText('45 km')).toBeInTheDocument();
+  });
+
+  it('steps the value up and down by 1 km (AC2)', async () => {
+    const user = userEvent.setup();
+    render(<SettingsView />);
+
+    await user.click(increase());
+    await user.click(increase());
+    expect(trainingCard().getByText('22 km')).toBeInTheDocument();
+
+    await user.click(decrease());
+    expect(trainingCard().getByText('21 km')).toBeInTheDocument();
+  });
+
+  it('stays within the 0-60 km bounds (AC2, A17)', async () => {
+    const user = userEvent.setup();
+    saveDefaultGoal(60);
+    render(<SettingsView />);
+
+    await user.click(increase());
+    expect(trainingCard().getByText('60 km')).toBeInTheDocument();
+
+    // 60 clicks walk the whole range down to the floor; one more must stick.
+    for (let i = 0; i < 61; i += 1) await user.click(decrease());
+    expect(trainingCard().getByText('0 km')).toBeInTheDocument();
+  });
+
+  it('persists the default on Save, seeding future weeks but not the current one (AC3, AC4)', async () => {
+    const user = userEvent.setup();
+    render(<SettingsView />);
+
+    await user.click(increase());
+    await user.click(increase());
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+
+    // The new default applies from next Monday; the current week keeps the
+    // target it started with (SET-6).
+    expect(getDefaultGoal()).toEqual({
+      km: 22,
+      effectiveFromWeek: nextWeekStart(todayIso()),
+      previousKm: 20,
+    });
+  });
+
+  it('does not persist the stepper value while the profile draft is invalid', async () => {
+    const user = userEvent.setup();
+    render(<SettingsView />);
+
+    await user.clear(profileCard().getByLabelText('First name'));
+    await user.click(increase());
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+
+    // A single Save gate: nothing on the page persists until the form is
+    // valid (RUN-39 saves everything in one action).
+    expect(getDefaultGoal()).toBeNull();
   });
 });

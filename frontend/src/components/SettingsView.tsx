@@ -3,13 +3,14 @@
 import { useState } from 'react';
 import { ACCENT_PILL_CLASSES } from '@/components/accentPill';
 import TextField from '@/components/TextField';
+import { clampGoal, getDefaultGoalKm, saveDefaultGoal } from '@/lib/goal';
 import { profileInitials, saveProfile, useProfile, type Profile } from '@/lib/onboarding';
 import { validateProfileForm, type ProfileFormErrors } from '@/lib/profileValidation';
 import { useHydrated } from '@/lib/useHydrated';
 
 // Card shell shared by the two settings cards, matching the dashboard cards
-// (RUN-17). RUN-37 fills the Profile card; RUN-38 fills Training with the
-// weekly-goal stepper, so that card is still just the shell.
+// (RUN-17). RUN-37 filled the Profile card; RUN-38 fills Training with the
+// default-weekly-goal stepper.
 function SettingsCard({ title, children }: { title: string; children?: React.ReactNode }) {
   return (
     <section
@@ -46,9 +47,14 @@ function AvatarBlock({ profile }: { profile: Profile | null }) {
   );
 }
 
+// A stepper square (minus/plus): the onboarding stepper's buttons at the
+// Settings card's smaller scale (Figma node 75:129).
+const STEPPER_BUTTON_CLASSES =
+  'flex size-[48px] shrink-0 items-center justify-center rounded-[14px] border border-line-strong bg-white text-[22px] text-ink hover:bg-muted';
+
 // The settings body owns the draft for every card because the page has a
-// single "Save changes" button (RUN-36): the form submit is where RUN-39 will
-// also persist the Training values, so profile saving already lives there.
+// single "Save changes" button (RUN-36): submit persists the profile (RUN-37)
+// and the Training default in one action (RUN-38, RUN-39).
 function SettingsForm() {
   // Mounted only after hydration, so the stored profile is available to seed
   // the draft synchronously - no effect, no controlled-input flicker.
@@ -56,6 +62,9 @@ function SettingsForm() {
   const [firstName, setFirstName] = useState(profile?.firstName ?? '');
   const [lastName, setLastName] = useState(profile?.lastName ?? '');
   const [email, setEmail] = useState(profile?.email ?? '');
+  // The stepper's draft, like the profile fields: seeded from the stored
+  // default and only persisted on Save. Nothing seeds weeks until then.
+  const [goalKm, setGoalKm] = useState(() => getDefaultGoalKm());
   const [errors, setErrors] = useState<ProfileFormErrors>({});
 
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
@@ -73,6 +82,9 @@ function SettingsForm() {
       email: email.trim(),
     };
     saveProfile(draft);
+    // The default seeds *future* weeks only: saveDefaultGoal stamps next
+    // Monday as its first week and freezes the current week's target (SET-6).
+    saveDefaultGoal(goalKm);
     // The inputs adopt the trimmed values that were actually stored, so what
     // the card shows is exactly what a reload would show.
     setFirstName(draft.firstName);
@@ -126,7 +138,47 @@ function SettingsForm() {
         </div>
       </SettingsCard>
 
-      <SettingsCard title="Training" />
+      <SettingsCard title="Training">
+        {/* Label and caption left, stepper right from `sm` up; on a phone the
+            stepper drops under the caption (responsive addendum). */}
+        <div
+          data-testid="default-goal-row"
+          className="mt-[26px] flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <div className="flex min-w-0 flex-col gap-[3px]">
+            <p className="text-[15px] font-semibold text-text-primary">Default weekly goal</p>
+            <p className="text-[13.5px] leading-[1.45] text-secondary">
+              Applied to each new week. You can still adjust it per week.
+            </p>
+          </div>
+          <div className="flex items-center gap-[10px]">
+            <button
+              type="button"
+              aria-label="Decrease default weekly goal"
+              onClick={() => setGoalKm((value) => clampGoal(value - 1))}
+              className={STEPPER_BUTTON_CLASSES}
+            >
+              −
+            </button>
+            {/* aria-live announces the new value to screen readers, since the
+                buttons' labels alone never say where the value landed. */}
+            <output
+              aria-live="polite"
+              className="flex h-[48px] min-w-[92px] items-center justify-center rounded-[14px] border border-line-strong bg-white px-4 font-display text-[17px] font-bold text-text-primary"
+            >
+              {`${goalKm} km`}
+            </output>
+            <button
+              type="button"
+              aria-label="Increase default weekly goal"
+              onClick={() => setGoalKm((value) => clampGoal(value + 1))}
+              className={STEPPER_BUTTON_CLASSES}
+            >
+              +
+            </button>
+          </div>
+        </div>
+      </SettingsCard>
 
       {/* Right-aligned under the cards per the frame; full width below `sm`
           like every primary action (RUN-15, responsive addendum). */}
