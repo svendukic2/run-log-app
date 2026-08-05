@@ -377,6 +377,25 @@ export function lastWeekStarts(isoDate: string, count: number): string[] {
   });
 }
 
+// The ISO dates of the `count` days ending with `isoDate`, oldest first: the
+// x-axis of the dashboard distance chart since its daily redesign (RUN-19).
+export function lastDays(isoDate: string, count: number): string[] {
+  const end = fromIsoDate(isoDate);
+  return Array.from({ length: count }, (_, index) => {
+    const day = new Date(end);
+    day.setDate(end.getDate() - (count - 1 - index));
+    return toIsoDate(day);
+  });
+}
+
+// Total distance logged on a single day. Run.date is a plain ISO day string,
+// so membership is a string comparison, like the weekly selector below.
+export function distanceForDay(runs: Run[], isoDate: string): number {
+  return runs
+    .filter((run) => run.date === isoDate)
+    .reduce((total, run) => total + run.distanceKm, 0);
+}
+
 export interface WeekTotals {
   runCount: number;
   distanceKm: number;
