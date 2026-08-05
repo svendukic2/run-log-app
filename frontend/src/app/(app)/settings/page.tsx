@@ -1,4 +1,4 @@
-import { ACCENT_PILL_CLASSES } from '@/components/AddRunButton';
+import { ACCENT_PILL_CLASSES } from '@/components/accentPill';
 import PageHeader from '@/components/PageHeader';
 
 // Card shell shared by the two settings cards, matching the dashboard cards
