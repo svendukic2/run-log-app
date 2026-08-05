@@ -1,31 +1,31 @@
 'use client';
 
 import {
+  distanceForDay,
   formatDateShort,
   formatDistanceKm,
-  lastWeekStarts,
+  lastDays,
   roundKm,
-  totalsForWeek,
   useRuns,
 } from '@/lib/runs';
 import { useToday } from '@/lib/useToday';
 
-const WEEK_COUNT = 8;
+const DAY_COUNT = 14;
 
-// The "Distance" card (RUN-19, DSH-7): weekly distance over the last 8
-// Mon-Sun weeks as a bar chart, with the current week highlighted. Display
-// only, no designed interactions, so nothing in here is clickable and there
-// are no hover states. Bars derive from the runs store, so a run saved into a
-// past week moves that week's bar, not the current one.
+// The "Distance" card (RUN-19, redesigned): distance per day over the last 14
+// days as a bar chart, with today highlighted. No labels under the bars; each
+// bar's date and distance appear in a tooltip on hover instead. Bars derive
+// from the runs store, so a run saved on a past day moves that day's bar, not
+// today's.
 export default function DistanceChartCard() {
   const runs = useRuns();
   const today = useToday();
 
-  const weeks = lastWeekStarts(today, WEEK_COUNT).map((weekStart) => ({
-    weekStart,
-    distanceKm: roundKm(totalsForWeek(runs, weekStart).distanceKm),
+  const days = lastDays(today, DAY_COUNT).map((date) => ({
+    date,
+    distanceKm: roundKm(distanceForDay(runs, date)),
   }));
-  const maxKm = Math.max(...weeks.map((week) => week.distanceKm));
+  const maxKm = Math.max(...days.map((day) => day.distanceKm));
 
   return (
     <section
@@ -39,44 +39,44 @@ export default function DistanceChartCard() {
         >
           Distance
         </h2>
-        <span className="text-[13px] text-tertiary">{`Last ${WEEK_COUNT} weeks`}</span>
+        <span className="text-[13px] text-tertiary">{`Last ${DAY_COUNT} days`}</span>
       </div>
 
-      <ul className="mt-[24px] flex items-end gap-[10px] sm:gap-[16px]">
-        {weeks.map(({ weekStart, distanceKm }, index) => {
-          // lastWeekStarts ends with the week `today` falls in by construction.
-          const current = index === WEEK_COUNT - 1;
-          // Zero draws zero: a week without runs shows no bar rather than the
-          // same sliver as a genuinely short week. The current week alone
-          // keeps a minimal accent baseline so its highlight survives an
-          // empty week (AC2).
+      {/* The tooltip escapes the 120px bar area upwards, so the list keeps
+          headroom above the tallest bar instead of clipping it. */}
+      <ul className="mt-[16px] flex items-end gap-[6px] pt-[36px] sm:gap-[8px]">
+        {days.map(({ date, distanceKm }, index) => {
+          // lastDays ends on `today` by construction.
+          const current = index === DAY_COUNT - 1;
+          // Zero draws zero: a day without runs shows no bar rather than the
+          // same sliver as a genuinely short run. Today alone keeps a minimal
+          // accent baseline so its highlight survives an empty day.
           const heightPercent = maxKm > 0 ? (distanceKm / maxKm) * 100 : 0;
           return (
-            <li key={weekStart} className="flex min-w-0 flex-1 flex-col gap-[12px]">
+            <li key={date} className="group relative flex min-w-0 flex-1 flex-col">
               <div className="flex h-[120px] items-end">
                 <div
                   data-testid="distance-bar"
                   data-current={current || undefined}
-                  className={`w-full rounded-[8px] ${
-                    current ? 'min-h-[4px] bg-accent' : 'bg-accent-soft'
+                  className={`w-full rounded-[6px] ${
+                    current ? 'min-h-[4px] bg-accent' : 'bg-accent-soft group-hover:bg-accent'
                   }`}
                   style={{ height: `${heightPercent}%` }}
                 />
               </div>
-              {/* Below `sm` eight labels cannot fit, so only every other one
-                  shows rather than truncating them all into "May…". Odd
-                  indexes include the current week's label. The sr-only line
-                  announces every week regardless. */}
+              {/* The date deliberately does not sit under the bar: fourteen
+                  labels cannot fit, so it lives in this hover tooltip
+                  instead. Pointer-only by design; the sr-only line below
+                  announces every day regardless. */}
               <span
-                aria-hidden="true"
-                className={`text-center text-[11.5px] whitespace-nowrap ${
-                  current ? 'font-semibold text-accent' : 'text-tertiary'
-                } ${index % 2 === 1 ? '' : 'hidden sm:block'}`}
+                role="tooltip"
+                data-testid="distance-tooltip"
+                className="pointer-events-none absolute -top-[34px] left-1/2 z-10 hidden -translate-x-1/2 rounded-[8px] bg-ink px-[10px] py-[6px] text-[11.5px] whitespace-nowrap text-white group-hover:block"
               >
-                {formatDateShort(weekStart)}
+                {`${formatDateShort(date)} · ${formatDistanceKm(distanceKm)}`}
               </span>
               <span className="sr-only">
-                {`Week of ${formatDateShort(weekStart)}${current ? ', current week' : ''}: ${formatDistanceKm(distanceKm)}`}
+                {`${formatDateShort(date)}${current ? ', today' : ''}: ${formatDistanceKm(distanceKm)}`}
               </span>
             </li>
           );

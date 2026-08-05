@@ -12,6 +12,8 @@ import {
   formatTimeCompact,
   formatKm,
   getRuns,
+  distanceForDay,
+  lastDays,
   lastWeekStarts,
   parseDuration,
   roundKm,
@@ -228,6 +230,26 @@ describe('weeks (AC6)', () => {
       distanceKm: 20,
       durationSeconds: 7200,
     });
+  });
+
+  it('lists the last days oldest first, ending on the given day', () => {
+    expect(lastDays('2026-07-14', 3)).toEqual(['2026-07-12', '2026-07-13', '2026-07-14']);
+  });
+
+  it('crosses month and year boundaries without skipping days', () => {
+    expect(lastDays('2026-01-01', 3)).toEqual(['2025-12-30', '2025-12-31', '2026-01-01']);
+  });
+
+  it('totals only the runs on the requested day', () => {
+    const runs = [
+      makeRun({ id: 'a', date: '2026-07-14', distanceKm: 8.2 }),
+      makeRun({ id: 'b', date: '2026-07-14', distanceKm: 5 }),
+      makeRun({ id: 'c', date: '2026-07-13', distanceKm: 20 }),
+    ];
+
+    expect(distanceForDay(runs, '2026-07-14')).toBeCloseTo(13.2);
+    expect(distanceForDay(runs, '2026-07-13')).toBe(20);
+    expect(distanceForDay(runs, '2026-07-12')).toBe(0);
   });
 });
 
