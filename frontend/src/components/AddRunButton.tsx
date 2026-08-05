@@ -1,5 +1,6 @@
 'use client';
 
+import { ACCENT_PILL_CLASSES } from '@/components/accentPill';
 import RunModal from '@/components/RunModal';
 import { useAddRunModal } from '@/lib/useAddRunModal';
 
@@ -12,11 +13,6 @@ interface AddRunButtonProps {
   // breakpoint; headers still collapse it to content width from `sm` up.
   fullWidth?: boolean;
 }
-
-// The accent pill of the primary action, shared with link-shaped variants
-// (the coach teaser's "Open coach", RUN-21) so the two cannot drift apart.
-export const ACCENT_PILL_CLASSES =
-  'flex w-full shrink-0 items-center justify-center gap-[9px] rounded-[14px] bg-accent px-[28px] py-[16px] text-[16px] font-semibold text-white hover:bg-accent-pressed';
 
 // The primary "Add run" action from the design library (node 48:38): accent
 // pill with the label and a trailing arrow. It owns the Add run modal, so every

@@ -1,7 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import AddRunButton, { ACCENT_PILL_CLASSES } from '@/components/AddRunButton';
+import { ACCENT_PILL_CLASSES } from '@/components/accentPill';
+import AddRunButton from '@/components/AddRunButton';
 import SparkleIcon from '@/components/SparkleIcon';
 import { GOAL_DEFAULT_KM, useGoal } from '@/lib/goal';
 import { ROUTES } from '@/lib/routes';
