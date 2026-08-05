@@ -12,6 +12,12 @@ export interface Profile {
 const PROFILE_KEY = 'runlog.profile';
 const ONBOARDING_COMPLETE_KEY = 'runlog.onboardingComplete';
 
+// The browser fires 'storage' only in *other* tabs, so saves announce
+// themselves in this one too - the same pattern runs.ts uses. Without it the
+// sidebar footer and the Settings avatar would keep stale initials after a
+// profile edit (RUN-37 AC4).
+const PROFILE_CHANGED_EVENT = 'runlog:profile-changed';
+
 export function getProfile(): Profile | null {
   if (typeof window === 'undefined') return null;
   try {
@@ -24,13 +30,18 @@ export function getProfile(): Profile | null {
 
 export function saveProfile(profile: Profile): void {
   window.localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+  window.dispatchEvent(new Event(PROFILE_CHANGED_EVENT));
 }
 
 // Storage-backed hook that is safe during SSR/hydration: the server snapshot
 // is always null and clients pick up the stored profile right after mount.
 function subscribeToStorage(onStoreChange: () => void): () => void {
   window.addEventListener('storage', onStoreChange);
-  return () => window.removeEventListener('storage', onStoreChange);
+  window.addEventListener(PROFILE_CHANGED_EVENT, onStoreChange);
+  return () => {
+    window.removeEventListener('storage', onStoreChange);
+    window.removeEventListener(PROFILE_CHANGED_EVENT, onStoreChange);
+  };
 }
 
 export function useProfile(): Profile | null {

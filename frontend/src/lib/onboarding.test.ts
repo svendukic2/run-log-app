@@ -1,4 +1,10 @@
-import { profileInitials, profileShortName, type Profile } from './onboarding';
+import {
+  getProfile,
+  profileInitials,
+  profileShortName,
+  saveProfile,
+  type Profile,
+} from './onboarding';
 
 function profile(firstName: string, lastName: string): Profile {
   return { firstName, lastName, email: 'test@email.com' };
@@ -20,6 +26,24 @@ describe('profileInitials (RUN-14)', () => {
 
   it('degrades to a single letter when one name is empty', () => {
     expect(profileInitials(profile('Marko', ''))).toBe('M');
+  });
+});
+
+describe('saveProfile (RUN-37)', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  it('stores the profile and announces the change in the same tab', () => {
+    // The browser's own 'storage' event never fires in the tab that wrote, so
+    // saveProfile dispatches this one; useProfile listens for it (AC4).
+    const onChange = jest.fn();
+    window.addEventListener('runlog:profile-changed', onChange);
+    saveProfile(profile('Marko', 'Kovač'));
+    window.removeEventListener('runlog:profile-changed', onChange);
+
+    expect(getProfile()).toEqual(profile('Marko', 'Kovač'));
+    expect(onChange).toHaveBeenCalledTimes(1);
   });
 });
 
