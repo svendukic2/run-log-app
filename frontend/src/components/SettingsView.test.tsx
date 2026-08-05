@@ -246,3 +246,86 @@ describe('Settings training card (RUN-38)', () => {
     expect(getDefaultGoal()).toBeNull();
   });
 });
+
+describe('Settings save changes persistence (RUN-39)', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    saveProfile(STORED);
+  });
+
+  it('persists edited profile and training values in one action (AC1)', async () => {
+    const user = userEvent.setup();
+    render(<SettingsView />);
+
+    const firstName = profileCard().getByLabelText('First name');
+    await user.clear(firstName);
+    await user.type(firstName, 'Ana');
+    await user.click(increase());
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+
+    // One click stored both records; neither card waited for its own action.
+    expect(getProfile()).toEqual({ ...STORED, firstName: 'Ana' });
+    expect(getDefaultGoal()).toEqual({
+      km: 21,
+      effectiveFromWeek: nextWeekStart(todayIso()),
+      previousKm: 20,
+    });
+  });
+
+  it('saves silently and stays on the page: no confirmation or success state (AC2)', async () => {
+    const user = userEvent.setup();
+    render(<SettingsView />);
+
+    const email = profileCard().getByLabelText('Email');
+    await user.clear(email);
+    await user.type(email, 'ana@email.com');
+    await user.click(increase());
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+
+    // Silent save (A23): no inline alert and no success copy appear anywhere;
+    // the form is still on the page with the values it just saved, ready for
+    // the next edit. (queryByRole('status') is no use here: the stepper's
+    // <output> carries that role by design.)
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText(/saved|success|updated/i)).toBeNull();
+    expect(profileCard().getByLabelText('Email')).toHaveValue('ana@email.com');
+    expect(screen.getByRole('button', { name: /save changes/i })).toBeInTheDocument();
+  });
+
+  it('shows the saved profile and training values again after a reload (AC3)', async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(<SettingsView />);
+
+    const email = profileCard().getByLabelText('Email');
+    await user.clear(email);
+    await user.type(email, 'ana@email.com');
+    await user.click(decrease());
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+    unmount();
+
+    // A fresh mount seeds every draft from storage alone, so this render is
+    // exactly what a full app reload would show.
+    render(<SettingsView />);
+
+    expect(profileCard().getByLabelText('First name')).toHaveValue('Marko');
+    expect(profileCard().getByLabelText('Email')).toHaveValue('ana@email.com');
+    expect(trainingCard().getByText('19 km')).toBeInTheDocument();
+  });
+
+  it('keeps the last saved values when a later invalid draft is rejected (AC3)', async () => {
+    const user = userEvent.setup();
+    render(<SettingsView />);
+
+    await user.click(increase());
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+
+    // A follow-up invalid save must not disturb what the first one stored.
+    await user.clear(profileCard().getByLabelText('Email'));
+    await user.click(increase());
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Email is required');
+    expect(getProfile()).toEqual(STORED);
+    expect(getDefaultGoal()?.km).toBe(21);
+  });
+});
