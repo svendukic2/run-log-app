@@ -1,4 +1,6 @@
 import {
+  applyGoalTarget,
+  getAppliedGoal,
   getDefaultGoal,
   getDefaultGoalKm,
   nextWeekStart,
@@ -123,6 +125,118 @@ describe('default weekly goal (RUN-38)', () => {
       );
 
       expect(getDefaultGoal()?.effectiveFromWeek).toBe(NEXT_MONDAY);
+    });
+  });
+
+  describe('applyGoalTarget (RUN-33)', () => {
+    function targetOn(isoDate: string): number {
+      return resolveGoalTarget(null, getDefaultGoal(), isoDate, getAppliedGoal());
+    }
+
+    it('makes the applied km the running week target immediately (AC1)', () => {
+      expect(applyGoalTarget(22, WEDNESDAY)).toBe(true);
+
+      expect(targetOn(WEDNESDAY)).toBe(22);
+      // The whole Mon-Sun week, not just from today.
+      expect(targetOn('2026-08-03')).toBe(22);
+      expect(targetOn('2026-08-09')).toBe(22);
+    });
+
+    it('scopes the override to its own week', () => {
+      applyGoalTarget(22, WEDNESDAY);
+
+      // Next week falls back to the layers below (here the 20 km fallback)
+      // until the runner applies that week's suggestion.
+      expect(targetOn(NEXT_MONDAY)).toBe(20);
+    });
+
+    it('keeps only the latest target when re-applied in the same week', () => {
+      applyGoalTarget(22, WEDNESDAY);
+      applyGoalTarget(26, '2026-08-07');
+
+      expect(targetOn(WEDNESDAY)).toBe(26);
+    });
+
+    it('never resurrects an old target after applying in a later week', () => {
+      applyGoalTarget(22, WEDNESDAY);
+      applyGoalTarget(24, '2026-08-12');
+
+      expect(targetOn('2026-08-12')).toBe(24);
+      // One applied record exists, so the older week's override is gone and
+      // it reads as the fallback again - the same two-level history the
+      // default goal keeps.
+      expect(targetOn(WEDNESDAY)).toBe(20);
+    });
+
+    it('leaves a pending Settings default to seed the weeks it was saved for', () => {
+      saveDefaultGoal(45, WEDNESDAY);
+
+      applyGoalTarget(22, WEDNESDAY);
+
+      expect(targetOn(WEDNESDAY)).toBe(22);
+      expect(targetOn(NEXT_MONDAY)).toBe(45);
+    });
+
+    it('overrides an already-effective default for the running week only', () => {
+      // Saved 35 last week, so this week already runs on 35.
+      saveDefaultGoal(35, '2026-07-29');
+      expect(targetOn(WEDNESDAY)).toBe(35);
+
+      applyGoalTarget(22, WEDNESDAY);
+
+      expect(targetOn(WEDNESDAY)).toBe(22);
+      // The default keeps seeding each new week (SET-6).
+      expect(targetOn(NEXT_MONDAY)).toBe(35);
+    });
+
+    it('honours a suggestion above the 60 km slider scale instead of clamping', () => {
+      applyGoalTarget(66, WEDNESDAY);
+
+      expect(targetOn(WEDNESDAY)).toBe(66);
+    });
+
+    it('gets frozen as the previous target by a later Settings save', () => {
+      applyGoalTarget(22, WEDNESDAY);
+      saveDefaultGoal(45, WEDNESDAY);
+
+      expect(getDefaultGoal()?.previousKm).toBe(22);
+    });
+
+    it.each([
+      ['NaN', NaN],
+      ['zero', 0],
+      ['negative', -5],
+      ['infinite', Infinity],
+    ])('rejects a %s target without writing', (_label, km) => {
+      expect(applyGoalTarget(km, WEDNESDAY)).toBe(false);
+      expect(getAppliedGoal()).toBeNull();
+    });
+
+    it('reports failure when the write does not stick (quota, private browsing)', () => {
+      const setItem = jest.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+        throw new Error('QuotaExceededError');
+      });
+
+      expect(applyGoalTarget(22, WEDNESDAY)).toBe(false);
+      setItem.mockRestore();
+      expect(getAppliedGoal()).toBeNull();
+    });
+
+    it.each([
+      ['a stringly km', '{"km":"22","weekStart":"2026-08-03"}'],
+      ['a malformed week', '{"km":22,"weekStart":"this week"}'],
+      ['plain junk', '{ not json'],
+    ])('reads a stored override with %s as never applied', (_label, raw) => {
+      window.localStorage.setItem('runlog.appliedGoal', raw);
+
+      expect(getAppliedGoal()).toBeNull();
+      expect(targetOn(WEDNESDAY)).toBe(20);
+    });
+
+    it('snaps a hand-edited mid-week start back to its Monday', () => {
+      window.localStorage.setItem('runlog.appliedGoal', '{"km":22,"weekStart":"2026-08-05"}');
+
+      expect(getAppliedGoal()?.weekStart).toBe('2026-08-03');
     });
   });
 

@@ -164,18 +164,21 @@ export function nextWeekStart(isoDate: string): string {
   return toIsoDate(monday);
 }
 
-// The goal target for the week `isoDate` falls in. With no saved default the
-// onboarding goal (or the 20 km fallback) applies to every week; once one is
-// saved, weeks from its Monday on use it and earlier weeks keep the frozen
-// previous target. ISO day strings compare chronologically as plain strings.
-// Only two levels of history exist, so this is valid for the current week
-// onward; asking about weeks before the latest save would get that save's
-// frozen target, not what those weeks actually showed at the time.
+// The goal target for the week `isoDate` falls in. A coach target applied to
+// that exact week (RUN-33) wins outright; otherwise, with no saved default
+// the onboarding goal (or the 20 km fallback) applies to every week, and once
+// one is saved, weeks from its Monday on use it and earlier weeks keep the
+// frozen previous target. ISO day strings compare chronologically as plain
+// strings. Only two levels of history exist, so this is valid for the current
+// week onward; asking about weeks before the latest save would get that
+// save's frozen target, not what those weeks actually showed at the time.
 export function resolveGoalTarget(
   goal: Goal | null,
   defaultGoal: DefaultGoal | null,
   isoDate: string,
+  appliedGoal: AppliedGoal | null = null,
 ): number {
+  if (appliedGoal && startOfWeek(isoDate) === appliedGoal.weekStart) return appliedGoal.km;
   if (!defaultGoal) return goal?.km ?? GOAL_DEFAULT_KM;
   return startOfWeek(isoDate) >= defaultGoal.effectiveFromWeek
     ? defaultGoal.km
@@ -199,14 +202,78 @@ export function saveDefaultGoal(km: number, today: string = todayIso()): void {
   const defaultGoal: DefaultGoal = {
     km: clampGoal(km),
     effectiveFromWeek: nextWeekStart(today),
-    previousKm: resolveGoalTarget(getValidGoal(), getDefaultGoal(), today),
+    previousKm: resolveGoalTarget(getValidGoal(), getDefaultGoal(), today, getAppliedGoal()),
   };
   window.localStorage.setItem(DEFAULT_GOAL_KEY, JSON.stringify(defaultGoal));
   window.dispatchEvent(new Event(GOAL_CHANGED_EVENT));
 }
 
+/* Apply to weekly goal (RUN-33) --------------------------------------------- */
+
+// "Apply to weekly goal" on the coach's plan card (AIC-5, A15): the suggested
+// target becomes this week's goal immediately. It lives under its own key,
+// scoped to the ISO week of the click, so it can never masquerade as a
+// Settings default: the default keeps seeding future weeks (SET-6) and, with
+// no default saved, next week simply falls back to the onboarding goal until
+// the runner applies again. Unlike the slider-backed goals there is no 0-60
+// clamp - the coach can legitimately suggest more than the sliders offer, and
+// the goal must honour the number the runner accepted.
+export interface AppliedGoal {
+  km: number;
+  weekStart: string;
+}
+
+const APPLIED_GOAL_KEY = 'runlog.appliedGoal';
+
+// Validated like the other stored goals: a malformed record reads as "never
+// applied" and a hand-edited mid-week start snaps back to its Monday.
+function parseAppliedGoal(raw: string): AppliedGoal | null {
+  try {
+    const parsed = JSON.parse(raw) as AppliedGoal;
+    if (
+      typeof parsed?.km !== 'number' ||
+      !Number.isFinite(parsed.km) ||
+      parsed.km <= 0 ||
+      typeof parsed.weekStart !== 'string' ||
+      !ISO_DAY.test(parsed.weekStart)
+    ) {
+      return null;
+    }
+    return { km: parsed.km, weekStart: startOfWeek(parsed.weekStart) };
+  } catch {
+    return null;
+  }
+}
+
+export function getAppliedGoal(): AppliedGoal | null {
+  if (typeof window === 'undefined') return null;
+  const raw = window.localStorage.getItem(APPLIED_GOAL_KEY);
+  return raw ? parseAppliedGoal(raw) : null;
+}
+
+// Re-applying overwrites - one applied record exists, so only the latest
+// application's week carries an override. `today` deliberately defaults at
+// call time: a card mounted before midnight must apply to the week the click
+// lands in, not the week the page opened in. Returns whether the write stuck
+// (quota, private browsing) so callers only ever confirm what is stored.
+export function applyGoalTarget(km: number, today: string = todayIso()): boolean {
+  if (!Number.isFinite(km) || km <= 0) return false;
+  const applied: AppliedGoal = { km, weekStart: startOfWeek(today) };
+  try {
+    window.localStorage.setItem(APPLIED_GOAL_KEY, JSON.stringify(applied));
+  } catch {
+    return false;
+  }
+  window.dispatchEvent(new Event(GOAL_CHANGED_EVENT));
+  return true;
+}
+
 function getDefaultGoalSnapshot(): string | null {
   return window.localStorage.getItem(DEFAULT_GOAL_KEY);
+}
+
+function getAppliedGoalSnapshot(): string | null {
+  return window.localStorage.getItem(APPLIED_GOAL_KEY);
 }
 
 // The weekly target the cards render (dashboard goal card, coach cards):
@@ -220,9 +287,15 @@ export function useGoalTarget(isoDate: string): number {
     getDefaultGoalSnapshot,
     getServerSnapshot,
   );
+  const rawApplied = useSyncExternalStore(
+    subscribeToStorage,
+    getAppliedGoalSnapshot,
+    getServerSnapshot,
+  );
   return resolveGoalTarget(
     rawGoal ? parseGoal(rawGoal) : null,
     rawDefault ? parseDefaultGoal(rawDefault) : null,
     isoDate,
+    rawApplied ? parseAppliedGoal(rawApplied) : null,
   );
 }
