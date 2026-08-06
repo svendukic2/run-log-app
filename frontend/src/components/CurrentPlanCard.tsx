@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import SparkleIcon from '@/components/SparkleIcon';
-import { useGoalTarget } from '@/lib/goal';
+import { applyGoalTarget, useGoalTarget } from '@/lib/goal';
 import { derivePlan, formatUpdatedAgo, stampPlanGenerated, usePlanGeneratedAt } from '@/lib/plan';
 import { useRuns } from '@/lib/runs';
 import { useToday } from '@/lib/useToday';
@@ -25,9 +25,9 @@ function RegenerateIcon() {
 // "updated {time} ago" caption and Regenerate, the "Aim for {n} km this week"
 // headline, an explanation paragraph and four stats. The numbers derive from
 // the runs store at render time, so they follow the data; the stamp persists
-// so the caption survives reloads (A16). Three visible seams stay inert until
-// their tickets land: Regenerate (RUN-35), "Apply to weekly goal" (RUN-33)
-// and "See the reasoning" (non-functional by design, A21).
+// so the caption survives reloads (A16). "Apply to weekly goal" makes the
+// suggestion this week's goal (RUN-33, A15); Regenerate (RUN-35) and "See the
+// reasoning" (non-functional by design, A21) stay inert until their turn.
 export default function CurrentPlanCard() {
   const runs = useRuns();
   const generatedAt = usePlanGeneratedAt();
@@ -37,6 +37,9 @@ export default function CurrentPlanCard() {
   const goalTargetKm = useGoalTarget(today);
   // Read once per mount: the caption does not need to tick live.
   const [now] = useState(() => Date.now());
+  // The km the runner last applied, feeding the status line: A15 designs no
+  // confirmation step, but a click with zero acknowledgement reads as broken.
+  const [appliedKm, setAppliedKm] = useState<number | null>(null);
 
   const hasRuns = runs.length > 0;
 
@@ -127,15 +130,16 @@ export default function CurrentPlanCard() {
         ))}
       </dl>
 
-      {/* Plan actions are AIC-5: "Apply to weekly goal" wires up with RUN-33
-          and "See the reasoning" stays non-functional by design (A21). Both
-          render as the design draws them, announcing their inertness. */}
+      {/* Plan actions are AIC-5: "Apply to weekly goal" adopts the suggestion
+          as this week's goal without a confirmation step and the page stays
+          put (A15); "See the reasoning" stays non-functional by design (A21). */}
       <div className="mt-[26px] flex flex-wrap items-center gap-x-[24px] gap-y-3">
         <button
           type="button"
-          aria-disabled="true"
-          aria-describedby="apply-seam-note"
-          title="Applying to your weekly goal arrives in an upcoming update"
+          onClick={() => {
+            // No `today` argument: the click decides which week it lands in.
+            if (applyGoalTarget(plan.targetKm)) setAppliedKm(plan.targetKm);
+          }}
           className="flex items-center gap-[9px] rounded-[12px] bg-accent px-[22px] py-[12px] text-[14px] font-semibold text-white hover:bg-accent-pressed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
         >
           Apply to weekly goal
@@ -143,9 +147,6 @@ export default function CurrentPlanCard() {
             →
           </span>
         </button>
-        <span id="apply-seam-note" className="sr-only">
-          Not available yet: applying to your weekly goal arrives in an upcoming update.
-        </span>
         <button
           type="button"
           aria-disabled="true"
@@ -158,6 +159,15 @@ export default function CurrentPlanCard() {
         <span id="reasoning-seam-note" className="sr-only">
           Not available yet.
         </span>
+        {/* Always mounted so screen readers announce the text appearing. The
+            goal-target guard keeps the line honest: anything that moves this
+            week's target from elsewhere (another tab, a later apply) makes
+            the confirmation vanish instead of describing a stale value. */}
+        <p role="status" className="text-[13px] text-white/60">
+          {appliedKm !== null &&
+            appliedKm === goalTargetKm &&
+            `Weekly goal set to ${appliedKm} km.`}
+        </p>
       </div>
     </section>
   );
