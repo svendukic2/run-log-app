@@ -114,8 +114,8 @@ describe('plan generation stamp', () => {
     window.localStorage.clear();
   });
 
-  it('round-trips the stamp through localStorage', () => {
-    stampPlanGenerated(NOW);
+  it('round-trips the stamp through localStorage and reports success', () => {
+    expect(stampPlanGenerated(NOW)).toBe(true);
     expect(getPlanGeneratedAt()).toBe(NOW);
   });
 
@@ -130,13 +130,37 @@ describe('plan generation stamp', () => {
     expect(getPlanGeneratedAt()).toBeNull();
   });
 
-  it('survives setItem throwing (quota, private browsing)', () => {
+  it('survives setItem throwing and reports the failure (A22)', () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     const setItem = jest.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('QuotaExceededError');
     });
 
-    expect(() => stampPlanGenerated(NOW)).not.toThrow();
+    expect(stampPlanGenerated(NOW)).toBe(false);
     setItem.mockRestore();
     expect(getPlanGeneratedAt()).toBeNull();
+    // The failure is traceable outside production, never fully silent.
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('dispatches the change event only after a successful write', () => {
+    const listener = jest.fn();
+    window.addEventListener('runlog:plan-changed', listener);
+
+    stampPlanGenerated(NOW);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const setItem = jest.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError');
+    });
+    stampPlanGenerated(NOW);
+    setItem.mockRestore();
+    warn.mockRestore();
+
+    // Subscribers must never be told about a write that did not happen.
+    expect(listener).toHaveBeenCalledTimes(1);
+    window.removeEventListener('runlog:plan-changed', listener);
   });
 });

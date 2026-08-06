@@ -1,8 +1,9 @@
 import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderToString } from 'react-dom/server';
+import { stampPlanGenerated } from '@/lib/plan';
 import { addRun } from '@/lib/runs';
-import CoachView from '@/components/CoachView';
+import CoachView, { PLAN_GENERATION_MS } from '@/components/CoachView';
 import CoachPage from './page';
 
 const HERO_NAME = 'Coaching starts after your first run';
@@ -124,5 +125,157 @@ describe('AI Coach page (RUN-31)', () => {
     const page = renderToString(<CoachPage />);
     expect(page).toContain('AI Coach');
     expect(page).not.toContain(HERO_NAME);
+  });
+
+  describe('plan regeneration (RUN-35)', () => {
+    function setup() {
+      // Wed 5 Aug 2026; firstRun's Jul 14 sits inside the insight window.
+      jest.useFakeTimers().setSystemTime(new Date(2026, 7, 5, 9, 0));
+      return userEvent.setup({ advanceTimers: jest.advanceTimersByTime });
+    }
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('switches to the generating card with the designed copy (AC1)', async () => {
+      const user = setup();
+      addRun(firstRun());
+      render(<CoachPage />);
+
+      await user.click(screen.getByRole('button', { name: 'Regenerate' }));
+
+      const card = screen.getByRole('region', { name: 'Generating new plan' });
+      expect(within(card).getByText('just now')).toBeInTheDocument();
+      expect(within(card).getByText('Reading your training...')).toBeInTheDocument();
+      expect(
+        within(card).getByText(
+          "Analyzing your last 4 weeks of distance, pace and effort to shape next week's plan.",
+        ),
+      ).toBeInTheDocument();
+      // The stable slot around the card carries the busy flag, and the
+      // start of generation is announced outside that busy subtree.
+      expect(document.querySelector('[aria-busy="true"]')).toContainElement(card);
+      expect(screen.getByTestId('regen-status')).toHaveTextContent('Generating a new plan.');
+      // The plan card is gone, and its Regenerate with it; no cancel
+      // control exists (AC2), so a second trigger is impossible.
+      expect(screen.queryByText("This week's plan")).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Regenerate' })).toBeNull();
+      expect(screen.queryByRole('button', { name: /cancel/i })).toBeNull();
+    });
+
+    it('dims the insight cards and previous plans while generating (AC2)', async () => {
+      const user = setup();
+      addRun(firstRun());
+      render(<CoachPage />);
+      expect(document.querySelector('.opacity-40')).toBeNull();
+
+      await user.click(screen.getByRole('button', { name: 'Regenerate' }));
+
+      // Visual de-emphasis only: the content stays in the accessibility
+      // tree (its controls are already-inert seams).
+      const dimmed = document.querySelector('.opacity-40');
+      expect(dimmed).not.toBeNull();
+      expect(dimmed).toHaveClass('pointer-events-none');
+      expect(within(dimmed as HTMLElement).getByText('Previous plans')).toBeInTheDocument();
+      expect(within(dimmed as HTMLElement).getByText('Recent load')).toBeInTheDocument();
+    });
+
+    it('replaces the skeletons with the fresh plan when generation completes (AC3)', async () => {
+      const user = setup();
+      addRun(firstRun());
+      render(<CoachPage />);
+
+      await user.click(screen.getByRole('button', { name: 'Regenerate' }));
+      act(() => {
+        jest.advanceTimersByTime(PLAN_GENERATION_MS);
+      });
+
+      expect(screen.queryByRole('region', { name: 'Generating new plan' })).toBeNull();
+      const card = screen.getByRole('region', { name: "This week's plan" });
+      expect(within(card).getByText(/updated just now/)).toBeInTheDocument();
+      expect(screen.getByTestId('regen-status')).toHaveTextContent('New plan ready.');
+      expect(document.querySelector('.opacity-40')).toBeNull();
+      expect(document.querySelector('[aria-busy="true"]')).toBeNull();
+    });
+
+    it('keeps the previous plan when the stamp write fails (AC4, A22)', async () => {
+      const user = setup();
+      stampPlanGenerated(Date.now() - 2 * 3_600_000);
+      addRun(firstRun());
+      render(<CoachPage />);
+      expect(screen.getByText(/updated 2h ago/)).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Regenerate' }));
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      const setItem = jest.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+        throw new Error('QuotaExceededError');
+      });
+      act(() => {
+        jest.advanceTimersByTime(PLAN_GENERATION_MS);
+      });
+      setItem.mockRestore();
+      warn.mockRestore();
+
+      // Back on the plan card with the old caption, and the announcement
+      // does not pretend the regeneration succeeded.
+      expect(screen.getByRole('region', { name: "This week's plan" })).toBeInTheDocument();
+      expect(screen.getByText(/updated 2h ago/)).toBeInTheDocument();
+      expect(screen.getByTestId('regen-status')).toHaveTextContent('Plan unchanged.');
+    });
+
+    it('moves focus to the plan slot when Regenerate unmounts under it', async () => {
+      const user = setup();
+      addRun(firstRun());
+      render(<CoachPage />);
+
+      await user.click(screen.getByRole('button', { name: 'Regenerate' }));
+
+      // The button focus was on is gone; focus lands on the stable slot
+      // wrapping the generating card instead of falling to <body>.
+      const slot = document.querySelector('[aria-busy="true"]') as HTMLElement;
+      expect(slot).toHaveFocus();
+    });
+
+    it('returns focus to Regenerate when generation completes (AC3)', async () => {
+      const user = setup();
+      addRun(firstRun());
+      render(<CoachPage />);
+
+      await user.click(screen.getByRole('button', { name: 'Regenerate' }));
+      act(() => {
+        jest.advanceTimersByTime(PLAN_GENERATION_MS);
+      });
+
+      expect(screen.getByRole('button', { name: 'Regenerate' })).toHaveFocus();
+    });
+
+    it('never steals focus back from a user who tabbed away mid-generation', async () => {
+      const user = setup();
+      addRun(firstRun());
+      render(<CoachPage />);
+
+      await user.click(screen.getByRole('button', { name: 'Regenerate' }));
+      const viewAll = screen.getByRole('button', { name: 'View all' });
+      act(() => {
+        viewAll.focus();
+      });
+      act(() => {
+        jest.advanceTimersByTime(PLAN_GENERATION_MS);
+      });
+
+      expect(viewAll).toHaveFocus();
+    });
+
+    it('clears a pending generation when the page unmounts', async () => {
+      const user = setup();
+      addRun(firstRun());
+      const { unmount } = render(<CoachPage />);
+
+      await user.click(screen.getByRole('button', { name: 'Regenerate' }));
+      unmount();
+
+      expect(jest.getTimerCount()).toBe(0);
+    });
   });
 });
