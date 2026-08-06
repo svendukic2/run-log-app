@@ -3,6 +3,8 @@
 import { useEffect, useRef } from 'react';
 import CoachEmptyState from '@/components/CoachEmptyState';
 import CurrentPlanCard from '@/components/CurrentPlanCard';
+import InsightCards from '@/components/InsightCards';
+import PreviousPlansCard from '@/components/PreviousPlansCard';
 import { useRuns } from '@/lib/runs';
 import { useHydrated } from '@/lib/useHydrated';
 
@@ -41,11 +43,12 @@ export default function CoachView() {
 
   if (!hasRuns) return <CoachEmptyState />;
 
-  // The wrapper is the post-save focus landing (see the effect above); the
-  // insight cards and previous plans (RUN-34) will join the plan card here.
+  // The wrapper is the post-save focus landing (see the effect above).
   return (
     <div ref={landingRef} tabIndex={-1} className="flex flex-col gap-5 outline-none">
       <CurrentPlanCard />
+      <InsightCards />
+      <PreviousPlansCard />
     </div>
   );
 }

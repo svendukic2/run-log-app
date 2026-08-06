@@ -103,6 +103,18 @@ describe('AI Coach page (RUN-31)', () => {
     expect(screen.queryByRole('region', { name: HERO_NAME })).toBeNull();
   });
 
+  it('shows the insight cards and previous plans alongside the plan (RUN-34)', () => {
+    addRun(firstRun());
+
+    render(<CoachPage />);
+
+    expect(screen.getByText("This week's plan")).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Recent load' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Pace trend' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Consistency' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Previous plans' })).toBeInTheDocument();
+  });
+
   it('renders a neutral server shell, never the hero, pre-hydration', () => {
     addRun(firstRun());
 
