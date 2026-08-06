@@ -96,17 +96,24 @@ export function getPlanGeneratedAt(): number | null {
   return parseGeneratedAt(window.localStorage.getItem(PLAN_KEY));
 }
 
-// Stamps when the plan was (re)generated: the A16 first-visit marker now,
-// RUN-35's Regenerate later. setItem can throw (quota, private browsing);
-// the plan itself derives from runs, so a failed stamp costs only the
-// caption's accuracy, never the card.
-export function stampPlanGenerated(now: number): void {
+// Stamps when the plan was (re)generated: the A16 first-visit marker and
+// RUN-35's Regenerate. setItem can throw (quota, private browsing); the plan
+// itself derives from runs, so a failed stamp costs only the caption's
+// accuracy, never the card. Returns whether the stamp stuck so regeneration
+// can keep the previous plan's caption on failure (A22).
+export function stampPlanGenerated(now: number): boolean {
   try {
     window.localStorage.setItem(PLAN_KEY, JSON.stringify({ generatedAt: now }));
-    window.dispatchEvent(new Event(PLAN_CHANGED_EVENT));
-  } catch {
-    // Nothing to recover; the card falls back to "just now".
+  } catch (error) {
+    // Quota, private browsing, or a future serialization bug: swallowing
+    // them identically and silently would make the failure undebuggable.
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn('Failed to persist the plan stamp', error);
+    }
+    return false;
   }
+  window.dispatchEvent(new Event(PLAN_CHANGED_EVENT));
+  return true;
 }
 
 function subscribeToPlan(onStoreChange: () => void): () => void {

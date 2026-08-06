@@ -42,12 +42,26 @@ describe('Current plan card (RUN-32)', () => {
 
     const card = screen.getByRole('region', { name: "This week's plan" });
     expect(within(card).getByText(/updated just now/)).toBeInTheDocument();
-    // Regeneration is RUN-35: present, announced as not yet available.
+    // Without an orchestrator wiring onRegenerate (CoachView, RUN-35), the
+    // control announces itself as not yet available.
     const regenerate = within(card).getByRole('button', { name: 'Regenerate' });
     expect(regenerate).toHaveAttribute('aria-disabled', 'true');
     expect(regenerate).toHaveAccessibleDescription(
       'Not available yet: regenerating arrives in an upcoming update.',
     );
+  });
+
+  it('hands the Regenerate click to the page when wired (RUN-35)', async () => {
+    const user = userEvent.setup();
+    const onRegenerate = jest.fn();
+    seedRun();
+
+    render(<CurrentPlanCard onRegenerate={onRegenerate} />);
+
+    const regenerate = screen.getByRole('button', { name: 'Regenerate' });
+    expect(regenerate).not.toHaveAttribute('aria-disabled');
+    await user.click(regenerate);
+    expect(onRegenerate).toHaveBeenCalledTimes(1);
   });
 
   it('respects a stored generation stamp in the caption (A16)', () => {

@@ -7,6 +7,9 @@ import { derivePlan, formatUpdatedAgo, stampPlanGenerated, usePlanGeneratedAt } 
 import { useRuns } from '@/lib/runs';
 import { useToday } from '@/lib/useToday';
 
+const REGENERATE_CLASSES =
+  'flex items-center gap-[8px] rounded-[10px] border border-ink-border bg-ink-raised px-[16px] py-[8px] text-[13px] font-medium text-white/80 hover:bg-ink-elevated focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white';
+
 function RegenerateIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -26,9 +29,14 @@ function RegenerateIcon() {
 // headline, an explanation paragraph and four stats. The numbers derive from
 // the runs store at render time, so they follow the data; the stamp persists
 // so the caption survives reloads (A16). "Apply to weekly goal" makes the
-// suggestion this week's goal (RUN-33, A15); Regenerate (RUN-35) and "See the
-// reasoning" (non-functional by design, A21) stay inert until their turn.
-export default function CurrentPlanCard() {
+// suggestion this week's goal (RUN-33, A15); "See the reasoning" stays
+// non-functional by design (A21).
+//
+// Regeneration (RUN-35) is orchestrated by the page: the card swap and the
+// dimming of the neighbouring cards belong to CoachView, so the button only
+// reports the click upward. Without an orchestrator there is nothing to
+// regenerate into, and the control announces itself as not yet available.
+export default function CurrentPlanCard({ onRegenerate }: { onRegenerate?: () => void }) {
   const runs = useRuns();
   const generatedAt = usePlanGeneratedAt();
   const today = useToday();
@@ -91,21 +99,35 @@ export default function CurrentPlanCard() {
             updated {formatUpdatedAgo(generatedAt ?? now, now)}
           </p>
         </div>
-        {/* Regeneration, with its generating state, is RUN-35; until then the
-            control announces itself as not yet available. */}
-        <button
-          type="button"
-          aria-disabled="true"
-          aria-describedby="regenerate-seam-note"
-          title="Regenerating arrives in an upcoming update"
-          className="flex items-center gap-[8px] rounded-[10px] border border-ink-border bg-ink-raised px-[16px] py-[8px] text-[13px] font-medium text-white/80 hover:bg-ink-elevated focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
-        >
-          <RegenerateIcon />
-          Regenerate
-        </button>
-        <span id="regenerate-seam-note" className="sr-only">
-          Not available yet: regenerating arrives in an upcoming update.
-        </span>
+        {onRegenerate ? (
+          // data-regenerate is the focus-return anchor for CoachView's
+          // regeneration slot (RUN-35).
+          <button
+            type="button"
+            data-regenerate
+            onClick={onRegenerate}
+            className={REGENERATE_CLASSES}
+          >
+            <RegenerateIcon />
+            Regenerate
+          </button>
+        ) : (
+          <>
+            <button
+              type="button"
+              aria-disabled="true"
+              aria-describedby="regenerate-seam-note"
+              title="Regenerating arrives in an upcoming update"
+              className={REGENERATE_CLASSES}
+            >
+              <RegenerateIcon />
+              Regenerate
+            </button>
+            <span id="regenerate-seam-note" className="sr-only">
+              Not available yet: regenerating arrives in an upcoming update.
+            </span>
+          </>
+        )}
       </div>
 
       <p className="mt-[20px] font-display text-[26px] font-bold tracking-[-0.7px] sm:text-[32px]">
