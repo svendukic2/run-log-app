@@ -146,6 +146,10 @@ cd backend && npx prisma migrate dev && cd ..
 data-model contract and Prisma wiring notes live in
 [docs/data-model.md](docs/data-model.md).
 
+The backend e2e suite (`npm run test:e2e`) creates and uses its own `runlog_test`
+database automatically; it wipes tables between tests and refuses to run against
+anything not named `*_test`, so your development data is never at risk.
+
 Now run both apps, each in its **own terminal**:
 
 ```bash

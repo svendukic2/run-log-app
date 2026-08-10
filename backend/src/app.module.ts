@@ -1,9 +1,11 @@
-import { Module } from '@nestjs/common';
+import { Module, ValidationPipe } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { APP_PIPE } from '@nestjs/core';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { validateEnv } from './config/env.validation';
 import { PrismaModule } from './prisma/prisma.module';
+import { RunsModule } from './runs/runs.module';
 
 @Module({
   imports: [
@@ -17,8 +19,25 @@ import { PrismaModule } from './prisma/prisma.module';
     // first query). Feature modules that query the database import
     // PrismaModule themselves - it is deliberately not @Global.
     PrismaModule,
+    RunsModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    // App-wide request validation (RUN-47). Registered as a provider rather
+    // than app.useGlobalPipes in main.ts so the e2e suite, which boots
+    // AppModule directly, validates exactly like production - the global
+    // 'api' prefix already has that split-brain problem and one is enough.
+    {
+      provide: APP_PIPE,
+      useValue: new ValidationPipe({
+        // Unknown properties are stripped and reported, not silently kept:
+        // the DTOs are the contract.
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+      }),
+    },
+  ],
 })
 export class AppModule {}
