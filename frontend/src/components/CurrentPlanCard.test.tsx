@@ -1,6 +1,6 @@
-import { act, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { renderToString } from 'react-dom/server';
-import { saveGoal } from '@/lib/goal';
+import { getAppliedGoal, getDefaultGoal, saveGoal } from '@/lib/goal';
 import { getPlanGeneratedAt, stampPlanGenerated } from '@/lib/plan';
 import { addRun, todayIso, type Run } from '@/lib/runs';
 import CurrentPlanCard from './CurrentPlanCard';
@@ -110,19 +110,39 @@ describe('Current plan card (RUN-32)', () => {
     expect(screen.getByText('Aim for 22 km this week')).toBeInTheDocument();
   });
 
-  it('keeps the plan actions visible but inert (AIC-5 seams)', () => {
+  it('applies the suggested target to this week and stays on the page (RUN-33, AC1)', () => {
+    // Wed 5 Aug 2026; last week holds 20 km, so the plan suggests 22 km.
+    jest.useFakeTimers().setSystemTime(new Date(2026, 7, 5, 9, 0));
+    seedRun({ date: '2026-07-28' });
+    seedRun({ date: '2026-07-30', routeName: 'River trail' });
+
+    render(<CurrentPlanCard />);
+    fireEvent.click(screen.getByRole('button', { name: /apply to weekly goal/i }));
+
+    // The click wrote this week's applied record (AC1/AC2: the dashboard
+    // goal card resolves through it; precedence is goal.test.ts territory).
+    expect(getAppliedGoal()).toEqual({ km: 22, weekStart: '2026-08-03' });
+    // The Settings default is untouched: only this week's target moved.
+    expect(getDefaultGoal()).toBeNull();
+    // No navigation happens: the card is still here, suggestion unchanged.
+    expect(screen.getByText('Aim for 22 km this week')).toBeInTheDocument();
+  });
+
+  it('offers Apply as a live control and keeps the reasoning link inert (AC3)', () => {
     seedRun();
 
     render(<CurrentPlanCard />);
 
     const apply = screen.getByRole('button', { name: /apply to weekly goal/i });
-    expect(apply).toHaveAttribute('aria-disabled', 'true');
-    expect(apply).toHaveAccessibleDescription(
-      'Not available yet: applying to your weekly goal arrives in an upcoming update.',
-    );
+    expect(apply).not.toHaveAttribute('aria-disabled');
     const reasoning = screen.getByRole('button', { name: 'See the reasoning' });
     expect(reasoning).toHaveAttribute('aria-disabled', 'true');
     expect(reasoning).toHaveAccessibleDescription('Not available yet.');
+    // A21: clicking the reasoning link does nothing in the first build; in
+    // particular it must not apply the target the way the primary action does.
+    fireEvent.click(reasoning);
+    expect(getAppliedGoal()).toBeNull();
+    expect(getDefaultGoal()).toBeNull();
   });
 
   it('renders an empty server shell before hydration', () => {

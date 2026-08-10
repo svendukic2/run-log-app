@@ -1,4 +1,6 @@
 import {
+  applyGoalTarget,
+  getAppliedGoal,
   getDefaultGoal,
   getDefaultGoalKm,
   nextWeekStart,
@@ -123,6 +125,78 @@ describe('default weekly goal (RUN-38)', () => {
       );
 
       expect(getDefaultGoal()?.effectiveFromWeek).toBe(NEXT_MONDAY);
+    });
+  });
+
+  describe('applyGoalTarget (RUN-33)', () => {
+    // The full stack the hook resolves through, applied record included.
+    const resolvedOn = (isoDate: string) =>
+      resolveGoalTarget(null, getDefaultGoal(), isoDate, getAppliedGoal());
+
+    it('sets the current week target immediately and leaves later weeks alone (A15)', () => {
+      applyGoalTarget(22, WEDNESDAY);
+
+      expect(getAppliedGoal()).toEqual({ km: 22, weekStart: '2026-08-03' });
+      expect(resolvedOn(WEDNESDAY)).toBe(22);
+      // The record expires with its week: no Settings default exists, so
+      // next week falls back to 20 km.
+      expect(resolvedOn(NEXT_MONDAY)).toBe(20);
+    });
+
+    it('does not rewrite the Settings default or the onboarding goal (SET-6)', () => {
+      saveGoal({ km: 30, startDate: '2026-07-27', endDate: null });
+      // Saved 35 last week, so it already governs this week and the next.
+      saveDefaultGoal(35, '2026-07-29');
+
+      applyGoalTarget(22, WEDNESDAY);
+
+      expect(resolvedOn(WEDNESDAY)).toBe(22);
+      expect(resolvedOn(NEXT_MONDAY)).toBe(35);
+      // The Settings stepper keeps showing the saved default, not the plan.
+      expect(getDefaultGoalKm()).toBe(35);
+      expect(getDefaultGoal()?.km).toBe(35);
+    });
+
+    it('keeps a pending default saved this week for its own start date', () => {
+      saveDefaultGoal(40, WEDNESDAY);
+
+      applyGoalTarget(22, WEDNESDAY);
+
+      expect(resolvedOn(WEDNESDAY)).toBe(22);
+      expect(resolvedOn(NEXT_MONDAY)).toBe(40);
+    });
+
+    it('freezes the applied target as the running week on a later default save', () => {
+      applyGoalTarget(22, WEDNESDAY);
+
+      saveDefaultGoal(40, '2026-08-06');
+
+      expect(getDefaultGoal()).toEqual({ km: 40, effectiveFromWeek: NEXT_MONDAY, previousKm: 22 });
+      expect(resolvedOn('2026-08-07')).toBe(22);
+      expect(resolvedOn(NEXT_MONDAY)).toBe(40);
+    });
+
+    it('clamps the applied value into the 0-60 km bounds (A17)', () => {
+      applyGoalTarget(75, WEDNESDAY);
+
+      expect(getAppliedGoal()?.km).toBe(60);
+    });
+
+    it.each([
+      ['a stringly km', '{"km":"22","weekStart":"2026-08-03"}'],
+      ['a malformed week', '{"km":22,"weekStart":"this week"}'],
+      ['plain junk', '{ not json'],
+    ])('reads a stored applied target with %s as nothing applied', (_label, raw) => {
+      window.localStorage.setItem('runlog.appliedGoal', raw);
+
+      expect(getAppliedGoal()).toBeNull();
+      expect(resolvedOn(WEDNESDAY)).toBe(20);
+    });
+
+    it('snaps a hand-edited mid-week start back to its Monday', () => {
+      window.localStorage.setItem('runlog.appliedGoal', '{"km":22,"weekStart":"2026-08-05"}');
+
+      expect(getAppliedGoal()).toEqual({ km: 22, weekStart: '2026-08-03' });
     });
   });
 

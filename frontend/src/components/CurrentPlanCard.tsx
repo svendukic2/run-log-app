@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import SparkleIcon from '@/components/SparkleIcon';
-import { useGoalTarget } from '@/lib/goal';
+import { applyGoalTarget, useGoalTarget } from '@/lib/goal';
 import { derivePlan, formatUpdatedAgo, stampPlanGenerated, usePlanGeneratedAt } from '@/lib/plan';
 import { useRuns } from '@/lib/runs';
 import { useToday } from '@/lib/useToday';
@@ -25,8 +25,8 @@ function RegenerateIcon() {
 // "updated {time} ago" caption and Regenerate, the "Aim for {n} km this week"
 // headline, an explanation paragraph and four stats. The numbers derive from
 // the runs store at render time, so they follow the data; the stamp persists
-// so the caption survives reloads (A16). Three visible seams stay inert until
-// their tickets land: Regenerate (RUN-35), "Apply to weekly goal" (RUN-33)
+// so the caption survives reloads (A16). "Apply to weekly goal" is live
+// (RUN-33, A15); two visible seams stay inert: Regenerate until RUN-35 lands
 // and "See the reasoning" (non-functional by design, A21).
 export default function CurrentPlanCard() {
   const runs = useRuns();
@@ -127,15 +127,17 @@ export default function CurrentPlanCard() {
         ))}
       </dl>
 
-      {/* Plan actions are AIC-5: "Apply to weekly goal" wires up with RUN-33
-          and "See the reasoning" stays non-functional by design (A21). Both
-          render as the design draws them, announcing their inertness. */}
+      {/* Plan actions are AIC-5: "Apply to weekly goal" sets this week's goal
+          target to the suggestion and stays on this page, with no confirmation
+          by design (RUN-33, A15). "See the reasoning" stays non-functional by
+          design (A21), announcing its inertness. */}
       <div className="mt-[26px] flex flex-wrap items-center gap-x-[24px] gap-y-3">
+        {/* No `today` passed: the stamp reads the clock at click time, so a
+            tab left open across a week rollover applies to the week the user
+            is actually in, not the one the stale render derived from. */}
         <button
           type="button"
-          aria-disabled="true"
-          aria-describedby="apply-seam-note"
-          title="Applying to your weekly goal arrives in an upcoming update"
+          onClick={() => applyGoalTarget(plan.targetKm)}
           className="flex items-center gap-[9px] rounded-[12px] bg-accent px-[22px] py-[12px] text-[14px] font-semibold text-white hover:bg-accent-pressed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
         >
           Apply to weekly goal
@@ -143,9 +145,6 @@ export default function CurrentPlanCard() {
             →
           </span>
         </button>
-        <span id="apply-seam-note" className="sr-only">
-          Not available yet: applying to your weekly goal arrives in an upcoming update.
-        </span>
         <button
           type="button"
           aria-disabled="true"

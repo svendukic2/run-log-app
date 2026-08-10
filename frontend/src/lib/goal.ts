@@ -171,11 +171,15 @@ export function nextWeekStart(isoDate: string): string {
 // Only two levels of history exist, so this is valid for the current week
 // onward; asking about weeks before the latest save would get that save's
 // frozen target, not what those weeks actually showed at the time.
+// An applied coach suggestion (RUN-33) overrides all of that, but only for
+// the single week it was applied in.
 export function resolveGoalTarget(
   goal: Goal | null,
   defaultGoal: DefaultGoal | null,
   isoDate: string,
+  applied: AppliedGoal | null = null,
 ): number {
+  if (applied && startOfWeek(isoDate) === applied.weekStart) return applied.km;
   if (!defaultGoal) return goal?.km ?? GOAL_DEFAULT_KM;
   return startOfWeek(isoDate) >= defaultGoal.effectiveFromWeek
     ? defaultGoal.km
@@ -199,20 +203,81 @@ export function saveDefaultGoal(km: number, today: string = todayIso()): void {
   const defaultGoal: DefaultGoal = {
     km: clampGoal(km),
     effectiveFromWeek: nextWeekStart(today),
-    previousKm: resolveGoalTarget(getValidGoal(), getDefaultGoal(), today),
+    previousKm: resolveGoalTarget(getValidGoal(), getDefaultGoal(), today, getAppliedGoal()),
   };
   window.localStorage.setItem(DEFAULT_GOAL_KEY, JSON.stringify(defaultGoal));
   window.dispatchEvent(new Event(GOAL_CHANGED_EVENT));
+}
+
+/* Applied coach target (RUN-33) ---------------------------------------------- */
+
+// The coach's "Apply to weekly goal" (A15): the applied suggestion becomes
+// the resolved target for the week it was applied in, and for that week
+// only. It lives in its own record rather than rewriting the Settings
+// default or the onboarding goal, so applying never changes what seeds
+// future weeks (SET-6) and both of those surfaces keep showing what the
+// user actually saved. Once its week has passed, the record simply stops
+// matching and the normal resolution takes over again.
+export interface AppliedGoal {
+  km: number;
+  weekStart: string;
+}
+
+const APPLIED_GOAL_KEY = 'runlog.appliedGoal';
+
+// localStorage is user-writable, so the record is verified like the others:
+// out-of-range km clamps into the 0-60 bounds and a hand-edited mid-week
+// date snaps back to its Monday, instead of reading as "nothing applied".
+function parseAppliedGoal(raw: string): AppliedGoal | null {
+  try {
+    const parsed = JSON.parse(raw) as AppliedGoal;
+    if (
+      typeof parsed?.km !== 'number' ||
+      !Number.isFinite(parsed.km) ||
+      typeof parsed.weekStart !== 'string' ||
+      !ISO_DAY.test(parsed.weekStart)
+    ) {
+      return null;
+    }
+    return { km: clampGoal(parsed.km), weekStart: startOfWeek(parsed.weekStart) };
+  } catch {
+    return null;
+  }
+}
+
+export function getAppliedGoal(): AppliedGoal | null {
+  if (typeof window === 'undefined') return null;
+  const raw = window.localStorage.getItem(APPLIED_GOAL_KEY);
+  return raw ? parseAppliedGoal(raw) : null;
+}
+
+// Announced same-tab like saveDefaultGoal: the coach page stays put (A15),
+// so its own cards and any other mounted goal consumer re-read immediately.
+// setItem can throw (quota, private browsing) and this runs from a click
+// handler, so it is guarded like stampPlanGenerated: a failed write means
+// the goal simply stays put.
+export function applyGoalTarget(km: number, today: string = todayIso()): void {
+  const applied: AppliedGoal = { km: clampGoal(km), weekStart: startOfWeek(today) };
+  try {
+    window.localStorage.setItem(APPLIED_GOAL_KEY, JSON.stringify(applied));
+    window.dispatchEvent(new Event(GOAL_CHANGED_EVENT));
+  } catch {
+    // Nothing to recover: without the write nothing changed.
+  }
 }
 
 function getDefaultGoalSnapshot(): string | null {
   return window.localStorage.getItem(DEFAULT_GOAL_KEY);
 }
 
+function getAppliedGoalSnapshot(): string | null {
+  return window.localStorage.getItem(APPLIED_GOAL_KEY);
+}
+
 // The weekly target the cards render (dashboard goal card, coach cards):
 // storage-backed like useGoal and resolved per week, so a freshly saved
-// default only shows up once its week arrives. SSR-safe the same way: both
-// server snapshots are null, which resolves to the 20 km fallback.
+// default only shows up once its week arrives. SSR-safe the same way: all
+// three server snapshots are null, which resolves to the 20 km fallback.
 export function useGoalTarget(isoDate: string): number {
   const rawGoal = useSyncExternalStore(subscribeToStorage, getGoalSnapshot, getServerSnapshot);
   const rawDefault = useSyncExternalStore(
@@ -220,9 +285,15 @@ export function useGoalTarget(isoDate: string): number {
     getDefaultGoalSnapshot,
     getServerSnapshot,
   );
+  const rawApplied = useSyncExternalStore(
+    subscribeToStorage,
+    getAppliedGoalSnapshot,
+    getServerSnapshot,
+  );
   return resolveGoalTarget(
     rawGoal ? parseGoal(rawGoal) : null,
     rawDefault ? parseDefaultGoal(rawDefault) : null,
     isoDate,
+    rawApplied ? parseAppliedGoal(rawApplied) : null,
   );
 }
