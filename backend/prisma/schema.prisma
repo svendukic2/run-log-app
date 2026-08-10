@@ -1,16 +1,24 @@
-// Run Log Tracker - future database shape. Inert until Prisma is installed and
-// migrated (see docs/data-model.md, "Adopting the database"). Mirrors the
-// TypeScript types in frontend/src/lib/ and must stay in sync with them:
-// string ids, calendar-day dates, durations in seconds, capitalized enums as
-// plain strings, derived data (records, totals, pace) never stored.
+// Run Log Tracker - database shape, live since RUN-46 (see docs/data-model.md,
+// "Adopting the database"). Mirrors the TypeScript types in frontend/src/lib/
+// and must stay in sync with them: string ids, calendar-day dates, durations
+// in seconds, capitalized enums as plain strings, derived data (records,
+// totals, pace) never stored.
 
+// Prisma 7: the client is generated TypeScript compiled with the rest of the
+// app, and the connection URL lives in prisma.config.ts (CLI) and
+// PrismaService (runtime), not here.
 generator client {
-  provider = "prisma-client-js"
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  // The backend emits CommonJS: tsconfig is "module": "nodenext" and
+  // package.json has no "type": "module", which under nodenext means CJS
+  // output. The default ESM generator output (import.meta) does not survive
+  // that, hence cjs here.
+  moduleFormat = "cjs"
 }
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 // Single row: Run Log has no accounts (WEL-4). runningLevel is one of

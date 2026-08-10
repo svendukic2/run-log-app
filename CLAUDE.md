@@ -106,6 +106,16 @@ is registered in `backend/src/app.module.ts`, so it reads `backend/.env` at star
 through `ConfigService`, as `main.ts` does, rather than scattering `process.env` through
 the code.
 
+**The database is PostgreSQL through Prisma 7 (RUN-46).** The schema is
+`backend/prisma/schema.prisma`, the migrations live in `backend/prisma/migrations/`, and
+`docs/data-model.md` is the contract both the schema and the frontend types follow. Two
+Prisma 7 surprises worth knowing before they bite: the connection URL is **not** in the
+schema file (v7 removed `url = env(...)`; the CLI reads `backend/prisma.config.ts`, the
+runtime reads ConfigService inside `PrismaService`), and the client is **generated
+TypeScript** in `backend/src/generated/` (gitignored, recreated by the `postinstall`
+script). Feature modules import `PrismaModule` explicitly - it is deliberately not
+`@Global` - and inject `PrismaService`, the app's single database entry point.
+
 **API response contract is hand-mirrored, and that is a known wart.** `HelloResponse`
 is declared in `backend/src/app.service.ts` (the source of truth) and copied by hand
 into `frontend/src/app/page.tsx`. Change a response shape and you must edit both. The
@@ -116,12 +126,15 @@ expose one yet.
 
 Copy the templates, then fill in values. Both real files are gitignored.
 
-| App      | Template                | Real file             | Variables                                                                            |
-| -------- | ----------------------- | --------------------- | ------------------------------------------------------------------------------------ |
-| Backend  | `backend/.env.example`  | `backend/.env`        | `PORT` (default 3000), `FRONTEND_URL` (CORS origin, default `http://localhost:4200`) |
-| Frontend | `frontend/.env.example` | `frontend/.env.local` | `BACKEND_URL` (default `http://localhost:3000`)                                      |
+| App      | Template                | Real file             | Variables                                                                                                                     |
+| -------- | ----------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Backend  | `backend/.env.example`  | `backend/.env`        | `PORT` (default 3000), `FRONTEND_URL` (CORS origin, default `http://localhost:4200`), `DATABASE_URL` (**required**, no default) |
+| Frontend | `frontend/.env.example` | `frontend/.env.local` | `BACKEND_URL` (default `http://localhost:3000`)                                                                                 |
 
-Both apps run on their defaults with no `.env` at all, so a missing file is not an error.
+The frontend runs on its defaults with no `.env.local` at all. The backend **no longer
+does** (since RUN-46): `DATABASE_URL` is required and the boot fails without it, because
+`PrismaService` connects at startup. See `docs/data-model.md` for the one-time database
+setup.
 
 Note the filename difference: Nest reads `.env`, Next.js reads `.env.local`.
 
@@ -129,8 +142,10 @@ Note the filename difference: Nest reads `.env`, Next.js reads `.env.local`.
 has no prefix because it is read server-side only; a `NEXT_PUBLIC_` variable is inlined
 into the browser bundle and is therefore public forever.
 
-There is **no config validation**: `ConfigModule` is registered without a
-`validationSchema`, so a missing variable surfaces at first use rather than at boot.
+Config validation is a plain function, not Joi: `backend/src/config/env.validation.ts`
+runs at boot via `ConfigModule`'s `validate` option and fails fast with every problem
+listed at once. New required variables belong in that function, not in ad-hoc checks at
+first use.
 
 ## What is in `.claude/`
 
@@ -197,7 +212,8 @@ the backend has its own `backend/.prettierrc`.
 `.github/workflows/ci.yml` runs three jobs in parallel on every PR and on pushes to
 `main`:
 
-- **backend**: lint, build, unit tests, e2e
+- **backend**: Postgres 18 service container, `prisma migrate deploy`, then lint, build,
+  unit tests, e2e (the e2e suite connects to that database at startup)
 - **frontend**: lint, unit tests, build
 - **conventions**: commitlint over the PR's commit range
 
@@ -218,11 +234,6 @@ something that is not there.
   properly rather than relying on a leftover install.
 - **Generated API types.** No OpenAPI spec, so `HelloResponse` is hand-mirrored between
   the two apps as described under Architecture.
-- **Config validation.** No `validationSchema` on `ConfigModule`.
-- **`frontend/src/components/`.** Does not exist. Create it with your first shared
-  component.
-- **A database.** Nothing is wired up. Pick your own persistence layer; that choice is
-  deliberately left to you.
 
 `backend/README.md` is the stock NestJS starter README. Ignore it as a source of truth
 for this project.

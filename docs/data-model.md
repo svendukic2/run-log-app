@@ -128,19 +128,55 @@ Recomputing on every read is the mechanism behind RUN-11 ("records fill in
 automatically"), DEL-3 and A18, and it is why deleting a run can never leave a stale
 record behind.
 
-## Adopting the database (when/if required)
+## Adopting the database (live since RUN-46)
 
-No Docker needed; a locally installed PostgreSQL works fine:
+The schema is no longer inert: Prisma 7 and the initial migration landed with RUN-46.
+No Docker needed; a locally installed PostgreSQL works fine. On a fresh clone:
 
 1. Create an empty database once: `CREATE DATABASE runlog;`
-2. `cd backend && npm install prisma @prisma/client`
-3. Add to `backend/.env` (and a placeholder to `backend/.env.example`):
+2. Set `DATABASE_URL` in `backend/.env` (template in `backend/.env.example`):
    `DATABASE_URL="postgresql://postgres:<password>@localhost:5432/runlog"`
-4. `npx prisma migrate dev --name init` - generates the SQL migration from
-   `prisma/schema.prisma`, commits it to `prisma/migrations/`, and applies it.
-5. Teammates then only set their own `DATABASE_URL` and run `npx prisma migrate dev`.
+3. `cd backend && npm install` - also generates the Prisma client into
+   `backend/src/generated/prisma` (gitignored) via the `postinstall` script.
+4. `npx prisma migrate dev` - applies the committed migrations from
+   `backend/prisma/migrations/`, giving everyone an identical database.
+
+Prisma 7 wiring, for anyone touching it:
+
+- The connection URL lives in **two places on purpose**, both reading
+  `backend/.env`: `backend/prisma.config.ts` feeds the CLI (migrate, studio),
+  and `PrismaService` feeds the runtime client through ConfigService with a
+  `pg` driver adapter. The schema file itself has no URL (Prisma 7 removed it).
+  Run Prisma CLI commands **from `backend/`**: both the dotenv lookup and the
+  schema path in `prisma.config.ts` are cwd-relative, so from the repo root
+  the CLI reports "url is missing" even when `.env` is perfectly fine.
+- `PrismaService` (`backend/src/prisma/`) is the app's single database entry
+  point. `PrismaModule` is deliberately not `@Global`: feature modules that
+  talk to the database import it explicitly and inject the service, so the
+  imports arrays stay an honest map of who touches persistence.
+- Schema changes: edit `prisma/schema.prisma`, run
+  `npx prisma migrate dev --name <change>`, commit the new migration folder
+  together with the schema change. `migrate dev` is a development command;
+  CI and any deployed database use `npx prisma migrate deploy`, which only
+  applies committed migrations and never generates or resets anything.
+- **The Jest configs carry Prisma 7 workarounds**, kept in one place:
+  `backend/jest.shared.js`, consumed by both `jest.config.js` (unit) and
+  `test/jest-e2e.config.js` (e2e), with the exact error each workaround
+  prevents commented at the point of use. Short version: the generated
+  client loads its WASM query compiler with a dynamic `import()`, which
+  under the app's `nodenext` tsconfig survives to runtime and kills Jest's
+  CommonJS VM with "A dynamic import callback was invoked without
+  --experimental-vm-modules". The ts-jest override (`module: commonjs` +
+  `moduleResolution: node10` + `resolvePackageJsonExports: false`) makes tsc
+  downlevel that `import()` to a `require` of what is verifiably a CJS file,
+  and the `moduleNameMapper` entry strips the ESM-style `.js` suffix from
+  the generated client's relative imports ("Cannot find module './enums.js'"
+  otherwise). The cost is that tests resolve modules under older rules than
+  the production build; the build step and the e2e-against-real-Postgres run
+  in CI are what keep that divergence honest. Delete `jest.shared.js` the
+  day Prisma's generated client loads cleanly under Jest's default CJS
+  environment.
 
 The frontend keeps the same types and swaps localStorage calls for API calls; nothing in
-the components changes shape. That swap is deliberately **not** scheduled in the current
-sprint plan; confirm with the teacher whether a real database is part of the grade before
-spending sprint capacity on it.
+the components changes shape. That swap is scheduled as RUN-48 (runs) and RUN-50
+(profile/goal).

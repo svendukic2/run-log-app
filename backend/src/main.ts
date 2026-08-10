@@ -18,6 +18,13 @@ async function bootstrap() {
     origin: config.get<string>('FRONTEND_URL', 'http://localhost:4200'),
   });
 
+  // Without this, SIGTERM/SIGINT kill the process without ever running
+  // onModuleDestroy, so PrismaService.$disconnect would be dead code and
+  // in-flight queries would be severed instead of drained. The e2e suite's
+  // app.close() fires the hooks regardless; this line is what makes the
+  // same happen in production. Do not remove as "unused".
+  app.enableShutdownHooks();
+
   await app.listen(config.get<number>('PORT', 3000));
 }
 bootstrap();

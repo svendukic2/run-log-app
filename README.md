@@ -129,8 +129,22 @@ cd frontend && npm install && cp .env.example .env.local && cd ..
 > lint-staged and Prettier, and its `prepare` script is what installs the hooks. Skip it
 > and your commits silently bypass every check the project relies on.
 
-Both `.env` copies are optional: each app falls back to sensible localhost defaults. Copy
-them anyway so you can see which variables exist.
+The frontend's `.env.local` is optional (it falls back to localhost defaults). The
+backend's `.env` is **not optional anymore**: since RUN-46 the API connects to PostgreSQL
+at startup and refuses to boot without a `DATABASE_URL`. One-time database setup:
+
+```bash
+# 4. Database (needs a locally installed PostgreSQL, no Docker required)
+#    Create the empty database once, e.g. with psql:
+#      CREATE DATABASE runlog;
+#    Fill DATABASE_URL in backend/.env with your local credentials, then:
+cd backend && npx prisma migrate dev && cd ..
+```
+
+`npx prisma migrate dev` applies the committed migrations from
+`backend/prisma/migrations/`, so every clone ends up with an identical schema. The full
+data-model contract and Prisma wiring notes live in
+[docs/data-model.md](docs/data-model.md).
 
 Now run both apps, each in its **own terminal**:
 
@@ -358,11 +372,11 @@ forbids committing to `main`, the normal flow is: branch, commit, push, `gh pr c
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs three jobs in parallel on
 every pull request and on pushes to `main`:
 
-| Job           | Steps                                  |
-| ------------- | -------------------------------------- |
-| `backend`     | lint, build, unit tests, e2e           |
-| `frontend`    | lint, unit tests, build                |
-| `conventions` | commitlint over every commit in the PR |
+| Job           | Steps                                                             |
+| ------------- | ----------------------------------------------------------------- |
+| `backend`     | Postgres service container, migrate, lint, build, unit tests, e2e |
+| `frontend`    | lint, unit tests, build                                           |
+| `conventions` | commitlint over every commit in the PR                            |
 
 The Node version comes from `.nvmrc`, so bump it there and CI follows.
 
@@ -418,8 +432,6 @@ for the two supported setups and their trade-offs.
 
 Things this boilerplate deliberately does not decide for you:
 
-- **A database.** Nothing is wired up. Pick your own (Prisma or TypeORM with Postgres is
-  a reasonable default) and add a `docker-compose.yml` if you want it containerised.
 - **Auth.** Not present. NestJS guards are the place for it; see the `backend-nestjs`
   rules.
 - **Shared types between the apps.** Right now `HelloResponse` is declared in
