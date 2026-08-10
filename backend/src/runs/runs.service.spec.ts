@@ -1,0 +1,180 @@
+import { NotFoundException } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
+import { PrismaService } from '../prisma/prisma.service';
+import { RunsService } from './runs.service';
+
+// A stored row as Prisma returns it: the DATE column comes back as a JS Date
+// pinned to UTC midnight.
+function row(overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    id: 'run-1',
+    routeName: 'Morning loop',
+    distanceKm: 8.2,
+    durationSeconds: 2535,
+    date: new Date('2026-07-14T00:00:00.000Z'),
+    effort: 'Medium',
+    note: '',
+    ...overrides,
+  };
+}
+
+// What Prisma throws when a mutation's where clause matches nothing. The
+// service duck-types on the code, so the mock only needs that shape.
+function recordNotFound() {
+  return Object.assign(new Error('No record found'), { code: 'P2025' });
+}
+
+describe('RunsService', () => {
+  let service: RunsService;
+  const prisma: { run: Record<string, jest.Mock> } = {
+    run: {
+      findMany: jest.fn(),
+      findUnique: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
+    },
+  };
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    const moduleRef = await Test.createTestingModule({
+      providers: [RunsService, { provide: PrismaService, useValue: prisma }],
+    }).compile();
+    service = moduleRef.get(RunsService);
+  });
+
+  it('lists runs newest first with a deterministic same-day tiebreak', async () => {
+    prisma.run.findMany.mockResolvedValue([row()]);
+
+    const runs = await service.findAll();
+
+    expect(prisma.run.findMany).toHaveBeenCalledWith({
+      orderBy: [{ date: 'desc' }, { id: 'desc' }],
+    });
+    // The response is the contract shape: date is a yyyy-mm-dd string.
+    expect(runs).toEqual([
+      {
+        id: 'run-1',
+        routeName: 'Morning loop',
+        distanceKm: 8.2,
+        durationSeconds: 2535,
+        date: '2026-07-14',
+        effort: 'Medium',
+        note: '',
+      },
+    ]);
+  });
+
+  it('returns one run by id and 404s on a miss', async () => {
+    prisma.run.findUnique.mockResolvedValueOnce(row());
+    await expect(service.findOne('run-1')).resolves.toMatchObject({
+      id: 'run-1',
+      date: '2026-07-14',
+    });
+
+    prisma.run.findUnique.mockResolvedValueOnce(null);
+    await expect(service.findOne('nope')).rejects.toThrow(NotFoundException);
+  });
+
+  it('fails loudly on a stored effort outside the contract vocabulary', async () => {
+    // Plain TEXT column until the schema-hardening ticket adds an enum: a
+    // row edited via psql can hold anything, and that must not reach the
+    // frontend as a silently wrong Effort.
+    prisma.run.findUnique.mockResolvedValue(row({ effort: 'banana' }));
+
+    await expect(service.findOne('run-1')).rejects.toThrow(
+      /Run run-1 has stored effort "banana"/,
+    );
+  });
+
+  it('creates with the calendar day stored at UTC midnight', async () => {
+    prisma.run.create.mockImplementation(
+      ({ data }: { data: Record<string, unknown> }) =>
+        Promise.resolve(row({ ...data, id: 'run-2' })),
+    );
+
+    const created = await service.create({
+      routeName: 'Track intervals',
+      distanceKm: 5,
+      durationSeconds: 1500,
+      date: '2026-08-03',
+      effort: 'Hard',
+      note: 'humid',
+    });
+
+    expect(prisma.run.create).toHaveBeenCalledWith({
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining is typed any
+      data: expect.objectContaining({
+        date: new Date('2026-08-03T00:00:00.000Z'),
+        effort: 'Hard',
+        note: 'humid',
+      }),
+    });
+    expect(created.date).toBe('2026-08-03');
+  });
+
+  it('defaults effort to Medium and note to empty when omitted (ADD-8)', async () => {
+    prisma.run.create.mockImplementation(
+      ({ data }: { data: Record<string, unknown> }) =>
+        Promise.resolve(row({ ...data, id: 'run-3' })),
+    );
+
+    await service.create({
+      routeName: 'Recovery jog',
+      distanceKm: 3,
+      durationSeconds: 1200,
+      date: '2026-08-01',
+    });
+
+    expect(prisma.run.create).toHaveBeenCalledWith({
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining is typed any
+      data: expect.objectContaining({ effort: 'Medium', note: '' }),
+    });
+  });
+
+  it('updates only the provided fields', async () => {
+    prisma.run.update.mockResolvedValue(row({ distanceKm: 9 }));
+
+    await service.update('run-1', { distanceKm: 9 });
+
+    expect(prisma.run.update).toHaveBeenCalledWith({
+      where: { id: 'run-1' },
+      data: { distanceKm: 9 },
+    });
+  });
+
+  it('maps a concurrent-delete P2025 on update to a 404', async () => {
+    prisma.run.update.mockRejectedValue(recordNotFound());
+
+    await expect(service.update('nope', { distanceKm: 9 })).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+
+  it('treats an empty PATCH as a no-op read, not a write', async () => {
+    prisma.run.findUnique.mockResolvedValue(row());
+
+    const result = await service.update('run-1', {});
+
+    expect(result.id).toBe('run-1');
+    expect(prisma.run.update).not.toHaveBeenCalled();
+  });
+
+  it('lets non-P2025 errors from the database escape untouched', async () => {
+    prisma.run.update.mockRejectedValue(new Error('connection reset'));
+
+    await expect(service.update('run-1', { distanceKm: 9 })).rejects.toThrow(
+      'connection reset',
+    );
+  });
+
+  it('deletes by id and maps a P2025 to a 404', async () => {
+    prisma.run.delete.mockResolvedValueOnce(row());
+    await service.remove('run-1');
+    expect(prisma.run.delete).toHaveBeenCalledWith({ where: { id: 'run-1' } });
+
+    prisma.run.delete.mockRejectedValueOnce(recordNotFound());
+    await expect(service.remove('nope')).rejects.toThrow(NotFoundException);
+  });
+});

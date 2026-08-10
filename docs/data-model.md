@@ -177,6 +177,33 @@ Prisma 7 wiring, for anyone touching it:
   day Prisma's generated client loads cleanly under Jest's default CJS
   environment.
 
+## API validation (RUN-47)
+
+The runs endpoints (`/api/runs`) validate with class-validator DTOs mirroring the
+frontend rules: routeName non-empty, distanceKm > 0, durationSeconds integer > 0, date
+a real `yyyy-mm-dd` calendar day, effort one of the capitalized levels, note optional.
+Three server-side specifics worth knowing:
+
+- **"Not in the future" allows one day of slack.** The server cannot know the client's
+  zone: a runner in Sydney is on "tomorrow" relative to a UTC server for the first
+  hours of their day. The API therefore accepts dates up to tomorrow in UTC; the strict
+  "today" rule of RUN-23 AC7 stays in the form, where the user's zone is known.
+- **Free-text bounds are API-side additions**: routeName is trimmed and capped at 120
+  characters, note at 2000. The v1 forms enforce no lengths, so these exist to keep a
+  stray script from storing megabytes in unbounded TEXT columns, not to police real
+  input.
+- **Explicit `null` is always a 400**, on create and on PATCH. Omitting `effort` or
+  `note` means "use the defaults" (`Medium`, `''`); sending `null` for anything is
+  rejected in validation rather than reaching a NOT NULL column as a 500.
+
+## Test database
+
+`npm run test:e2e` never touches the development database. The suite derives its own
+URL (`DATABASE_URL_TEST` if set, otherwise the `DATABASE_URL` database name plus a
+`_test` suffix, e.g. `runlog_test`), creates and migrates that database automatically
+on first run, and refuses to start against any database whose name does not end in
+`_test`, because the tests delete rows between cases. See `backend/test/test-database.ts`.
+
 The frontend keeps the same types and swaps localStorage calls for API calls; nothing in
 the components changes shape. That swap is scheduled as RUN-48 (runs) and RUN-50
 (profile/goal).
