@@ -23,6 +23,25 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    # The e2e suite boots the real AppModule, which connects to PostgreSQL
+    # at startup (RUN-46), so CI provides one as a service container.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: runlog
+        ports:
+          - 5432:5432
+        # Wait until the server actually accepts connections; without this
+        # the migrate step races the container boot.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/runlog
     steps:
       - uses: actions/checkout@v4
 
@@ -32,7 +51,14 @@ jobs:
           cache: npm
           cache-dependency-path: backend/package-lock.json
 
+      # postinstall runs `prisma generate`, so the client exists before
+      # lint/build/tests.
       - run: npm ci
+
+      - name: Apply database migrations
+        # deploy, not dev: applies the committed migrations verbatim and
+        # fails loudly if the database is unreachable or drifted.
+        run: npx prisma migrate deploy
 
       - name: Lint
         # The local script passes --fix; in CI we only want to be told, never
