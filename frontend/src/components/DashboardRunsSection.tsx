@@ -1,5 +1,6 @@
 'use client';
 
+import DistanceChartCard from '@/components/DistanceChartCard';
 import FirstRunPrompt from '@/components/FirstRunPrompt';
 import RecentRunsCard from '@/components/RecentRunsCard';
 import { useRuns } from '@/lib/runs';
@@ -19,6 +20,12 @@ export default function DashboardRunsSection() {
 
   if (runs.length === 0) return <FirstRunPrompt />;
 
-  // The designed chart still sits above this card once RUN-19 lands.
-  return <RecentRunsCard />;
+  // 05's left column: the distance chart above the recent runs card. The
+  // parent flex column provides the gap between them.
+  return (
+    <>
+      <DistanceChartCard />
+      <RecentRunsCard />
+    </>
+  );
 }

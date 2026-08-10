@@ -6,15 +6,8 @@ import Badge from '@/components/Badge';
 import Brand from '@/components/Brand';
 import TextField from '@/components/TextField';
 import { saveProfile, useLandingRoute } from '@/lib/onboarding';
+import { validateProfileForm, type ProfileFormErrors } from '@/lib/profileValidation';
 import { ROUTES } from '@/lib/routes';
-
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-interface FormErrors {
-  firstName?: string;
-  lastName?: string;
-  email?: string;
-}
 
 // 01 · Welcome (Figma node 78:145). First-launch entry point only: once a
 // profile exists there is no way back to this screen.
@@ -24,7 +17,7 @@ export default function WelcomePage() {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
-  const [errors, setErrors] = useState<FormErrors>({});
+  const [errors, setErrors] = useState<ProfileFormErrors>({});
   const hasNavigated = useRef(false);
 
   // Send a visitor who does not belong on this screen where they do (RUN-13
@@ -39,15 +32,7 @@ export default function WelcomePage() {
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    const nextErrors: FormErrors = {};
-    if (!firstName.trim()) nextErrors.firstName = 'First name is required';
-    if (!lastName.trim()) nextErrors.lastName = 'Last name is required';
-    if (!email.trim()) {
-      nextErrors.email = 'Email is required';
-    } else if (!EMAIL_PATTERN.test(email.trim())) {
-      nextErrors.email = 'Enter a valid email address';
-    }
-
+    const nextErrors = validateProfileForm({ firstName, lastName, email });
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
 

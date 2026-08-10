@@ -1,7 +1,9 @@
 import AddRunButton from '@/components/AddRunButton';
+import CoachTeaserCard from '@/components/CoachTeaserCard';
 import DashboardGreeting from '@/components/DashboardGreeting';
 import DashboardRunsSection from '@/components/DashboardRunsSection';
 import PageHeader from '@/components/PageHeader';
+import PersonalRecordsCard from '@/components/PersonalRecordsCard';
 import WeeklyGoalCard from '@/components/WeeklyGoalCard';
 
 // 05 · Dashboard. The header is rendered by the page itself, above the body, so
@@ -13,12 +15,21 @@ export default function DashboardPage() {
     <>
       <PageHeader overline={<DashboardGreeting />} title="Dashboard" action={<AddRunButton />} />
 
+      {/* 04/05 use the same two-column shape: main content left, the coach
+          card right, stacking on narrow screens. The right column renders in
+          both dashboard states. */}
       <div
         data-testid="dashboard-body"
-        className="flex flex-col gap-5 px-5 pb-6 sm:px-8 lg:px-[40px] lg:pb-[32px]"
+        className="grid items-start gap-5 px-5 pb-6 sm:px-8 lg:grid-cols-[minmax(0,1fr)_340px] lg:px-[40px] lg:pb-[32px]"
       >
-        <WeeklyGoalCard />
-        <DashboardRunsSection />
+        <div className="flex min-w-0 flex-col gap-5">
+          <WeeklyGoalCard />
+          <DashboardRunsSection />
+        </div>
+        <div className="flex min-w-0 flex-col gap-5">
+          <CoachTeaserCard />
+          <PersonalRecordsCard />
+        </div>
       </div>
     </>
   );

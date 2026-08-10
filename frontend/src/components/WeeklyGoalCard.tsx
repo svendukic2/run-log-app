@@ -1,29 +1,17 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { GOAL_DEFAULT_KM, useGoal } from '@/lib/goal';
+import { useGoalTarget } from '@/lib/goal';
 import {
   daysLeftInWeek,
   formatDuration,
+  formatKm,
   formatTimeCompact,
   paceSecondsPerKm,
-  todayIso,
+  roundKm,
   totalsForWeek,
   useRuns,
 } from '@/lib/runs';
-
-// Distances round to one decimal exactly once, and every caption derives from
-// the rounded values, so "14.3 / 20 km" and "5.7 km to go" always add up.
-function roundKm(km: number): number {
-  return Math.round(km * 10) / 10;
-}
-
-// Whole kilometres without a decimal ("14"), fractional ones with one
-// ("13.6"), matching the readout in the mocks.
-function formatKm(km: number): string {
-  const rounded = roundKm(km);
-  return Number.isInteger(rounded) ? `${rounded}` : rounded.toFixed(1);
-}
+import { useToday } from '@/lib/useToday';
 
 // The "Weekly goal" card (RUN-17, DSH-3/4/5): status tag, "{done} / {target}
 // km" readout, progress bar, "km to go" and time-left captions, and the
@@ -31,28 +19,17 @@ function formatKm(km: number): string {
 // modal and onboarding write to, so saved runs recompute everything (A18).
 export default function WeeklyGoalCard() {
   const runs = useRuns();
-  const goal = useGoal();
-  // The date is state, not a render-body clock read: it seeds once on mount
-  // and refreshes when the user returns to a tab left open across midnight,
-  // so the card never keeps reporting last week against this week's goal.
-  const [today, setToday] = useState(() => todayIso());
-
-  useEffect(() => {
-    const refresh = () => setToday(todayIso());
-    window.addEventListener('focus', refresh);
-    document.addEventListener('visibilitychange', refresh);
-    return () => {
-      window.removeEventListener('focus', refresh);
-      document.removeEventListener('visibilitychange', refresh);
-    };
-  }, []);
+  const today = useToday();
 
   const totals = totalsForWeek(runs, today);
-  // useGoal validates km, so target is always a positive number.
-  const target = goal?.km ?? GOAL_DEFAULT_KM;
+  // This week's target: the onboarding goal until a Settings default takes
+  // effect, then that default from its first Monday on (RUN-38, SET-6).
+  const target = useGoalTarget(today);
   const done = roundKm(totals.distanceKm);
   const remaining = roundKm(Math.max(0, target - done));
-  const percent = Math.min(100, (done / target) * 100);
+  // A default of 0 km is legal (A17), and 0/0 is NaN: a zero target counts
+  // as met rather than poisoning the bar's width.
+  const percent = target > 0 ? Math.min(100, (done / target) * 100) : 100;
   const daysLeft = daysLeftInWeek(today);
 
   // hasRuns gates the stats that need data to exist; the status is a separate
@@ -127,7 +104,10 @@ export default function WeeklyGoalCard() {
         </span>
       </div>
 
-      <dl data-testid="goal-stats" className="mt-[20px] flex justify-between border-t border-line pt-[20px]">
+      <dl
+        data-testid="goal-stats"
+        className="mt-[20px] flex justify-between border-t border-line pt-[20px]"
+      >
         {stats.map((stat) => (
           <div key={stat.label} className={`flex flex-col gap-[2px] ${stat.align}`}>
             {/* dt precedes dd in the DOM as the content model requires; the

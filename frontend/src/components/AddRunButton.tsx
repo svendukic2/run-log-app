@@ -1,36 +1,33 @@
 'use client';
 
-import { useRef, useState } from 'react';
-import AddRunModal from '@/components/AddRunModal';
+import { ACCENT_PILL_CLASSES } from '@/components/accentPill';
+import RunModal from '@/components/RunModal';
+import { useAddRunModal } from '@/lib/useAddRunModal';
 
 interface AddRunButtonProps {
   // The pill's label; the headers keep the library's "Add run", while the
   // Dashboard (RUN-18) and Runs (RUN-25 AC2) empty states re-label the same
   // pill "Add your first run".
   label?: string;
+  // The coach teaser card (RUN-21) keeps the pill full width at every
+  // breakpoint; headers still collapse it to content width from `sm` up.
+  fullWidth?: boolean;
 }
 
 // The primary "Add run" action from the design library (node 48:38): accent
 // pill with the label and a trailing arrow. It owns the Add run modal, so every
 // surface that renders it can open the modal without wiring state of its own.
 // Full width below `sm`, where the header stacks (RUN-15, responsive addendum).
-export default function AddRunButton({ label = 'Add run' }: AddRunButtonProps) {
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const buttonRef = useRef<HTMLButtonElement>(null);
-
-  // Dismissing the modal hands focus back to the button that opened it.
-  const closeModal = () => {
-    setIsModalOpen(false);
-    buttonRef.current?.focus();
-  };
+export default function AddRunButton({ label = 'Add run', fullWidth = false }: AddRunButtonProps) {
+  const { isOpen, open, close, triggerRef } = useAddRunModal<HTMLButtonElement>();
 
   return (
     <>
       <button
-        ref={buttonRef}
+        ref={triggerRef}
         type="button"
-        onClick={() => setIsModalOpen(true)}
-        className="flex w-full shrink-0 items-center justify-center gap-[9px] rounded-[14px] bg-accent px-[28px] py-[16px] text-[16px] font-semibold text-white hover:bg-accent-pressed sm:w-auto"
+        onClick={open}
+        className={fullWidth ? ACCENT_PILL_CLASSES : `${ACCENT_PILL_CLASSES} sm:w-auto`}
       >
         {label}
         <span aria-hidden="true" className="text-[17px]">
@@ -39,8 +36,8 @@ export default function AddRunButton({ label = 'Add run' }: AddRunButtonProps) {
       </button>
 
       {/* Mounted only while open, so each opening starts from a clean form
-          (RUN-23 AC1). */}
-      {isModalOpen ? <AddRunModal onClose={closeModal} /> : null}
+          (RUN-23 AC1). No `run` prop: this pill always adds. */}
+      {isOpen ? <RunModal onClose={close} /> : null}
     </>
   );
 }

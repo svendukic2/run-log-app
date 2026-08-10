@@ -107,6 +107,20 @@ export function formatDistanceKm(km: number): string {
   return `${km.toFixed(1)} km`;
 }
 
+// Distances round to one decimal exactly once, and every derived caption or
+// bar uses the rounded value, so "14.3 / 20 km" and "5.7 km to go" always add
+// up (RUN-17; shared since RUN-21).
+export function roundKm(km: number): number {
+  return Math.round(km * 10) / 10;
+}
+
+// Whole kilometres without a decimal ("14"), fractional ones with one
+// ("13.6"), matching the goal readouts in the mocks.
+export function formatKm(km: number): string {
+  const rounded = roundKm(km);
+  return Number.isInteger(rounded) ? `${rounded}` : rounded.toFixed(1);
+}
+
 /* Duration and pace -------------------------------------------------------- */
 
 // Accepts the two shapes the designs use, `mm:ss` and `h:mm:ss` (ADD-6), and
@@ -214,6 +228,24 @@ export function validateRunForm(values: RunFormValues): RunFormErrors {
   return errors;
 }
 
+// The inverse of toRunDraft: a stored run as the form shows it, so Edit run
+// opens prefilled with exactly that run's values (RUN-28 AC1). The prefilled
+// note is the stored note - the mock's note differs from Run detail's for the
+// same run, which is a copy conflict flagged with the designer (EDT-4, A20);
+// the app has a single stored note, so both screens render that.
+export function runToForm(run: Run): RunFormValues {
+  return {
+    routeName: run.routeName,
+    distance: `${run.distanceKm}`,
+    duration: formatDuration(run.durationSeconds),
+    date: run.date,
+    effort: run.effort,
+    // isRun never checks the note, so a hand-edited or older stored run can
+    // arrive without one; the form still needs a string.
+    note: run.note ?? '',
+  };
+}
+
 // Only ever called with values that already passed validateRunForm.
 export function toRunDraft(values: RunFormValues): Omit<Run, 'id'> {
   return {
@@ -267,6 +299,39 @@ export function addRun(draft: Omit<Run, 'id'>): Run {
   return run;
 }
 
+// Replaces the run in place and announces the change, so every screen reading
+// through useRuns - list, detail, dashboard, records - refreshes at once
+// (RUN-28 AC2). Returns null when the id matches nothing (deleted in another
+// tab); nothing is written in that case.
+export function updateRun(id: string, draft: Omit<Run, 'id'>): Run | null {
+  const runs = getRuns();
+  const index = runs.findIndex((run) => run.id === id);
+  if (index === -1) return null;
+
+  const updated: Run = { ...draft, id };
+  const next = [...runs];
+  next[index] = updated;
+  window.localStorage.setItem(RUNS_KEY, JSON.stringify(next));
+  window.dispatchEvent(new Event(RUNS_CHANGED_EVENT));
+  return updated;
+}
+
+// Removes the run and announces the change, so the list, the "All runs"
+// count, the dashboard and the records all recompute from the remaining runs
+// at once (RUN-30 DEL-2, DEL-3): records and weekly totals are derived on
+// render, never stored, so a deleted run cannot leave a stale number behind.
+// Returns false when the id matches nothing (already deleted in another tab);
+// nothing is written in that case.
+export function deleteRun(id: string): boolean {
+  const runs = getRuns();
+  const next = runs.filter((run) => run.id !== id);
+  if (next.length === runs.length) return false;
+
+  window.localStorage.setItem(RUNS_KEY, JSON.stringify(next));
+  window.dispatchEvent(new Event(RUNS_CHANGED_EVENT));
+  return true;
+}
+
 function subscribeToRuns(onStoreChange: () => void): () => void {
   window.addEventListener('storage', onStoreChange);
   window.addEventListener(RUNS_CHANGED_EVENT, onStoreChange);
@@ -299,6 +364,36 @@ export type RunSortOrder = 'newest' | 'oldest';
 export function sortRuns(runs: Run[], order: RunSortOrder): Run[] {
   const direction = order === 'oldest' ? 1 : -1;
   return [...runs].sort((a, b) => direction * a.date.localeCompare(b.date));
+}
+
+// The Mon-Sun week starts for the `count` weeks ending with the one `isoDate`
+// falls in, oldest first: the x-axis of the dashboard distance chart (RUN-19).
+export function lastWeekStarts(isoDate: string, count: number): string[] {
+  const monday = fromIsoDate(startOfWeek(isoDate));
+  return Array.from({ length: count }, (_, index) => {
+    const weekStart = new Date(monday);
+    weekStart.setDate(monday.getDate() - 7 * (count - 1 - index));
+    return toIsoDate(weekStart);
+  });
+}
+
+// The ISO dates of the `count` days ending with `isoDate`, oldest first: the
+// x-axis of the dashboard distance chart since its daily redesign (RUN-19).
+export function lastDays(isoDate: string, count: number): string[] {
+  const end = fromIsoDate(isoDate);
+  return Array.from({ length: count }, (_, index) => {
+    const day = new Date(end);
+    day.setDate(end.getDate() - (count - 1 - index));
+    return toIsoDate(day);
+  });
+}
+
+// Total distance logged on a single day. Run.date is a plain ISO day string,
+// so membership is a string comparison, like the weekly selector below.
+export function distanceForDay(runs: Run[], isoDate: string): number {
+  return runs
+    .filter((run) => run.date === isoDate)
+    .reduce((total, run) => total + run.distanceKm, 0);
 }
 
 export interface WeekTotals {

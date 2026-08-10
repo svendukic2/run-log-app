@@ -1,6 +1,7 @@
 import {
   addRun,
   daysLeftInWeek,
+  deleteRun,
   emptyRunForm,
   formatDate,
   formatDateShort,
@@ -9,12 +10,19 @@ import {
   formatDurationMinutes,
   formatPace,
   formatTimeCompact,
+  formatKm,
   getRuns,
+  distanceForDay,
+  lastDays,
+  lastWeekStarts,
   parseDuration,
+  roundKm,
+  runToForm,
   sortRuns,
   startOfWeek,
   toRunDraft,
   totalsForWeek,
+  updateRun,
   validateRunForm,
   type Run,
   type RunFormValues,
@@ -98,6 +106,27 @@ describe('formatting', () => {
     expect(formatDistanceKm(km)).toBe(formatted);
   });
 
+  // Shared rounding for goal readouts and chart bars (RUN-17, RUN-19, RUN-21).
+  it.each([
+    [0.0142857, 0],
+    [0.04, 0],
+    [0.05, 0.1],
+    [19.96, 20],
+    [13.649, 13.6],
+  ])('rounds %f km to %f', (km, rounded) => {
+    expect(roundKm(km)).toBe(rounded);
+  });
+
+  it.each([
+    [0, '0'],
+    [6, '6'],
+    [19.95, '20'],
+    [13.6, '13.6'],
+    [0.5, '0.5'],
+  ])('renders %f km as "%s" in goal readouts', (km, formatted) => {
+    expect(formatKm(km)).toBe(formatted);
+  });
+
   // The Weekly goal card's Time stat (RUN-17, DSH-5).
   it.each([
     [0, '0m'],
@@ -150,6 +179,39 @@ describe('weeks (AC6)', () => {
     expect(daysLeftInWeek(date)).toBe(expected);
   });
 
+  it('lists the last week starts oldest first, seven days apart (RUN-19)', () => {
+    // Tue 14 Jul 2026 sits in the week of Mon 13 Jul.
+    expect(lastWeekStarts('2026-07-14', 8)).toEqual([
+      '2026-05-25',
+      '2026-06-01',
+      '2026-06-08',
+      '2026-06-15',
+      '2026-06-22',
+      '2026-06-29',
+      '2026-07-06',
+      '2026-07-13',
+    ]);
+  });
+
+  it('ends the week-start list with the current week even on a Monday', () => {
+    expect(lastWeekStarts('2026-08-03', 2)).toEqual(['2026-07-27', '2026-08-03']);
+  });
+
+  it('treats a Sunday as closing its week, not opening the next', () => {
+    // Sun 19 Jul 2026 belongs to the week of Mon 13 Jul.
+    expect(lastWeekStarts('2026-07-19', 2)).toEqual(['2026-07-06', '2026-07-13']);
+  });
+
+  it('crosses a year boundary without skipping weeks', () => {
+    // Mon 5 Jan 2026; three weeks back reaches into December 2025.
+    expect(lastWeekStarts('2026-01-05', 4)).toEqual([
+      '2025-12-15',
+      '2025-12-22',
+      '2025-12-29',
+      '2026-01-05',
+    ]);
+  });
+
   it('totals only the runs in the requested week', () => {
     const runs = [
       makeRun({ id: 'a', date: '2026-07-14', distanceKm: 8.2, durationSeconds: 2535 }),
@@ -168,6 +230,26 @@ describe('weeks (AC6)', () => {
       distanceKm: 20,
       durationSeconds: 7200,
     });
+  });
+
+  it('lists the last days oldest first, ending on the given day', () => {
+    expect(lastDays('2026-07-14', 3)).toEqual(['2026-07-12', '2026-07-13', '2026-07-14']);
+  });
+
+  it('crosses month and year boundaries without skipping days', () => {
+    expect(lastDays('2026-01-01', 3)).toEqual(['2025-12-30', '2025-12-31', '2026-01-01']);
+  });
+
+  it('totals only the runs on the requested day', () => {
+    const runs = [
+      makeRun({ id: 'a', date: '2026-07-14', distanceKm: 8.2 }),
+      makeRun({ id: 'b', date: '2026-07-14', distanceKm: 5 }),
+      makeRun({ id: 'c', date: '2026-07-13', distanceKm: 20 }),
+    ];
+
+    expect(distanceForDay(runs, '2026-07-14')).toBeCloseTo(13.2);
+    expect(distanceForDay(runs, '2026-07-13')).toBe(20);
+    expect(distanceForDay(runs, '2026-07-12')).toBe(0);
   });
 });
 
@@ -236,6 +318,23 @@ describe('toRunDraft', () => {
   });
 });
 
+describe('runToForm (RUN-28 AC1)', () => {
+  it('renders a stored run back into the shapes the form uses', () => {
+    expect(runToForm(makeRun({ note: 'Windy' }))).toEqual(
+      makeForm({ routeName: 'Morning loop', note: 'Windy' }),
+    );
+  });
+
+  it('writes a duration over an hour as h:mm:ss', () => {
+    expect(runToForm(makeRun({ durationSeconds: 4724 })).duration).toBe('1:18:44');
+  });
+
+  it('round-trips through toRunDraft without drift', () => {
+    const run = makeRun();
+    expect({ ...toRunDraft(runToForm(run)), id: run.id }).toEqual(run);
+  });
+});
+
 describe('emptyRunForm (AC1)', () => {
   beforeAll(() => {
     jest.useFakeTimers().setSystemTime(new Date(2026, 6, 14, 9, 30));
@@ -283,6 +382,64 @@ describe('store', () => {
 
     window.localStorage.setItem('runlog.runs', JSON.stringify([{ id: 'x' }, makeRun()]));
     expect(getRuns()).toEqual([makeRun()]);
+  });
+
+  it('updateRun replaces the run in place and keeps its id (RUN-28 AC2)', () => {
+    const other = addRun(toRunDraft(makeForm({ routeName: 'Other', date: '2026-07-01' })));
+    const target = addRun(toRunDraft(makeForm()));
+
+    const updated = updateRun(
+      target.id,
+      toRunDraft(makeForm({ routeName: 'Corrected', distance: '10' })),
+    );
+
+    expect(updated).toEqual({ ...target, routeName: 'Corrected', distanceKm: 10 });
+    // Still two runs: an edit never duplicates, and the other run is untouched.
+    expect(getRuns()).toEqual([updated, other]);
+  });
+
+  it('updateRun re-files the run when the edit moves its date', () => {
+    const other = addRun(toRunDraft(makeForm({ routeName: 'Other', date: '2026-07-10' })));
+    const target = addRun(toRunDraft(makeForm({ date: '2026-07-14' })));
+
+    updateRun(target.id, toRunDraft(makeForm({ date: '2026-07-01' })));
+
+    // Newest-first ordering follows the corrected date.
+    expect(getRuns().map((run) => run.id)).toEqual([other.id, target.id]);
+  });
+
+  it('updateRun writes nothing when the id matches no run', () => {
+    const run = addRun(toRunDraft(makeForm()));
+
+    expect(updateRun('missing', toRunDraft(makeForm({ routeName: 'Ghost' })))).toBeNull();
+    expect(getRuns()).toEqual([run]);
+  });
+
+  it('deleteRun removes exactly that run and keeps the rest (RUN-30 AC2)', () => {
+    const other = addRun(toRunDraft(makeForm({ routeName: 'Other', date: '2026-07-01' })));
+    const target = addRun(toRunDraft(makeForm()));
+
+    expect(deleteRun(target.id)).toBe(true);
+
+    expect(getRuns()).toEqual([other]);
+  });
+
+  it('deleteRun announces the change so derived screens recompute (DEL-3)', () => {
+    const target = addRun(toRunDraft(makeForm()));
+    const onChange = jest.fn();
+    window.addEventListener('runlog:runs-changed', onChange);
+
+    deleteRun(target.id);
+
+    expect(onChange).toHaveBeenCalled();
+    window.removeEventListener('runlog:runs-changed', onChange);
+  });
+
+  it('deleteRun writes nothing when the id matches no run', () => {
+    const run = addRun(toRunDraft(makeForm()));
+
+    expect(deleteRun('missing')).toBe(false);
+    expect(getRuns()).toEqual([run]);
   });
 });
 

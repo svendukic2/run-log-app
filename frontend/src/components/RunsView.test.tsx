@@ -145,18 +145,36 @@ describe('Runs view (RUN-24)', () => {
     );
   });
 
+  it('opens the Edit run modal from the row menu without navigating (RUN-29)', async () => {
+    storeRuns(RUNS);
+    const user = userEvent.setup();
+    render(<RunsView />);
+
+    const table = screen.getByRole('table');
+    const [firstRow] = within(table).getAllByTestId('run-row');
+
+    await user.click(within(firstRow).getByRole('button', { name: /open menu for/i }));
+    await user.click(screen.getByRole('menuitem', { name: 'Edit' }));
+
+    // The modal opens for that exact run and nothing navigated: every click
+    // inside the menu subtree stays out of the row's onClick.
+    expect(screen.getByRole('dialog', { name: 'Edit run' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Route name')).toHaveValue('Morning loop');
+    expect(push).not.toHaveBeenCalled();
+  });
+
   it('swaps the table for the records panel and back (AC2)', async () => {
     storeRuns(RUNS);
     const user = userEvent.setup();
     render(<RunsView />);
 
-    expect(screen.getByText(/personal records are coming soon/i)).not.toBeVisible();
+    expect(screen.getByTestId('record-cards')).not.toBeVisible();
 
     await user.click(screen.getByRole('tab', { name: 'Records' }));
     // Both panels stay mounted; `hidden` drops the table out of the
     // accessibility tree, which is what role queries see.
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
-    expect(screen.getByText(/personal records are coming soon/i)).toBeVisible();
+    expect(screen.getByTestId('record-cards')).toBeVisible();
     expect(screen.getByRole('tab', { name: 'Records' })).toHaveAttribute('aria-selected', 'true');
 
     // The badge keeps showing the total while Records is active.
@@ -190,10 +208,63 @@ describe('Runs view (RUN-24)', () => {
     const cards = screen.getByTestId('runs-cards');
     expect(within(cards).getAllByRole('listitem')).toHaveLength(3);
     expect(within(cards).getByText('Morning loop')).toBeInTheDocument();
+    // Each card carries the same row menu the table rows have (RUN-29).
+    expect(within(cards).getAllByRole('button', { name: /open menu for/i })).toHaveLength(3);
     expect(within(cards).getByRole('link', { name: /long run/i })).toHaveAttribute(
       'href',
       '/runs/run-oldest',
     );
+  });
+});
+
+describe('Records tab (RUN-26)', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  it('derives the record cards from the stored runs (AC1)', async () => {
+    storeRuns(RUNS);
+    const user = userEvent.setup();
+    render(<RunsView />);
+
+    await user.click(screen.getByRole('tab', { name: 'Records' }));
+
+    const cards = screen.getByTestId('record-cards');
+    expect(within(cards).getByText('Longest run')).toBeVisible();
+    // The 14.2 km run holds Longest run and its week holds Biggest week.
+    expect(within(cards).getAllByText('14.2 km')).toHaveLength(2);
+    expect(within(cards).getAllByText('Long run · Jun 24').length).toBeGreaterThan(0);
+    // 14.2 km is the only run of 10K or more, so it holds the 10K record too.
+    expect(within(cards).getByText('Fastest 10K')).toBeVisible();
+  });
+
+  it('recomputes the records when a run is saved (AC2)', async () => {
+    storeRuns(RUNS);
+    const user = userEvent.setup();
+    render(<RunsView />);
+
+    await user.click(screen.getByRole('tab', { name: 'Records' }));
+    // Longest run and Fastest 10K are both credited to the 14.2 km run.
+    expect(
+      within(screen.getByTestId('record-cards')).getAllByText('Long run · Jun 24'),
+    ).toHaveLength(2);
+
+    act(() => {
+      addRun({
+        routeName: 'Half marathon',
+        distanceKm: 21.1,
+        durationSeconds: 6600,
+        date: '2026-07-08',
+        effort: 'Hard',
+        note: '',
+      });
+    });
+
+    const cards = screen.getByTestId('record-cards');
+    expect(within(cards).getByText('21.1 km')).toBeVisible();
+    // The new run takes over Longest run and Fastest 10K alike.
+    expect(within(cards).getAllByText('Half marathon · Jul 8')).toHaveLength(2);
+    expect(within(cards).queryByText('Long run · Jun 24')).not.toBeInTheDocument();
   });
 });
 

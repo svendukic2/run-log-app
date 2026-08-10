@@ -1,10 +1,17 @@
-// Placeholder view: settings content is built in later tickets (RUN-32+).
+import PageHeader from '@/components/PageHeader';
+import SettingsView from '@/components/SettingsView';
+
+// 17 · Settings (RUN-36). Header and page scaffold: overline, title and the
+// settings body. The body lives in SettingsView, a client component, because
+// the Profile card drafts and saves the stored profile (RUN-37), the Training
+// card holds the default-goal stepper (RUN-38) and the single Save changes
+// button persists both silently in one action (RUN-39). There is deliberately
+// no exit control: leaving the page happens only via the sidebar (AC3).
 export default function SettingsPage() {
   return (
-    <div className="px-5 py-6 sm:px-8 lg:px-[40px] lg:py-[32px]">
-      <h1 className="font-display text-[24px] font-bold tracking-[-0.6px] text-text-primary lg:text-[30px]">
-        Settings
-      </h1>
-    </div>
+    <>
+      <PageHeader overline="Manage your profile" title="Settings" />
+      <SettingsView />
+    </>
   );
 }
