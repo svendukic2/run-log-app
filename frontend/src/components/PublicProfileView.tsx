@@ -11,7 +11,7 @@ import {
 } from '@/components/publicProfileStates';
 import RecentRunsCard from '@/components/RecentRunsCard';
 import { CARD } from '@/components/runDetailParts';
-import { initialsOf } from '@/lib/eventMath';
+import { formatCount, initialsOf } from '@/lib/eventMath';
 import { setFollowing, usePublicProfile, type PublicProfile } from '@/lib/publicProfile';
 import { personRunRoute } from '@/lib/routes';
 
@@ -138,8 +138,4 @@ function ProfileBody({ profile }: { profile: PublicProfile }) {
       </div>
     </div>
   );
-}
-
-function formatCount(value: number, noun: string): string {
-  return `${value} ${value === 1 ? noun : `${noun}s`}`;
 }

@@ -125,19 +125,29 @@ describe('UsersService.searchUsers (RUN-62)', () => {
   // No query means the People page's opening state: the caller's counts and
   // nothing else. A LIKE '%%' over every account would be the one query that
   // gets slower forever, so it is never issued.
-  it('never scans the user table without a query', async () => {
-    const { prisma, service } = makeSearchService([ANA]);
+  //
+  // A bare wildcard is the same request wearing a disguise (review fix):
+  // Prisma does not escape LIKE's metacharacters inside `contains`, so '%'
+  // would otherwise match everyone. It is stripped, which leaves no terms,
+  // which lands in exactly this short-circuit.
+  it.each([{}, { search: '%' }, { search: '_ \\' }])(
+    'never scans the user table for %s',
+    async (query) => {
+      const { prisma, service } = makeSearchService([ANA]);
 
-    const result = await service.searchUsers(VISITOR, {});
+      const result = await service.searchUsers(VISITOR, query);
 
-    expect(prisma.user.findMany).not.toHaveBeenCalled();
-    expect(prisma.user.count).not.toHaveBeenCalled();
-    expect(result).toMatchObject({
-      items: [],
-      total: 0,
-      counts: { followers: 2, following: 2 },
-    });
-  });
+      expect(prisma.user.findMany).not.toHaveBeenCalled();
+      expect(prisma.user.count).not.toHaveBeenCalled();
+      // The counts are still the answer: they are what the page shows
+      // before anything worth searching for has been typed.
+      expect(result).toMatchObject({
+        items: [],
+        total: 0,
+        counts: { followers: 2, following: 2 },
+      });
+    },
+  );
 });
 
 describe('UsersService.findPublicProfile', () => {

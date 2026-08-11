@@ -96,6 +96,11 @@ function isResult(value: unknown): value is UserSearchResult {
         typeof item.following === 'boolean',
     ) &&
     typeof result.total === 'number' &&
+    // Validated even though nothing renders them (review fix): a mirrored
+    // shape that declares fields it never checks is a shape that quietly
+    // stops matching the server.
+    typeof result.page === 'number' &&
+    typeof result.pageSize === 'number' &&
     typeof result.counts?.followers === 'number' &&
     typeof result.counts?.following === 'number'
   );
@@ -119,10 +124,15 @@ async function fetchResults(query: string): Promise<UserSearchResult> {
 async function load(query: string): Promise<void> {
   const token = (loadToken += 1);
   inFlightFor = query;
-  // Re-running the query already on screen (a retry, a re-visit) keeps its
-  // rows visible while the fresh ones arrive. A DIFFERENT query must not:
-  // showing the previous query's people under new text is worse than
-  // showing nothing for a beat.
+  // Re-running the query already on screen keeps its rows visible while the
+  // fresh ones arrive. A DIFFERENT query must not: showing the previous
+  // query's people under new text is worse than showing nothing for a beat.
+  //
+  // The case that reaches this (review question): leaving /people and
+  // coming back. The store still holds the empty query, ready, so the new
+  // mount re-reads it with the counts still on screen instead of blinking
+  // through a placeholder. The error card's retry does not - a failed
+  // snapshot is not 'ready' - which is correct: there is nothing to keep.
   const refreshingInPlace = snapshot.query === query && snapshot.status === 'ready';
   if (!refreshingInPlace) {
     publish({ ...snapshot, query, status: 'loading', items: [], total: 0, error: null });

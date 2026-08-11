@@ -27,12 +27,22 @@ export class UserSearchQueryDto extends PaginationQueryDto {
   search?: string;
 }
 
-// The query as the WHERE clause needs it: trimmed, split on whitespace and
-// capped. Exported for the spec, which asserts the "ana tes" case directly.
+// LIKE's own wildcards, which Prisma's `contains` does NOT escape: it
+// parameterizes the value and then wraps it as %value%, so a '%' the caller
+// typed stays a wildcard. Left in, `?search=%` would match every account in
+// the database - precisely the unbounded scan the caps above exist to
+// prevent. Stripped rather than escaped because Prisma exposes no ESCAPE
+// clause to escape them with, and no real name contains any of the three.
+const LIKE_WILDCARDS = /[%_\\]/g;
+
+// The query as the WHERE clause needs it: trimmed, de-wildcarded, split on
+// whitespace and capped. Exported for the spec, which asserts the "ana tes"
+// case directly.
 export function searchTerms(raw: string | undefined): string[] {
   return (raw ?? '')
     .trim()
     .split(/\s+/)
+    .map((term) => term.replace(LIKE_WILDCARDS, ''))
     .filter((term) => term.length > 0)
     .slice(0, MAX_SEARCH_TERMS);
 }

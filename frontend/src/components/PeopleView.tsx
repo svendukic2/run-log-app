@@ -3,13 +3,15 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import FollowButton from '@/components/FollowButton';
-import { initialsOf } from '@/lib/eventMath';
+import { formatCount, initialsOf } from '@/lib/eventMath';
 import { personRoute } from '@/lib/routes';
 import {
   reloadUserSearch,
   setFollowingInSearch,
   useUserSearch,
+  type FollowCounts,
   type FoundRunner,
+  type UserSearchStatus,
 } from '@/lib/userSearch';
 
 const CARD = 'rounded-[18px] border border-line bg-white';
@@ -18,6 +20,12 @@ const CARD = 'rounded-[18px] border border-line bg-white';
 // typing pauses", not "per keystroke"). Long enough that a name typed at
 // speed costs one request, short enough that the pause is not felt.
 const SEARCH_DEBOUNCE_MS = 300;
+
+// Mirrors MAX_SEARCH_LENGTH in the backend's UserSearchQueryDto. Without
+// it, pasting a paragraph into the box answers 400 and the reader gets a
+// red "the search didn't run" card for what is really "no such runner"
+// (review fix).
+const MAX_SEARCH_LENGTH = 60;
 
 // V2 · Community - People (RUN-62): search runners by name, follow or
 // unfollow them from the row, and open a public profile by clicking the row
@@ -45,6 +53,7 @@ export default function PeopleView() {
             onChange={(event) => setInput(event.target.value)}
             placeholder="Search by name"
             autoComplete="off"
+            maxLength={MAX_SEARCH_LENGTH}
             className="w-full rounded-[12px] border border-line px-[14px] py-[11px] text-[14px] text-text-primary placeholder:text-tertiary focus-visible:border-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           />
         </div>
@@ -53,20 +62,35 @@ export default function PeopleView() {
             serves with every answer, so they are here before anything is
             typed and stay put while a search runs (the store keeps them
             across query changes for exactly that reason). */}
-        <p className="text-[13px] text-secondary">
-          {counts ? (
-            <>
-              {formatCount(counts.followers, 'follower')} · {counts.following} following
-            </>
-          ) : (
-            <span className="text-tertiary">Loading your follow counts…</span>
-          )}
-        </p>
+        <CountsLine counts={counts} status={status} />
       </section>
 
       <SearchResults query={query} status={status} error={error} items={items} total={total} />
     </div>
   );
+}
+
+// My own follow counts, which belong to the account rather than to any
+// query. A failed read is reported HERE rather than as a search error
+// (review fix): landing on the page reads the endpoint for these counts
+// alone, and a reader who has typed nothing must not be told their search
+// failed. Typing a name issues the next request, which is the retry.
+function CountsLine({ counts, status }: { counts: FollowCounts | null; status: UserSearchStatus }) {
+  if (counts) {
+    return (
+      <p className="text-[13px] text-secondary">
+        {formatCount(counts.followers, 'follower')} · {counts.following} following
+      </p>
+    );
+  }
+  if (status === 'error') {
+    return (
+      <p role="alert" className="text-[13px] text-accent-pressed">
+        Couldn&apos;t load your follow counts. Searching for a name tries again.
+      </p>
+    );
+  }
+  return <p className="text-[13px] text-tertiary">Loading your follow counts…</p>;
 }
 
 // Everything below the box. Split out so the states read as a list rather
@@ -79,11 +103,23 @@ function SearchResults({
   total,
 }: {
   query: string;
-  status: 'loading' | 'ready' | 'error';
+  status: UserSearchStatus;
   error: string | null;
   items: FoundRunner[];
   total: number;
 }) {
+  // The resting state (AC3) comes FIRST, before the error branch: with no
+  // query there is no search to have failed, whatever the counts read did.
+  // One line of hint copy rather than a suggested list nobody asked for.
+  if (query === '') {
+    return (
+      <p className="px-[10px] text-[13.5px] leading-[1.55] text-secondary">
+        Search for a runner by name to follow them. Following someone puts their runs on your radar;
+        it does not open a private profile.
+      </p>
+    );
+  }
+
   if (status === 'error') {
     return (
       <section
@@ -111,18 +147,6 @@ function SearchResults({
     );
   }
 
-  // The resting state (AC3): no query typed, so nothing is claimed about
-  // who exists. One line of hint copy rather than a suggested list nobody
-  // asked for.
-  if (query === '') {
-    return (
-      <p className="px-[10px] text-[13.5px] leading-[1.55] text-secondary">
-        Search for a runner by name to follow them. Following someone puts their runs on your radar;
-        it does not open a private profile.
-      </p>
-    );
-  }
-
   if (status === 'loading') {
     return (
       <p role="status" className="px-[10px] py-[6px] text-[13.5px] text-secondary">
@@ -133,7 +157,9 @@ function SearchResults({
 
   if (items.length === 0) {
     return (
-      <p className="px-[10px] text-[13.5px] leading-[1.55] text-secondary">
+      // break-words so a long pasted query cannot push the page wider than
+      // a phone screen (review fix).
+      <p className="px-[10px] text-[13.5px] leading-[1.55] break-words text-secondary">
         No runners match “{query}”. Check the spelling, or try just the first name.
       </p>
     );
@@ -181,12 +207,7 @@ function RunnerRow({ runner }: { runner: FoundRunner }) {
         </Link>
       </span>
 
-      <FollowButton
-        target={runner}
-        setFollowing={setFollowingInSearch}
-        size="row"
-        className="flex min-w-0 flex-col items-end gap-[2px] text-right"
-      />
+      <FollowButton target={runner} setFollowing={setFollowingInSearch} size="row" />
     </li>
   );
 }
@@ -203,8 +224,4 @@ function useDebouncedValue(value: string, delayMs: number): string {
   }, [value, delayMs]);
 
   return debounced;
-}
-
-function formatCount(value: number, noun: string): string {
-  return `${value} ${value === 1 ? noun : `${noun}s`}`;
 }

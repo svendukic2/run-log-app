@@ -209,9 +209,17 @@ export function initialsOf(firstName: string, lastName: string): string {
   return initials.toUpperCase() || '?';
 }
 
+// "1 follower" / "3 followers": the naive English plural, for counts whose
+// noun just takes an -s. Lives beside initialsOf because the same community
+// rows need both (review fix: the profile header and the People page had
+// grown a copy each).
+export function formatCount(value: number, noun: string): string {
+  return `${value} ${value === 1 ? noun : `${noun}s`}`;
+}
+
 // "1 run" / "4 runs": the leaderboard's secondary column.
 export function formatRunCount(count: number): string {
-  return `${count} ${count === 1 ? 'run' : 'runs'}`;
+  return formatCount(count, 'run');
 }
 
 /* Form values ---------------------------------------------------------------- */

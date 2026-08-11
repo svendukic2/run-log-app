@@ -82,6 +82,15 @@ describe('User search API (e2e)', () => {
     expect((matched.body as UserSearchResponse).items[0].following).toBe(true);
   });
 
+  // Review fix, and the one case only a real LIKE can settle: Prisma does
+  // not escape wildcards inside `contains`, so an unstripped '%' would list
+  // every account here.
+  it('treats a bare LIKE wildcard as no query at all', async () => {
+    const response = await search(bruno, '?search=%25');
+
+    expect((response.body as UserSearchResponse).items).toEqual([]);
+  });
+
   it('rejects an unknown query param like every other list', async () => {
     await request(app.getHttpServer())
       .get('/api/users?nope=1')

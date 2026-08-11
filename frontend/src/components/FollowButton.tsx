@@ -21,9 +21,11 @@ interface FollowButtonProps {
   // rather than imported so this component belongs to no single store.
   setFollowing: (userId: string, next: boolean) => Promise<void>;
   // 'row' is the smaller pill the People rows use, where the button sits at
-  // the end of a line of text rather than beside a page heading.
+  // the end of a line of text rather than beside a page heading. It carries
+  // its own wrapper layout rather than taking a className beside it (review
+  // fix): two knobs shaping one element is how the failure line ended up
+  // under the row's link overlay instead of above it.
   size?: 'page' | 'row';
-  className?: string;
 }
 
 // The Follow / Following toggle, built on the RUN-61 follow API. Born on the
@@ -39,13 +41,10 @@ interface FollowButtonProps {
 //
 // `relative z-10` like JoinEventButton, and for the same reason: inside a
 // People row the whole row is a stretched link, and the button has to sit
-// above that overlay so following someone never also navigates (AC5).
-export default function FollowButton({
-  target,
-  setFollowing,
-  size = 'page',
-  className,
-}: FollowButtonProps) {
+// above that overlay so following someone never also navigates (AC5). The
+// 'row' WRAPPER carries it too, so the failure line below the button is
+// above the overlay as well - clicking an error message must not navigate.
+export default function FollowButton({ target, setFollowing, size = 'page' }: FollowButtonProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -66,12 +65,15 @@ export default function FollowButton({
     }
   };
 
+  // 'row' also caps its width, so a wrapped failure sentence cannot squeeze
+  // the name column off a phone screen.
+  const wrapper =
+    size === 'row'
+      ? 'relative z-10 flex min-w-0 max-w-[45%] flex-col items-end gap-[2px] text-right'
+      : 'flex min-w-0 flex-col items-start gap-[2px] sm:items-end sm:text-right';
+
   return (
-    <div
-      className={
-        className ?? 'flex min-w-0 flex-col items-start gap-[2px] sm:items-end sm:text-right'
-      }
-    >
+    <div className={wrapper}>
       <button
         type="button"
         onClick={toggleFollow}

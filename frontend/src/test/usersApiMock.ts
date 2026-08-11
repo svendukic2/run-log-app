@@ -37,6 +37,10 @@ let failure: { method: string; status: number } | null = null;
 // The caller's own follower count, which no seeded row implies (seeding
 // someone does not make them follow you). seedRunners sets it.
 let myFollowerCount = 0;
+// When set, the NEXT search request is parked until the test lets it go
+// (holdNextSearch below), so an out-of-order answer can be staged.
+let holdNextSearch_ = false;
+let releaseHeld: (() => void) | null = null;
 
 // The server-side gate, mirrored: a private profile answers 200 with no
 // body below the header, and only the owner overrides it.
@@ -100,15 +104,23 @@ export function handleUsersRequest(url: string, method: string): Promise<Respons
   if (url.startsWith('/api/users?') && method === 'GET') {
     const search = new URLSearchParams(url.split('?')[1] ?? '').get('search') ?? '';
     const items = searchRows(search);
-    return Promise.resolve(
-      jsonResponse(200, {
-        items,
-        total: items.length,
-        page: 1,
-        pageSize: 20,
-        counts: myCounts(),
-      } satisfies UserSearchResult),
-    );
+    const body: UserSearchResult = {
+      items,
+      total: items.length,
+      page: 1,
+      pageSize: 20,
+      counts: myCounts(),
+    };
+    // A held request answers only when the test releases it, with the body
+    // as it was AT REQUEST TIME - which is what makes a released answer a
+    // genuinely stale one. One shot: everything after it is served normally.
+    if (holdNextSearch_) {
+      holdNextSearch_ = false;
+      return new Promise<Response>((resolve) => {
+        releaseHeld = () => resolve(jsonResponse(200, body));
+      });
+    }
+    return Promise.resolve(jsonResponse(200, body));
   }
 
   const follow = url.match(/^\/api\/users\/([^/]+)\/follow$/);
@@ -145,8 +157,21 @@ export function installUsersApiMock(): void {
   db = new Map();
   failure = null;
   myFollowerCount = 0;
+  holdNextSearch_ = false;
+  releaseHeld = null;
   __resetPublicProfileForTests(null);
   __resetUserSearchForTests(null);
+}
+
+// Parks the next search response and hands back its release, so a test can
+// let a SLOW answer land after a newer one and prove the store's load token
+// discards it.
+export function holdNextSearch(): () => void {
+  holdNextSearch_ = true;
+  return () => {
+    releaseHeld?.();
+    releaseHeld = null;
+  };
 }
 
 // Seeds runners the People search can find (RUN-62). Unlike
