@@ -2,22 +2,20 @@ import { randomBytes } from 'node:crypto';
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 
 /**
- * Sprint 1 acceptance tests. One describe block per Jira task, one test per
- * acceptance criterion (or a tight group of them). Sprint goal under test:
- * "a new user completes onboarding and logs their first run."
+ * Sprint 1 acceptance tests, updated for the auth flows RUN-58 introduced:
+ * the v1 Welcome form is gone, Sign up collects names/email (plus the
+ * password that makes it a real account) and the setup steps run after
+ * signup. One describe block per Jira task where the v1 flow survives
+ * (RUN-9..15, RUN-23); the RUN-58 block covers the sign in / sign up /
+ * sign out criteria that replaced the Welcome screen (RUN-7/8).
  *
- * Covers RUN-7, RUN-8, RUN-9, RUN-10, RUN-11, RUN-12, RUN-13, RUN-15, RUN-23.
- *
- * Database-backed since RUN-51: the app persists through the API (RUN-48/50),
- * so the backend and PostgreSQL must run - localStorage now holds only the
- * device session (`runlog.session`) and the wizard's local draft
- * (`runlog.onboardingDraft`). Isolation is per ACCOUNT, not per database
- * wipe: every fresh browser context mints its own device account on first
- * server contact, and every API endpoint is scoped to the Bearer token's
- * user, so tests cannot see each other's rows by construction.
+ * Database-backed since RUN-51: isolation is per ACCOUNT, not per database
+ * wipe - every test signs up its own unique account, and every /api
+ * endpoint is scoped to the Bearer token's user.
  */
 
 const PROFILE = { firstName: 'Marko', lastName: 'Kovač', email: 'marko@email.com' };
+const PASSWORD = 'correct-horse-battery';
 
 const SESSION_KEY = 'runlog.session';
 const DRAFT_KEY = 'runlog.onboardingDraft';
@@ -29,31 +27,28 @@ function todayIso(): string {
   return `${now.getFullYear()}-${month}-${day}`;
 }
 
-// The same credential shape frontend/src/lib/session.ts mints: unique by
-// construction on the reserved @device.runlog domain, so signup never 409s.
-function mintCredentials(): { email: string; password: string } {
-  return {
-    email: `runner-${randomBytes(8).toString('hex')}@device.runlog`,
-    password: randomBytes(24).toString('hex'),
-  };
+// Unique per call: tests run fullyParallel and signup 409s on a reused
+// email, so every walk through the signup form mints its own address.
+function uniqueEmail(): string {
+  return `runner-${randomBytes(8).toString('hex')}@example.com`;
 }
 
 interface SeededAccount {
   token: string;
+  email: string;
   authHeaders: { Authorization: string };
 }
 
 // Fast-path for tests that need an onboarded user without walking the flow:
 // creates a REAL account through the API (signup, then the same goal and
-// profile PUTs "Finish setup" makes) and plants its session in localStorage
-// before the page loads. The API calls go through the frontend's /api proxy,
-// exactly like the app's own requests.
+// profile PUTs "Finish setup" makes) and plants its session (token + email,
+// RUN-58) in localStorage before the page loads.
 async function seedOnboardedUser(page: Page, request: APIRequestContext): Promise<SeededAccount> {
-  const credentials = mintCredentials();
+  const email = uniqueEmail();
   const signup = await request.post('/api/auth/signup', {
-    data: { ...credentials, firstName: PROFILE.firstName, lastName: PROFILE.lastName },
+    data: { email, password: PASSWORD, firstName: PROFILE.firstName, lastName: PROFILE.lastName },
   });
-  expect(signup.ok(), 'device-account signup must succeed').toBeTruthy();
+  expect(signup.ok(), 'signup must succeed').toBeTruthy();
   const { token } = (await signup.json()) as { token: string };
   const authHeaders = { Authorization: `Bearer ${token}` };
 
@@ -64,7 +59,7 @@ async function seedOnboardedUser(page: Page, request: APIRequestContext): Promis
   expect(goal.ok(), 'goal seed must succeed').toBeTruthy();
   const profile = await request.put('/api/profile', {
     headers: authHeaders,
-    data: { ...PROFILE, runningLevel: 'Beginner', defaultWeeklyGoalKm: 20 },
+    data: { ...PROFILE, email, runningLevel: 'Beginner', defaultWeeklyGoalKm: 20 },
   });
   expect(profile.ok(), 'profile seed must succeed').toBeTruthy();
 
@@ -72,9 +67,9 @@ async function seedOnboardedUser(page: Page, request: APIRequestContext): Promis
     ({ key, session }) => {
       window.localStorage.setItem(key, JSON.stringify(session));
     },
-    { key: SESSION_KEY, session: { ...credentials, token } },
+    { key: SESSION_KEY, session: { email, token } },
   );
-  return { token, authHeaders };
+  return { token, email, authHeaders };
 }
 
 async function readDraft(page: Page): Promise<{ profile?: unknown; goal?: unknown } | null> {
@@ -89,77 +84,129 @@ async function runsOf(request: APIRequestContext, account: SeededAccount): Promi
   return (await response.json()) as unknown[];
 }
 
-async function fillWelcomeForm(page: Page): Promise<void> {
+// Walks the Sign up form; the caller is on /signup afterwards' next stop,
+// the goal setup step.
+async function signUpThroughForm(page: Page, email: string): Promise<void> {
+  await page.goto('/signup');
   await page.getByLabel('First name').fill(PROFILE.firstName);
   await page.getByLabel('Last name').fill(PROFILE.lastName);
-  await page.getByLabel('Email').fill(PROFILE.email);
+  await page.getByLabel('Email').fill(email);
+  await page.getByLabel('Password').fill(PASSWORD);
+  await page.getByRole('button', { name: /Create account/ }).click();
+  await expect(page).toHaveURL(/\/setup\/goal$/);
 }
 
-/* RUN-7 - Welcome screen layout and copy (WEL-1, WEL-4) ---------------------- */
+/* RUN-58 - Sign in, Sign up and session handling ------------------------------ */
 
-test.describe('RUN-7 Welcome screen', () => {
-  test('shows badge, heading, intro copy and the no-password caption', async ({ page }) => {
+test.describe('RUN-58 Auth screens and session', () => {
+  test('an unauthenticated visitor lands on Sign in from any app route (AC1)', async ({
+    page,
+  }) => {
+    await page.goto('/dashboard');
+    await expect(page).toHaveURL(/\/signin$/);
+    await expect(page.getByRole('link', { name: 'Sign up' })).toBeVisible();
+
     await page.goto('/');
-    await expect(page.getByText('Welcome', { exact: true })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Welcome to Run Log' })).toBeVisible();
-    await expect(page.getByText('Track every run, hit your weekly goals')).toBeVisible();
-    await expect(page.getByText(/No password needed/)).toBeVisible();
+    await expect(page).toHaveURL(/\/signin$/);
+    // The retired v1 promise stays retired.
+    await expect(page.getByText(/No password needed/)).toHaveCount(0);
   });
 
-  test('has no password field anywhere (WEL-4)', async ({ page }) => {
-    await page.goto('/');
-    await expect(page.getByRole('heading', { name: 'Welcome to Run Log' })).toBeVisible();
-    await expect(page.locator('input[type="password"]')).toHaveCount(0);
-  });
-
-  test('an onboarded user never sees Welcome again', async ({ page, request }) => {
-    await seedOnboardedUser(page, request);
-    await page.goto('/');
-    // "Onboarded" is derived from the profile existing server-side (RUN-50),
-    // so this proves the landing route reads the API, not a local flag.
-    await expect(page).toHaveURL(/\/dashboard$/);
-  });
-});
-
-/* RUN-8 - Welcome profile form with validation (WEL-2, WEL-3, WEL-5, A1) ----- */
-
-test.describe('RUN-8 Welcome profile form', () => {
-  test('renders the three inputs with designed placeholders', async ({ page }) => {
-    await page.goto('/');
-    await expect(page.getByPlaceholder('Your first name')).toBeVisible();
-    await expect(page.getByPlaceholder('Your last name')).toBeVisible();
-    await expect(page.getByPlaceholder('you@email.com')).toBeVisible();
-  });
-
-  test('empty first name blocks navigation with an inline message', async ({ page }) => {
-    await page.goto('/');
-    await page.getByLabel('Last name').fill(PROFILE.lastName);
-    await page.getByLabel('Email').fill(PROFILE.email);
-    await page.getByRole('button', { name: /Get started/ }).click();
-    await expect(page.getByText('First name is required')).toBeVisible();
-    await expect(page).toHaveURL('/');
-  });
-
-  test('invalid email blocks navigation with an inline message', async ({ page }) => {
-    await page.goto('/');
-    await fillWelcomeForm(page);
-    await page.getByLabel('Email').fill('not-an-email');
-    await page.getByRole('button', { name: /Get started/ }).click();
-    await expect(page.getByText('Enter a valid email address')).toBeVisible();
-    await expect(page).toHaveURL('/');
-  });
-
-  test('valid data stores the wizard draft and opens Setup - Weekly goal', async ({ page }) => {
-    await page.goto('/');
-    await fillWelcomeForm(page);
-    await page.getByRole('button', { name: /Get started/ }).click();
-    await expect(page).toHaveURL(/\/setup\/goal$/);
-    // The badge greets by first name (GOAL-1 / RUN-8 AC5).
+  test('signup continues straight into the setup steps (AC2)', async ({ page }) => {
+    await signUpThroughForm(page, uniqueEmail());
+    await expect(page.getByText('Step 1 of 2')).toBeVisible();
     await expect(page.getByText(`Welcome, ${PROFILE.firstName}`)).toBeVisible();
-    // No account exists yet: the answers live in the local wizard draft
-    // until "Finish setup" (RUN-50).
-    const draft = await readDraft(page);
-    expect(draft?.profile).toMatchObject(PROFILE);
+  });
+
+  test('valid credentials land on the Dashboard with data loaded (AC3)', async ({
+    page,
+    request,
+  }) => {
+    // The account exists (seeded through the API), but THIS browser context
+    // is signed out: the session is never planted.
+    const email = uniqueEmail();
+    const signup = await request.post('/api/auth/signup', {
+      data: { email, password: PASSWORD, firstName: PROFILE.firstName, lastName: PROFILE.lastName },
+    });
+    const { token } = (await signup.json()) as { token: string };
+    await request.put('/api/goal', {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { km: 20, startDate: todayIso(), endDate: null },
+    });
+    await request.put('/api/profile', {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { ...PROFILE, email, runningLevel: 'Beginner', defaultWeeklyGoalKm: 20 },
+    });
+
+    await page.goto('/signin');
+    await page.getByLabel('Email').fill(email);
+    await page.getByLabel('Password').fill(PASSWORD);
+    await page.getByRole('button', { name: /^Sign in$/ }).click();
+    await expect(page).toHaveURL(/\/dashboard$/);
+    await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
+  });
+
+  test('wrong credentials show one vague inline error (AC4)', async ({ page }) => {
+    await page.goto('/signin');
+    await page.getByLabel('Email').fill(uniqueEmail());
+    await page.getByLabel('Password').fill('not-the-password');
+    await page.getByRole('button', { name: /^Sign in$/ }).click();
+    // Scoped by text, not the bare alert role: Next's route announcer is
+    // also role="alert".
+    await expect(page.getByText('Wrong email or password.')).toBeVisible();
+    await expect(page).toHaveURL(/\/signin$/);
+  });
+
+  test('sign out from the sidebar footer clears the session and lands on Sign in (AC5)', async ({
+    page,
+    request,
+  }) => {
+    // Signs in through the real UI instead of seedOnboardedUser: that
+    // helper plants the session with an init script which would re-plant it
+    // on every navigation, including the one sign-out performs.
+    const email = uniqueEmail();
+    const signup = await request.post('/api/auth/signup', {
+      data: { email, password: PASSWORD, firstName: PROFILE.firstName, lastName: PROFILE.lastName },
+    });
+    const { token } = (await signup.json()) as { token: string };
+    await request.put('/api/goal', {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { km: 20, startDate: todayIso(), endDate: null },
+    });
+    await request.put('/api/profile', {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { ...PROFILE, email, runningLevel: 'Beginner', defaultWeeklyGoalKm: 20 },
+    });
+    await page.goto('/signin');
+    await page.getByLabel('Email').fill(email);
+    await page.getByLabel('Password').fill(PASSWORD);
+    await page.getByRole('button', { name: /^Sign in$/ }).click();
+    await expect(page).toHaveURL(/\/dashboard$/);
+
+    await page.getByRole('button', { name: 'Sign out' }).click();
+    await expect(page).toHaveURL(/\/signin$/);
+    const session = await page.evaluate((key) => window.localStorage.getItem(key), SESSION_KEY);
+    expect(session).toBeNull();
+
+    // The guard holds after the sign-out too.
+    await page.goto('/dashboard');
+    await expect(page).toHaveURL(/\/signin$/);
+  });
+
+  test('an invalid token signs out cleanly instead of showing broken screens (AC6)', async ({
+    page,
+    request,
+  }) => {
+    const account = await seedOnboardedUser(page, request);
+    // Corrupt the stored token: the first API call 401s.
+    await page.addInitScript(
+      ({ key, session }) => {
+        window.localStorage.setItem(key, JSON.stringify(session));
+      },
+      { key: SESSION_KEY, session: { email: account.email, token: 'expired-nonsense' } },
+    );
+    await page.goto('/dashboard');
+    await expect(page).toHaveURL(/\/signin$/);
   });
 });
 
@@ -167,10 +214,7 @@ test.describe('RUN-8 Welcome profile form', () => {
 
 test.describe('RUN-9 Weekly goal value control', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/');
-    await fillWelcomeForm(page);
-    await page.getByRole('button', { name: /Get started/ }).click();
-    await expect(page).toHaveURL(/\/setup\/goal$/);
+    await signUpThroughForm(page, uniqueEmail());
   });
 
   test('shows step indicator, badge and heading with default 20 km / week', async ({ page }) => {
@@ -218,10 +262,7 @@ test.describe('RUN-9 Weekly goal value control', () => {
 
 test.describe('RUN-10 Goal dates and navigation', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/');
-    await fillWelcomeForm(page);
-    await page.getByRole('button', { name: /Get started/ }).click();
-    await expect(page).toHaveURL(/\/setup\/goal$/);
+    await signUpThroughForm(page, uniqueEmail());
   });
 
   test('start date is prefilled with today, end date is optional', async ({ page }) => {
@@ -264,9 +305,7 @@ test.describe('RUN-10 Goal dates and navigation', () => {
 
 test.describe('RUN-11 Running level step', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/');
-    await fillWelcomeForm(page);
-    await page.getByRole('button', { name: /Get started/ }).click();
+    await signUpThroughForm(page, uniqueEmail());
     await page.getByRole('button', { name: /Start tracking/ }).click();
     await expect(page).toHaveURL(/\/setup\/level$/);
   });
@@ -298,7 +337,7 @@ test.describe('RUN-11 Running level step', () => {
     await expect(page.getByText(`Welcome, ${PROFILE.firstName}`)).toBeVisible();
   });
 
-  test('"Finish setup" creates the account server-side and opens the Dashboard', async ({
+  test('"Finish setup" creates the profile server-side and opens the Dashboard', async ({
     page,
   }) => {
     await page.getByText('Run regularly, comfortable with 5-10K').click();
@@ -306,7 +345,7 @@ test.describe('RUN-11 Running level step', () => {
     await expect(page).toHaveURL(/\/dashboard$/);
 
     // "Onboarding complete" IS the profile existing server-side (RUN-50):
-    // prove it through the API with the session the finish just minted.
+    // prove it through the API with the session signup minted.
     const raw = await page.evaluate((key) => window.localStorage.getItem(key), SESSION_KEY);
     const session = JSON.parse(raw ?? 'null') as { token: string } | null;
     expect(session?.token).toBeTruthy();
@@ -315,7 +354,8 @@ test.describe('RUN-11 Running level step', () => {
     });
     expect(response.ok()).toBeTruthy();
     expect((await response.json()) as { runningLevel: string }).toMatchObject({
-      ...PROFILE,
+      firstName: PROFILE.firstName,
+      lastName: PROFILE.lastName,
       runningLevel: 'Intermediate',
     });
   });
@@ -355,10 +395,16 @@ test.describe('RUN-12/13 App shell and routing', () => {
     }
   });
 
-  test('onboarding screens render without the sidebar', async ({ page }) => {
-    await page.goto('/');
-    await expect(page.getByRole('heading', { name: 'Welcome to Run Log' })).toBeVisible();
+  test('auth and setup screens render without the sidebar', async ({ page }) => {
+    await page.goto('/signin');
+    await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible();
     await expect(page.getByRole('navigation', { name: 'Main' })).toHaveCount(0);
+  });
+
+  test('an onboarded user opening "/" lands on the dashboard', async ({ page, request }) => {
+    await seedOnboardedUser(page, request);
+    await page.goto('/');
+    await expect(page).toHaveURL(/\/dashboard$/);
   });
 });
 
@@ -485,12 +531,10 @@ test.describe('RUN-23 Add run modal', () => {
 
 /* Sprint goal - the full journey end to end ---------------------------------- */
 
-test('sprint goal: a new user onboards and logs their first run, and it survives a reload', async ({
+test('sprint goal: a new user signs up, onboards, logs a run, and it survives a reload', async ({
   page,
 }) => {
-  await page.goto('/');
-  await fillWelcomeForm(page);
-  await page.getByRole('button', { name: /Get started/ }).click();
+  await signUpThroughForm(page, uniqueEmail());
   await page.getByRole('button', { name: 'Increase weekly goal' }).click();
   await page.getByRole('button', { name: /Start tracking/ }).click();
   await page.getByText('Run regularly, comfortable with 5-10K').click();
@@ -505,10 +549,12 @@ test('sprint goal: a new user onboards and logs their first run, and it survives
   await dialog.getByRole('button', { name: /Save run/ }).click();
   await expect(dialog).toHaveCount(0);
 
-  // Everything survives a reload BECAUSE it lives server-side now: the
-  // session re-authenticates, the profile keeps onboarding "complete" and
-  // the run comes back from the API.
+  // Everything survives a reload BECAUSE it lives server-side: the session
+  // re-authenticates, the profile keeps onboarding "complete" and the run
+  // comes back from the API.
   await page.reload();
   await expect(page).toHaveURL(/\/dashboard$/);
-  await expect(page.getByRole('region', { name: 'Recent runs' }).getByText('River trail')).toBeVisible();
+  await expect(
+    page.getByRole('region', { name: 'Recent runs' }).getByText('River trail'),
+  ).toBeVisible();
 });

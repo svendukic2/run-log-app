@@ -204,9 +204,9 @@ describe('AppDataBoundary (RUN-48, widened in RUN-50)', () => {
     );
 
     expect(
-      await screen.findByRole('heading', { name: "This device can't sign in to its data" }),
+      await screen.findByRole('heading', { name: 'Your session has ended' }),
     ).toBeInTheDocument();
-    expect(screen.getByText(/Clearing this site's data starts a fresh log/)).toBeInTheDocument();
+    expect(screen.getByText(/Taking you to Sign in/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 

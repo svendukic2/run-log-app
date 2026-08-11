@@ -33,13 +33,7 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import { fetchGoal, fetchWeekTarget, putWeekTarget, type WeekTarget } from './accountApi';
 import { GOAL_DEFAULT_KM, todayIso, WEEK_TARGET_MAX_KM, type Goal } from './goalMath';
-import {
-  ACCOUNT_RECORDS_CHANGED_EVENT,
-  ensureLegacyImport,
-  getAccountGeneration,
-  hasLegacyOnboardingData,
-  useProfile,
-} from './onboarding';
+import { ACCOUNT_RECORDS_CHANGED_EVENT, getAccountGeneration, useProfile } from './onboarding';
 import { startOfWeek } from './runMath';
 import { ApiError, hasStoredSession } from './session';
 
@@ -124,15 +118,8 @@ async function loadGoalData(silent = false): Promise<void> {
   loadedGeneration = getAccountGeneration();
   if (!silent) publish({ ...snapshot, status: 'loading', error: null });
   try {
-    // Same lazy rule as the runs and profile stores: no account and no v1
-    // data means no goal by definition, answered without the network.
-    if (!hasStoredSession() && !hasLegacyOnboardingData()) {
-      publish({ status: 'ready', goal: null, weekTarget: null, error: null });
-      return;
-    }
-    // The import (owned by onboarding.ts) must finish before the first
-    // read, or this store would cache a pre-import 404.
-    await ensureLegacyImport();
+    // Same lazy rule as the runs and profile stores: signed out means no
+    // goal by definition, answered without the network.
     if (!hasStoredSession()) {
       publish({ status: 'ready', goal: null, weekTarget: null, error: null });
       return;

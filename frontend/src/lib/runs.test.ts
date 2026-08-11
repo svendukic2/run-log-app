@@ -1,7 +1,7 @@
 import React from 'react';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import {
-  expireRunsTokens,
+  clearTestSession,
   failRunsApi,
   holdRunsLoading,
   makeRunsLoadFail,
@@ -385,11 +385,11 @@ describe('emptyRunForm (AC1)', () => {
 });
 
 describe('store (API-backed since RUN-48)', () => {
-  // jest.setup.ts installs a fresh in-memory /api/runs backend and primes
-  // the cache to ready-and-empty before every test. The device session is
-  // cleared too: the mock's issued-token set resets per test, so a session
-  // carried over from a previous test would 401 once and re-login, adding
-  // phantom calls to the exact counts asserted below.
+  // jest.setup.ts installs a fresh in-memory /api/runs backend, plants a
+  // signed-in session and primes the cache to ready-and-empty before every
+  // test. localStorage is cleared here so legacy keys from another test
+  // never leak into the load path (the session survives the wipe: its
+  // memory copy is the source of truth, RUN-58).
   beforeEach(() => {
     window.localStorage.clear();
   });
@@ -525,11 +525,10 @@ describe('store (API-backed since RUN-48)', () => {
     expect(getRuns()).toEqual([run]);
   });
 
-  it('answers a fresh device without the network: no session, no legacy data, no requests', async () => {
-    // A device that never wrote anything has an empty log by definition;
-    // resolving that with an API call would mint a server account as a
-    // side effect of a page view (crawlers, previews, incognito).
-    window.localStorage.clear();
+  it('answers a signed-out visitor without the network: ready-and-empty, no requests', async () => {
+    // Signed out means an empty log by definition (RUN-58): the sign-in
+    // screen must not fire doomed, 401-bound requests.
+    clearTestSession();
     __resetRunsStoreForTests(null);
 
     render(React.createElement(StatusProbe));
@@ -592,31 +591,17 @@ describe('store (API-backed since RUN-48)', () => {
     consoleError.mockRestore();
   });
 
-  it('recovers from an expired token mid-session: one silent re-login, one retry, one run', async () => {
-    await addRun(toRunDraft(makeForm({ routeName: 'Before expiry' })));
-    expireRunsTokens();
-
-    const run = await addRun(toRunDraft(makeForm({ routeName: 'After expiry' })));
-
-    expect(run.routeName).toBe('After expiry');
-    expect(getRuns()).toHaveLength(2);
-    const calls = (global.fetch as jest.Mock).mock.calls as Array<[string, RequestInit?]>;
-    const logins = calls.filter(([url]) => url === '/api/auth/login');
-    const posts = calls.filter(([url, init]) => url === '/api/runs' && init?.method === 'POST');
-    // One login per addRun's session (first mint + post-expiry re-login),
-    // and exactly three POSTs: the first run, the 401ed attempt, its single
-    // retry. No duplicate run was created.
-    expect(logins).toHaveLength(2);
-    expect(posts).toHaveLength(3);
-  });
 });
 
 describe('one-time import of v1 localStorage runs (RUN-48)', () => {
+  // Since RUN-58 the import only runs WITH a session (it moves this
+  // device's old local runs into whoever signs in here); the default test
+  // session the mock plants is exactly that signed-in state.
   function legacyRun(overrides: Partial<Run> = {}): Run {
     return makeRun({ id: `local-${Math.random().toString(36).slice(2, 8)}`, ...overrides });
   }
 
-  it('imports legacy runs into the device account, oldest first, then deletes the key', async () => {
+  it('imports legacy runs into the signed-in account, oldest first, then deletes the key', async () => {
     window.localStorage.clear();
     seedLegacyRuns([
       legacyRun({ routeName: 'Newest local', date: '2026-07-20' }),
@@ -637,30 +622,6 @@ describe('one-time import of v1 localStorage runs (RUN-48)', () => {
       .filter(([url, init]) => url === '/api/runs' && init?.method === 'POST')
       .map(([, init]) => (JSON.parse(String(init?.body)) as { routeName: string }).routeName);
     expect(posts).toEqual(['Oldest local', 'Newest local']);
-  });
-
-  it('keeps the unimported remainder on a mid-import failure and resumes on retry', async () => {
-    window.localStorage.clear();
-    seedLegacyRuns([
-      legacyRun({ routeName: 'Newest local', date: '2026-07-20' }),
-      legacyRun({ routeName: 'Oldest local', date: '2026-07-01' }),
-    ]);
-    failRunsApi('POST');
-
-    render(React.createElement(StatusProbe));
-    expect(await screen.findByTestId('runs-status')).toHaveTextContent('error');
-
-    // Nothing imported, nothing lost: the whole list still waits locally.
-    const remaining = JSON.parse(window.localStorage.getItem('runlog.runs') ?? '[]') as Run[];
-    expect(remaining).toHaveLength(2);
-
-    restoreRunsApi();
-    act(() => {
-      reloadRuns();
-    });
-    expect(await screen.findByTestId('runs-status')).toHaveTextContent('ready');
-    expect(getRuns().map((run) => run.routeName)).toEqual(['Newest local', 'Oldest local']);
-    expect(window.localStorage.getItem('runlog.runs')).toBeNull();
   });
 
   it('drops rows the stricter API rejects instead of bricking the app, and says how many', async () => {
@@ -688,20 +649,6 @@ describe('one-time import of v1 localStorage runs (RUN-48)', () => {
       clearRunsNotice();
     });
     expect(screen.getByTestId('runs-notice')).toHaveTextContent('');
-  });
-
-  it('clears a key holding only junk without contacting the server', async () => {
-    window.localStorage.clear();
-    window.localStorage.setItem('runlog.runs', '{ not json');
-    __resetRunsStoreForTests(null);
-
-    render(React.createElement(StatusProbe));
-    expect(await screen.findByTestId('runs-status')).toHaveTextContent('ready');
-
-    expect((global.fetch as jest.Mock).mock.calls).toHaveLength(0);
-    // The old parser ignored junk; the new path also stops it from
-    // re-triggering the import check forever.
-    expect(window.localStorage.getItem('runlog.runs')).toBeNull();
   });
 });
 

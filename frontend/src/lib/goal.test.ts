@@ -1,8 +1,9 @@
 import React from 'react';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import {
-  breakRunsAuth,
+  clearTestSession,
   failGoalApi,
+  failWeekTargetApi,
   installRunsApiMock,
   makeGoalLoadFail,
   plantTestSession,
@@ -80,16 +81,20 @@ describe('todayIso', () => {
 });
 
 describe('goal store (API-backed since RUN-50)', () => {
-  // jest.setup.ts installs a fresh in-memory backend and primes the store to
-  // ready-and-empty before every test; localStorage is cleared here so a
-  // session from another test never leaks into the load path.
+  // jest.setup.ts installs a fresh in-memory backend, plants a signed-in
+  // session and primes the store to ready-and-empty before every test;
+  // localStorage is cleared here so a draft from another test never leaks
+  // into the load path (the session survives the wipe: its memory copy is
+  // the source of truth, RUN-58).
   beforeEach(() => {
     window.localStorage.clear();
   });
 
-  it('answers a fresh device without the network: ready, no goal, the 20 km default', async () => {
-    // Same lazy rule as the runs and profile stores: asking the server here
-    // would mint an account as a side effect of a page view.
+  it('answers a signed-out visitor without the network: ready, no goal, the 20 km default', async () => {
+    // Same lazy rule as the runs and profile stores: signed out means no
+    // goal by definition, and the sign-in screen must not fire doomed
+    // requests.
+    clearTestSession();
     __resetGoalStoreForTests();
 
     render(React.createElement(GoalProbe));
@@ -186,11 +191,10 @@ describe('goal store (API-backed since RUN-50)', () => {
   });
 
   it('applyGoalTarget rejects when the PUT cannot land, cache untouched', async () => {
-    // A device whose identity terminally fails to authenticate: login 401s,
-    // signup 409s. The card catches and shows the ApiError message.
-    breakRunsAuth();
+    // The card catches and shows the ApiError message inline.
+    failWeekTargetApi(500);
 
-    await expect(applyGoalTarget(25)).rejects.toThrow(/no longer matches its account/);
+    await expect(applyGoalTarget(25)).rejects.toThrow('Applying the weekly goal failed (500).');
 
     // The cache did not pretend the apply landed either.
     render(React.createElement(GoalProbe));

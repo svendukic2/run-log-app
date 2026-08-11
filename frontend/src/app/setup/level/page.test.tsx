@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { todayIso } from '@/lib/goal';
 import { getOnboardingDraft, saveDraftGoal, saveDraftProfile } from '@/lib/onboarding';
-import { breakRunsAuth } from '@/test/runsApiMock';
+import { failProfileApi } from '@/test/runsApiMock';
 import RunningLevelPage from './page';
 
 const push = jest.fn();
@@ -123,15 +123,16 @@ describe('Finish setup writes the account (RUN-11, RUN-50)', () => {
   it('keeps the wizard here on a failed finish: inline error, button back, no navigation', async () => {
     const user = userEvent.setup();
     plantDraft();
-    // The device account cannot be minted (login 401, signup 409): the
-    // finish must fail visibly instead of claiming success.
-    breakRunsAuth();
+    // The profile PUT fails server-side: the finish must fail visibly
+    // instead of claiming success (the goal PUT that landed first is
+    // repaired by the retried finish, finishOnboarding's contract).
+    failProfileApi(500);
     render(<RunningLevelPage />);
 
     await user.click(screen.getByRole('button', { name: /finish setup/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      /no longer matches its account \(409\)/,
+      'Saving your profile failed (500).',
     );
     expect(screen.getByRole('button', { name: /finish setup/i })).toBeEnabled();
     expect(push).not.toHaveBeenCalled();
@@ -150,7 +151,7 @@ describe('Finish setup writes the account (RUN-11, RUN-50)', () => {
     await user.click(screen.getByRole('button', { name: /finish setup/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Your details from the first step are missing or incomplete. Start from the beginning.',
+      'Your sign-up details are missing on this device, so setup cannot finish here yet.',
     );
     expect(push).not.toHaveBeenCalled();
     // Nothing reached the server: no half-created account without a name.

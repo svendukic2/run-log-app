@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ROUTES, isActiveRoute } from '@/lib/routes';
 import { profileInitials, profileShortName, useProfile } from '@/lib/onboarding';
+import { signOut } from '@/lib/session';
 
 // Icon geometry is taken 1:1 from the Figma exports (20x20 viewBox, node 47:40);
 // fills are currentColor so the active state can recolor them via CSS.
@@ -209,20 +210,33 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
       {profile && (
         <div
           data-testid="profile-footer"
-          className="flex w-full items-center gap-[11px] border-t border-ink-border px-[10px] pt-[14px] pb-[6px]"
+          className="flex w-full flex-col border-t border-ink-border px-[10px] pt-[14px] pb-[6px]"
         >
-          <div
-            aria-hidden="true"
-            className="flex size-[36px] shrink-0 items-center justify-center rounded-full bg-ink-elevated"
+          <div className="flex w-full items-center gap-[11px]">
+            <div
+              aria-hidden="true"
+              className="flex size-[36px] shrink-0 items-center justify-center rounded-full bg-ink-elevated"
+            >
+              <span className="text-[14px] font-semibold text-white">
+                {profileInitials(profile)}
+              </span>
+            </div>
+            <div className="flex min-w-0 flex-1 flex-col gap-px">
+              <span className="truncate text-[13px] font-medium text-on-dark-soft">
+                {profileShortName(profile)}
+              </span>
+              <span className="truncate text-[11.5px] text-on-dark-subtle">{profile.email}</span>
+            </div>
+          </div>
+          {/* Sign out (RUN-58 AC5): clears the session and lands on Sign in
+              via a full page load, which also drops every store cache. */}
+          <button
+            type="button"
+            onClick={signOut}
+            className="mt-[10px] w-full rounded-[10px] border border-ink-border px-[12px] py-[8px] text-left text-[12.5px] font-medium text-on-dark-subtle hover:bg-ink-raised hover:text-white"
           >
-            <span className="text-[14px] font-semibold text-white">{profileInitials(profile)}</span>
-          </div>
-          <div className="flex min-w-0 flex-1 flex-col gap-px">
-            <span className="truncate text-[13px] font-medium text-on-dark-soft">
-              {profileShortName(profile)}
-            </span>
-            <span className="truncate text-[11.5px] text-on-dark-subtle">{profile.email}</span>
-          </div>
+            Sign out
+          </button>
         </div>
       )}
     </aside>

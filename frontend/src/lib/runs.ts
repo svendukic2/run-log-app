@@ -141,10 +141,6 @@ function readLegacyRuns(): Run[] {
   }
 }
 
-function hasLegacyRuns(): boolean {
-  return readLegacyRuns().length > 0;
-}
-
 // POSTs the legacy runs oldest-first (v1 stored newest-first), shrinking the
 // key after every processed run, so a failure halfway leaves exactly the
 // unprocessed remainder for the retry to resume from. Returns how many runs
@@ -173,9 +169,9 @@ async function importLegacyRuns(): Promise<number> {
       body: JSON.stringify(draft),
     });
     if (!response.ok) {
-      // 401 never reaches here (apiFetch retries it once); any other 4xx is
-      // this row failing validation the v1 forms never enforced. Terminal
-      // for the row, not for the import.
+      // 401 never reaches here (apiFetch signs out and throws); any other
+      // 4xx is this row failing validation the v1 forms never enforced.
+      // Terminal for the row, not for the import.
       if (response.status >= 400 && response.status < 500 && response.status !== 401) {
         rejected += 1;
       } else {
@@ -204,18 +200,12 @@ async function loadRuns(): Promise<void> {
   loadInFlight = true;
   publish({ ...snapshot, status: 'loading', runs: [], error: null });
   try {
-    // A device with no account and no v1 data has an empty log by
-    // definition: answer without the network. This is what keeps a page
-    // view from ever minting a server account (session.ts signs up only
-    // when something real needs the server), so crawlers and incognito
-    // visits cost nothing. The legacy check routes v1 users - the one kind
-    // of fresh-session visitor who DOES own server-worthy data - into the
-    // import instead.
-    if (!hasStoredSession() && !hasLegacyRuns()) {
-      // In this branch the legacy key is absent or holds junk no run ever
-      // parsed from; clearing it keeps the junk from re-entering this
-      // check on every load.
-      window.localStorage.removeItem(LEGACY_RUNS_KEY);
+    // Signed out means an empty log by definition: answer without the
+    // network. Since RUN-58 identity comes from Sign in, so the legacy v1
+    // import below can only run FOR a signed-in account - it imports this
+    // device's old local runs into whoever signs in here, which is the
+    // device's owner in every non-shared-machine case.
+    if (!hasStoredSession()) {
       publish({ status: 'ready', runs: [], error: null, notice: snapshot.notice });
       return;
     }

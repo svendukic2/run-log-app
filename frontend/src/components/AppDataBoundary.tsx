@@ -96,15 +96,18 @@ export default function AppDataBoundary({ children }: { children: React.ReactNod
           id="app-data-error-title"
           className="font-display text-[19px] font-bold tracking-[-0.3px] text-text-primary"
         >
-          {terminal ? "This device can't sign in to its data" : "Your data didn't load"}
+          {terminal ? 'Your session has ended' : "Your data didn't load"}
         </h2>
         <p className="text-[13.5px] leading-[1.55] text-secondary">
           {error?.message ?? 'Something went wrong loading your data.'}
         </p>
         {terminal ? (
+          // The only terminal error since RUN-58 is an expired/invalid
+          // session, and the session layer is already navigating to Sign in
+          // when it throws one - this card can flash for the moment that
+          // navigation takes, so it narrates it instead of offering advice.
           <p className="text-[13.5px] leading-[1.55] text-secondary">
-            Retrying won&apos;t help here. Clearing this site&apos;s data starts a fresh log; the
-            previous data stays locked to the old sign-in.
+            Taking you to Sign in. Your data is saved and will be there when you sign back in.
           </p>
         ) : (
           <button

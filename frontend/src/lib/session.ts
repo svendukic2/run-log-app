@@ -1,25 +1,13 @@
 'use client';
 
-// Device session for the API (RUN-48). The v1 design promises "No password
-// needed - your runs stay on this device" (WEL-4) and draws no login screen,
-// while the backend (RUN-56/57) requires a Bearer token on every endpoint.
-// This module reconciles the two: the DEVICE is the account. The identity is
-// minted lazily - never on a page view, only when something actually has to
-// reach the server (a write, or a read for a device that already has an
-// account) - so crawlers, previews and incognito visits create nothing.
-//
-// SECURITY TRADE-OFF, stated plainly: `runlog.session` holds the device
-// secret alongside the token. Theft of that key is PERMANENT account
-// compromise - unlike the 7-day token, the secret mints fresh tokens forever
-// and there is no password-change or revocation UI. It is kept anyway
-// because the alternative (token only) would strand the account at every
-// expiry: the backend has no refresh endpoint, and a design with no login
-// screen has no way to ask the user back in. The exposure is bounded by
-// what the account contains (this device's runs) and dies with RUN-50, when
-// onboarding moves to the API and identity gets designed properly. Do not
-// copy this pattern anywhere a human-chosen password or shared account is
-// involved.
-import { getOnboardingDraft, readLegacyProfile } from './onboardingDraft';
+// Real authentication (RUN-58). The v1 "the device is the account" bridge
+// (RUN-48) is gone: identity now comes from the Sign in / Sign up screens,
+// and `runlog.session` stores ONLY the JWT and the account email - never a
+// password. There is no silent re-authentication: the backend has no
+// refresh endpoint (RUN-74), so an expired or invalid token signs the user
+// out cleanly and lands them on Sign in instead of leaving broken screens
+// behind (RUN-58 AC6).
+import { ROUTES } from './routes';
 
 const SESSION_KEY = 'runlog.session';
 
@@ -31,15 +19,13 @@ export const API_TIMEOUT_MS = 8000;
 
 interface StoredSession {
   email: string;
-  password: string;
-  token: string | null;
+  token: string;
 }
 
 // Thrown for every failed API interaction; callers show `message` as the
 // inline error line (the app-wide error pattern decided in RUN-48).
-// `terminal` marks failures no retry can fix (this device's identity cannot
-// authenticate): the screen-level error card drops its "Try again" for
-// those instead of offering a button that lies.
+// `terminal` marks failures no retry can fix: the screen-level error card
+// drops its "Try again" for those instead of offering a button that lies.
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -54,6 +40,8 @@ export class ApiError extends Error {
 const CONNECTION_MESSAGE =
   "Couldn't reach the server. Check that the backend is running, then try again.";
 const TIMEOUT_MESSAGE = 'The server took too long to respond. Try again in a moment.';
+export const WRONG_CREDENTIALS_MESSAGE = 'Wrong email or password.';
+export const SESSION_EXPIRED_MESSAGE = 'Your session has expired. Sign in again.';
 
 // The one inline-error fallback for awaited mutations (the app-wide error
 // pattern): a named error explains itself, anything else gets this line.
@@ -66,48 +54,49 @@ export function mutationErrorMessage(cause: unknown): string {
 }
 
 // The in-memory session is the source of truth for this page load;
-// localStorage is only its persistence. This ordering is what keeps a
-// browser with blocked or full storage (Safari private mode, third-party
-// embeds) on ONE identity for the whole tab instead of minting a fresh
-// account per request - there, only durability degrades: a reload loses the
-// session, which sessionPersistenceDegraded() lets the UI warn about.
+// localStorage is only its persistence. With blocked or full storage
+// (Safari private mode) the memory copy alone cannot survive the full-load
+// navigation every auth transition performs, so the Sign in / Sign up
+// screens check sessionPersistenceDegraded() and show an inline error
+// INSTEAD of navigating - a silent bounce back to Sign in would look like
+// wrong credentials forever.
 let memorySession: StoredSession | null = null;
 let persistenceFailed = false;
 
-// True when the session could not be written to localStorage: the account
-// works for this tab but will be unreachable after a reload. Surfaced by
-// the runs UI as a warning, not silently accepted.
+// True when the session could not be written to localStorage: it would not
+// survive the post-auth page load. Checked by the auth screens before they
+// navigate; also surfaced by the runs UI as a warning.
 export function sessionPersistenceDegraded(): boolean {
   return persistenceFailed;
 }
 
-// A stored session must look like something mintCredentials() produced:
-// non-empty credentials on the device-account domain. Anything else is
-// corruption, not an identity that could own data, and treating it as
-// authoritative would brick authentication forever (empty credentials can
-// neither log in nor sign up). Corruption reads as "no session".
-function isPlausibleSession(session: StoredSession): boolean {
-  return (
-    session.email.length > 0 &&
-    session.email.endsWith('@device.runlog') &&
-    session.password.length > 0
-  );
-}
+export const STORAGE_BLOCKED_MESSAGE =
+  "Your browser is blocking site storage, so the sign-in can't be kept. Allow storage for this site (or leave private browsing) and try again.";
 
 function readSession(): StoredSession | null {
   if (memorySession) return memorySession;
   try {
     const raw = window.localStorage.getItem(SESSION_KEY);
     if (!raw) return null;
-    const parsed: unknown = JSON.parse(raw);
-    const session = parsed as StoredSession;
-    if (typeof session?.email !== 'string' || typeof session.password !== 'string') return null;
-    const shaped: StoredSession = {
-      email: session.email,
-      password: session.password,
-      token: typeof session.token === 'string' ? session.token : null,
-    };
-    if (!isPlausibleSession(shaped)) return null;
+    const parsed = JSON.parse(raw) as StoredSession & { password?: unknown };
+    if (
+      typeof parsed?.email !== 'string' ||
+      parsed.email.length === 0 ||
+      typeof parsed.token !== 'string' ||
+      parsed.token.length === 0
+    ) {
+      return null;
+    }
+    // A pre-RUN-58 device session: it carries the device secret in
+    // plaintext, and its account has a password its user never knew, so
+    // "staying signed in" would only postpone a permanent lock-out to the
+    // token's expiry. Purge it - signed out with a working Sign up beats
+    // signed in with a time bomb.
+    if ('password' in parsed || parsed.email.endsWith('@device.runlog')) {
+      window.localStorage.removeItem(SESSION_KEY);
+      return null;
+    }
+    const shaped: StoredSession = { email: parsed.email, token: parsed.token };
     memorySession = shaped;
     return shaped;
   } catch {
@@ -125,12 +114,48 @@ function writeSession(session: StoredSession): void {
   }
 }
 
-// Whether this device already has an account. The runs store uses this to
-// skip the network entirely on devices that never wrote anything: a fresh
-// browser's run log is empty by definition, and asking the server would
-// require creating an account as a side effect of a page view.
+function clearSession(): void {
+  memorySession = null;
+  persistenceFailed = false;
+  try {
+    window.localStorage.removeItem(SESSION_KEY);
+  } catch {
+    // Blocked storage: the memory copy is gone, which signs this tab out;
+    // a stale key without its tab is unreadable noise, not a session.
+  }
+}
+
+// Whether someone is signed in. Route guards read this synchronously; the
+// stores use it to answer a signed-out visitor without touching the network.
 export function hasStoredSession(): boolean {
   return typeof window !== 'undefined' && readSession() !== null;
+}
+
+// Every auth transition navigates with a FULL page load, not a router push,
+// on purpose: the stores keep their caches in module state, and whatever
+// they settled to under the PREVIOUS identity (signed out, or someone else)
+// must not survive into the next one - a page load is the one broom
+// guaranteed to sweep all of them. Swappable for tests because jsdom cannot
+// navigate.
+let hardNavigate: (path: string) => void = (path) => {
+  window.location.assign(path);
+};
+
+export function __setHardNavigateForTests(navigate: (path: string) => void): void {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('__setHardNavigateForTests is not available in production');
+  }
+  hardNavigate = navigate;
+}
+
+// Where the Sign in / Sign up pages send the user AFTER authenticating:
+// the landing route or the setup steps, via the full-load broom above.
+export function navigateAfterAuth(path: string): void {
+  hardNavigate(path);
+}
+
+function navigateToSignIn(): void {
+  hardNavigate(ROUTES.signIn);
 }
 
 // fetch with the app-wide timeout. The caught value decides the message:
@@ -157,7 +182,7 @@ async function timedFetch(path: string, init: RequestInit): Promise<Response> {
 
 // One request helper for the auth endpoints, the only calls made WITHOUT a
 // token.
-function postJson(path: string, body: unknown): Promise<Response> {
+async function postAuth(path: string, body: unknown): Promise<Response> {
   return timedFetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -165,133 +190,83 @@ function postJson(path: string, body: unknown): Promise<Response> {
   });
 }
 
-function randomHex(bytes: number): string {
-  const buffer = new Uint8Array(bytes);
-  crypto.getRandomValues(buffer);
-  return Array.from(buffer, (byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-function mintCredentials(): StoredSession {
-  return {
-    // Unique by construction, so signup can never 409 against a real
-    // address; the profile's human email stays a profile field (RUN-50).
-    email: `runner-${randomHex(8)}@device.runlog`,
-    password: randomHex(24),
-    token: null,
-  };
-}
-
-// Signup wants non-empty names (WEL-5 rules). They come from the leaf
-// onboardingDraft module (never from the profile STORE, which sits above
-// this module in the import graph): the wizard draft is where names live
-// at the common minting moment ("Finish setup"), and the not-yet-imported
-// v1 profile key covers legacy devices whose first server contact is the
-// runs import. The fallback covers a re-signup after a database reset with
-// clean local state - the profile PUT restores the real names right after.
-function signupNames(): { firstName: string; lastName: string } {
-  const names = getOnboardingDraft().profile ?? readLegacyProfile();
-  return {
-    firstName: names?.firstName.trim() || 'Runner',
-    lastName: names?.lastName.trim() || 'Device',
-  };
-}
-
-async function authenticate(session: StoredSession): Promise<StoredSession> {
-  // Login first: the common case after token expiry (7d) is an existing
-  // account.
-  const login = await postJson('/api/auth/login', {
-    email: session.email,
-    password: session.password,
-  });
-  if (login.ok) {
-    const body = (await login.json()) as { token: string };
-    return { ...session, token: body.token };
+// The backend's validation errors arrive as { message: string | string[] };
+// the first line is enough for an inline form error.
+async function bodyMessage(response: Response): Promise<string | null> {
+  try {
+    const body = (await response.json()) as { message?: string | string[] };
+    if (Array.isArray(body.message)) return body.message[0] ?? null;
+    return typeof body.message === 'string' ? body.message : null;
+  } catch {
+    return null;
   }
+}
 
-  // 401 here means the account is gone (database reset): re-mint it under
-  // the SAME device credentials, never fresh ones - regenerating would
-  // abandon whatever the stored identity still owns and dress the data loss
-  // up as recovery. A 4xx on that signup (409: the email exists with a
-  // different password) is therefore TERMINAL for this device identity, and
-  // is marked so the error card stops offering a retry that cannot work.
-  if (login.status !== 401) {
-    throw new ApiError(`Signing in failed (${login.status}).`, login.status);
-  }
-  const signup = await postJson('/api/auth/signup', {
-    email: session.email,
-    password: session.password,
-    ...signupNames(),
-  });
-  if (!signup.ok) {
-    const terminal = signup.status >= 400 && signup.status < 500;
+export interface SignUpInput {
+  firstName: string;
+  lastName: string;
+  email: string;
+  password: string;
+}
+
+// Sign up (RUN-58 AC2). On success the session is stored and the caller
+// routes into the goal/level setup steps.
+export async function signUp(input: SignUpInput): Promise<void> {
+  const response = await postAuth('/api/auth/signup', input);
+  if (!response.ok) {
+    if (response.status === 409) {
+      throw new ApiError('An account with this email already exists. Sign in instead.', 409);
+    }
     throw new ApiError(
-      terminal
-        ? `This device's saved sign-in no longer matches its account (${signup.status}).`
-        : `Creating the device account failed (${signup.status}).`,
-      signup.status,
-      terminal,
+      (await bodyMessage(response)) ?? `Creating the account failed (${response.status}).`,
+      response.status,
     );
   }
-  const body = (await signup.json()) as { token: string };
-  return { ...session, token: body.token };
+  const body = (await response.json()) as { token: string };
+  writeSession({ email: input.email.trim().toLowerCase(), token: body.token });
 }
 
-// Concurrent callers (several cards load at once) share one in-flight
-// authentication instead of racing signup against itself.
-let pending: Promise<string> | null = null;
-
-async function ensureToken(forceRefresh = false): Promise<string> {
-  // A refresh must never join an older in-flight authentication: that one
-  // may resolve to exactly the stale token the caller is refreshing away,
-  // burning the single 401 retry. Invalidate before joining.
-  if (forceRefresh) pending = null;
-  if (!pending) {
-    pending = (async () => {
-      let session = readSession() ?? mintCredentials();
-      if (forceRefresh) session = { ...session, token: null };
-      if (!session.token) {
-        session = await authenticate(session);
-        // Another tab may have minted its own identity while this one was
-        // authenticating; last-writer-wins here would strand that tab's
-        // account with its runs forever. Adopt the other tab's session
-        // instead of overwriting it. Known cost: this tab's signup already
-        // went through, so a genuine race leaves one empty orphaned account
-        // on the server - an empty new account is cheaper than a lost
-        // populated one.
-        memorySession = null; // re-read the key, not our own cache
-        const concurrent = readSession();
-        if (concurrent && concurrent.email !== session.email && concurrent.token) {
-          return concurrent.token;
-        }
-        writeSession(session);
-      }
-      if (!session.token) throw new ApiError('No token after authentication.');
-      return session.token;
-    })();
-    // The next caller after a failure must retry, not inherit the rejection.
-    pending.catch(() => {
-      pending = null;
-    });
+// Sign in (RUN-58 AC3/AC4). A 401 is the one deliberately vague error: the
+// screen must not hint whether the email or the password was wrong.
+export async function signIn(email: string, password: string): Promise<void> {
+  const response = await postAuth('/api/auth/login', { email, password });
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new ApiError(WRONG_CREDENTIALS_MESSAGE, 401);
+    }
+    throw new ApiError(`Signing in failed (${response.status}).`, response.status);
   }
-  const token = await pending;
-  pending = null;
-  return token;
+  const body = (await response.json()) as { token: string };
+  writeSession({ email: email.trim().toLowerCase(), token: body.token });
+}
+
+// Sign out (RUN-58 AC5): clear the session and land on Sign in via a full
+// page load, which also drops every module-level store cache.
+export function signOut(): void {
+  clearSession();
+  navigateToSignIn();
+}
+
+// An expired or invalid token discovered mid-request (AC6). Same broom as
+// signOut; the thrown error is terminal so anything that renders before the
+// navigation lands does not offer a retry that cannot work.
+function handleExpiredSession(): ApiError {
+  clearSession();
+  navigateToSignIn();
+  return new ApiError(SESSION_EXPIRED_MESSAGE, 401, true);
 }
 
 // The app-wide way to call the API (RUN-48): same-origin /api/* (proxied to
-// the backend by next.config.ts), Bearer token attached, one silent
-// re-authentication and retry when the token turns out to be expired.
+// the backend by next.config.ts) with the Bearer token attached. A 401
+// signs out cleanly - there is no refresh endpoint to retry against.
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const request = (token: string) =>
-    timedFetch(path, {
-      ...init,
-      headers: { ...init.headers, Authorization: `Bearer ${token}` },
-    });
-
-  let response = await request(await ensureToken());
-  if (response.status === 401) {
-    response = await request(await ensureToken(true));
-  }
+  const session = readSession();
+  if (!session) throw handleExpiredSession();
+  const response = await timedFetch(path, {
+    ...init,
+    headers: { ...init.headers, Authorization: `Bearer ${session.token}` },
+  });
+  if (response.status === 401) throw handleExpiredSession();
   return response;
 }
 
@@ -304,5 +279,4 @@ export function __resetSessionForTests(): void {
   }
   memorySession = null;
   persistenceFailed = false;
-  pending = null;
 }

@@ -11,7 +11,7 @@ import { type ProfileRecord, type WeekTarget } from '@/lib/accountApi';
 import { __resetGoalStoreForTests, todayIso, type Goal } from '@/lib/goal';
 import { __resetProfileStoreForTests } from '@/lib/onboarding';
 import { __resetRunsStoreForTests, startOfWeek, type Run } from '@/lib/runs';
-import { __resetSessionForTests } from '@/lib/session';
+import { __resetSessionForTests, __setHardNavigateForTests, hasStoredSession } from '@/lib/session';
 import { jsonResponse } from './apiMockShared';
 import { handleEventsRequest } from './eventsApiMock';
 
@@ -293,6 +293,14 @@ export function installRunsApiMock(): void {
   goalFailure = null;
   profilePutFailure = null;
   weekTargetPutFailure = null;
+  signInRedirects = 0;
+  hardNavigations = [];
+  // jsdom cannot navigate; the session layer's full-load navigations become
+  // a recorded list (and the sign-out redirect a counter) tests assert on.
+  __setHardNavigateForTests((path) => {
+    hardNavigations.push(path);
+    if (path === '/signin') signInRedirects += 1;
+  });
   global.fetch = jest.fn(handle) as unknown as typeof fetch;
   __resetRunsStoreForTests([]);
   // Every store starts 'ready' and empty, the state a fresh device wakes up
@@ -303,6 +311,11 @@ export function installRunsApiMock(): void {
   // The in-memory session outlives the localStorage wipe and would leak
   // identities (with now-invalidated tokens) between tests.
   __resetSessionForTests();
+  // Every test starts SIGNED IN with an empty backend (RUN-58): the app's
+  // guarded screens only ever render with a session, and write paths throw
+  // without one. Tests for the signed-out state clear localStorage and
+  // re-arm the stores themselves.
+  plantTestSession();
 }
 
 // Seeds the in-memory backend AND primes the store cache, so the seeded
@@ -314,22 +327,53 @@ export function seedRuns(drafts: Array<Omit<Run, 'id'> & { id?: string }>): Run[
   return runs;
 }
 
-// Plants a stored device session with a valid token, as a returning
-// device would have. The load path skips the network entirely for devices
-// with no session and no legacy data, so tests exercising the initial load
-// call this first.
+// Plants a stored session with a valid token, as a signed-in returning
+// user would have (RUN-58: token and email only, never a password). The
+// load path skips the network entirely without a session, so tests
+// exercising the initial load call this first.
 export function plantTestSession(): void {
   const token = mintToken();
   window.localStorage.setItem(
     'runlog.session',
-    JSON.stringify({ email: 'runner-test@device.runlog', password: 'test-secret', token }),
+    JSON.stringify({ email: 'test@example.com', token }),
   );
+  // Warm the session layer's memory copy (memory-first, like the real app):
+  // a suite-level localStorage.clear() then does NOT sign the test out,
+  // mirroring how clearing storage in devtools does not sign out a live
+  // tab. Tests that want the signed-out state call clearTestSession().
+  hasStoredSession();
+}
+
+// Signs the test out completely: memory copy and stored key both gone.
+export function clearTestSession(): void {
+  __resetSessionForTests();
+  try {
+    window.localStorage.removeItem('runlog.session');
+  } catch {
+    // jsdom storage never throws; parity with the app's own guards.
+  }
 }
 
 // Invalidates every token issued so far: the next guarded request 401s and
-// the session layer must silently re-authenticate.
+// the session layer signs out (there is no refresh endpoint, RUN-74).
 export function expireRunsTokens(): void {
   validTokens.clear();
+}
+
+// How many times an expired/missing session made the session layer redirect
+// to Sign in (RUN-58 AC6). Reset by installRunsApiMock.
+let signInRedirects = 0;
+
+export function signInRedirectCount(): number {
+  return signInRedirects;
+}
+
+// Every full-load navigation the session layer performed (sign-out
+// redirects AND post-auth landings), in order. Reset by installRunsApiMock.
+let hardNavigations: string[] = [];
+
+export function hardNavigationsMade(): string[] {
+  return [...hardNavigations];
 }
 
 // Makes /api/runs requests with the given method fail. The store keeps
@@ -371,8 +415,8 @@ export function rejectRunsNamed(routeName: string): void {
   rejectedNames.add(routeName);
 }
 
-// Breaks authentication terminally: login 401s and the same-credentials
-// signup 409s, the "stored password no longer matches its account" case.
+// Breaks authentication: login 401s (wrong email or password) and signup
+// 409s (the email already has an account).
 export function breakRunsAuth(): void {
   authBroken = true;
 }

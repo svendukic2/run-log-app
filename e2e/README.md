@@ -65,8 +65,8 @@ a single test starts.
 
 ## localStorage in tests
 
-Only two keys exist since RUN-50 and both are legitimate to touch in tests:
-`runlog.session` (the device identity; planted by the seeding helper) and
-`runlog.onboardingDraft` (the wizard's local draft; asserted by the setup-step tests).
-Everything else - profile, goal, runs - lives server-side and is asserted through the
-UI or the API, never localStorage.
+Only two keys exist since RUN-50/58 and both are legitimate to touch in tests:
+`runlog.session` (the signed-in session: token + email, planted by the seeding helper)
+and `runlog.onboardingDraft` (the wizard's local draft; asserted by the setup-step
+tests). Everything else - profile, goal, runs - lives server-side and is asserted
+through the UI or the API, never localStorage.

@@ -60,15 +60,16 @@ export default function EventsBoundary({ children }: { children: React.ReactNode
           id="events-error-title"
           className="font-display text-[19px] font-bold tracking-[-0.3px] text-text-primary"
         >
-          {terminal ? "This device can't sign in to events" : "Events didn't load"}
+          {terminal ? 'Your session has ended' : "Events didn't load"}
         </h2>
         <p className="text-[13.5px] leading-[1.55] text-secondary">
           {error?.message ?? 'Something went wrong loading events.'}
         </p>
         {terminal ? (
+          // Same narration as AppDataBoundary: the session layer is already
+          // navigating to Sign in when a terminal error is thrown.
           <p className="text-[13.5px] leading-[1.55] text-secondary">
-            Retrying won&apos;t help here. Clearing this site&apos;s data starts a fresh sign-in;
-            the previous account stays locked to the old one.
+            Taking you to Sign in. Your data is saved and will be there when you sign back in.
           </p>
         ) : (
           <button
