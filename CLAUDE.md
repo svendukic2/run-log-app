@@ -126,8 +126,9 @@ live in the cards themselves instead of a screen-level boundary. Copy that shape
 for the next per-entity store, and the app-wide one for everything else.
 
 `frontend/src/lib/notifications.ts` (RUN-66) is app-wide but **ungated**: the
-bell it feeds renders in every page header and is nobody's reason for visiting,
-so a failed read means no unread indicator, never a blocked screen. It loads
+bell it feeds is rendered by `PageHeader`, so it sits on every sidebar-reachable
+screen, and it is nobody's reason for visiting any of them. A failed read
+therefore means no unread indicator, never a blocked screen. It loads
 only the newest page (the panel is a dropdown, not a list screen), takes its
 badge count from the server envelope, and re-reads whenever the panel opens
 without blanking the rows already on screen. Put a store behind `AppDataBoundary`

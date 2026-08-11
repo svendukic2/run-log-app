@@ -28,7 +28,7 @@ import { useSyncExternalStore } from 'react';
 import { formatUpdatedAgo } from './plan';
 import { ROUTES, personRoute } from './routes';
 import { formatDistanceKm } from './runMath';
-import { ApiError, apiFetch } from './session';
+import { ApiError, apiFetch, hasStoredSession } from './session';
 
 const NOTIFICATIONS_CHANGED_EVENT = 'runlog:notifications-changed';
 
@@ -173,9 +173,17 @@ export function describeNotification(notification: AppNotification): Notificatio
     case 'followed-ran':
       return {
         // The headline stat rides along in the payload, so the row reads
-        // fully without opening the run.
+        // fully without opening anything.
         text: `${name} logged a run · ${formatDistanceKm(notification.payload.distanceKm)}`,
-        href: `${ROUTES.runs}/${notification.payload.runId}`,
+        // The RUNNER, not the run (review fix). This notification is by
+        // definition about someone ELSE's run, and /runs/:id is owner-scoped
+        // on both sides - RunDetailView resolves the id against the signed-in
+        // user's own runs, and GET /api/runs/:id filters by userId - so
+        // linking to it would land every one of these rows on "Run not
+        // found". A public run view needs a public run endpoint first; until
+        // then the runner's profile is the honest destination, the same one
+        // the follower rows and RUN-69's leaderboard rows use.
+        href: personRoute(notification.payload.runnerId),
       };
     case 'event-joined':
       return {
@@ -199,6 +207,10 @@ export interface NotificationsSnapshot {
   status: NotificationsStatus;
   items: AppNotification[];
   // From the server envelope, so it counts unread rows beyond this page.
+  // It therefore does NOT always equal the unread rows on screen: a row this
+  // module could not parse still counts, and so does page 2. That is the
+  // right trade - a badge that undercounts is worse than one whose panel
+  // shows only the newest twenty.
   unreadCount: number;
   error: string | null;
 }
@@ -238,14 +250,32 @@ async function fetchNewest(): Promise<{ items: AppNotification[]; unreadCount: n
   };
 }
 
+// Bumped by every local read stamp. A load that started BEFORE a stamp is
+// answering from a server state that predates it, so its envelope would
+// resurrect the badge the user just cleared (review fix): opening the panel
+// fires a refresh, and "Mark all as read" is one click away while it is still
+// in flight. Discarding such an answer is safe - the local stamp already
+// matches what the server now holds, and the next open re-reads.
+let readEpoch = 0;
+
 async function loadNotifications(): Promise<void> {
-  // A second request while one is in flight would answer the same page:
-  // unlike the events store there is no mutation to lose, so coalescing is
-  // simply the cheaper truth.
+  // A second request while one is in flight would answer the same page, and
+  // the epoch guard below covers the mutation that could overtake it.
   if (loadInFlight) return;
+  // A signed-out visitor has nothing to read, and apiFetch without a session
+  // hard-navigates to Sign in (session.ts). Every other app-wide store
+  // short-circuits here; this one lives in a shell component rather than a
+  // page, so it is the one that must not fire a background read that could
+  // eject someone from a page they are looking at.
+  if (!hasStoredSession()) {
+    publish({ status: 'ready', items: [], unreadCount: 0, error: null });
+    return;
+  }
   loadInFlight = true;
+  const epoch = readEpoch;
   try {
     const { items, unreadCount } = await fetchNewest();
+    if (epoch !== readEpoch) return;
     publish({ status: 'ready', items, unreadCount, error: null });
   } catch (error) {
     if (process.env.NODE_ENV !== 'production') {
@@ -289,6 +319,9 @@ function ensureLoaded(): void {
 // stamping a 'loading' or 'error' one would invent a list out of nothing.
 function applyRead(readAt: string, id: string | null): void {
   if (snapshot.status !== 'ready') return;
+  // Before the publish, so a load already in flight discards its now-stale
+  // envelope instead of undoing this.
+  readEpoch += 1;
   let cleared = 0;
   const items = snapshot.items.map((item) => {
     if (item.readAt !== null || (id !== null && item.id !== id)) return item;
@@ -361,6 +394,8 @@ export function __resetNotificationsStoreForTests(items: AppNotification[] | nul
   }
   loadStarted = items !== null;
   loadInFlight = false;
+  // Retires any load left in flight by the previous test.
+  readEpoch += 1;
   snapshot =
     items === null
       ? INITIAL_SNAPSHOT

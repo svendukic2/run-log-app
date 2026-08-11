@@ -64,6 +64,10 @@ describe('Notifications bell (RUN-66)', () => {
       value: 1024,
       configurable: true,
     });
+    Object.defineProperty(document.documentElement, 'clientHeight', {
+      value: 768,
+      configurable: true,
+    });
   });
 
   it('shows the unread indicator on any page while unread notifications exist (AC1)', () => {
@@ -88,7 +92,9 @@ describe('Notifications bell (RUN-66)', () => {
       expect.stringContaining('Marko Babic joined August streak'),
     ]);
     expect(rows[0]).toHaveAttribute('href', '/people/user-lukas');
-    expect(rows[1]).toHaveAttribute('href', '/runs/run-42');
+    // The RUNNER, not the run: /runs/:id is owner-scoped on both sides, so a
+    // link to someone else's run would always land on "Run not found".
+    expect(rows[1]).toHaveAttribute('href', '/people/user-ana');
     expect(rows[2]).toHaveAttribute('href', '/events/event-7');
     // Relative time, not a date: these are ISO instants (the mock ages each
     // draft by an hour).

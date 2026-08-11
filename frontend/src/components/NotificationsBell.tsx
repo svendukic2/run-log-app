@@ -95,15 +95,29 @@ function RowIcon({ type }: { type: AppNotification['type'] }) {
 interface PanelPlacement {
   top: number;
   right: number;
+  // Measured, not a static class (review fix): the bell sits far lower on a
+  // phone, where the shell adds a sticky bar and the header stacks, so a
+  // height budgeted for the desktop position runs the last rows off the
+  // bottom of the screen. Scrolling closes the panel by design, which would
+  // make those rows unreachable rather than merely awkward.
+  maxHeight: number;
+  // Measured for the same reason the offsets are, and from the same
+  // clientWidth, so the panel and its anchor agree about the scrollbar.
+  width: number;
 }
 
 // The gap the panel keeps from the viewport edge on a phone, where the bell
 // sits close enough to the right edge that a naive offset would clip it.
 const VIEWPORT_MARGIN = 12;
 
-interface NotificationsBellProps {
-  className?: string;
-}
+// The panel never grows past this, however tall the viewport is, and never
+// shrinks below the floor, however little room is left: a two-row panel is
+// still readable, and anything less means the layout is already broken.
+const MAX_PANEL_HEIGHT = 440;
+const MIN_PANEL_HEIGHT = 160;
+
+// The designed width, narrowed to whatever a phone actually has.
+const MAX_PANEL_WIDTH = 340;
 
 // The notifications bell and its dropdown panel (RUN-66, Figma "V2 ·
 // Notifications (panel)"). Rendered by PageHeader, so it is present on every
@@ -114,7 +128,7 @@ interface NotificationsBellProps {
 // anyone opened the page (see lib/notifications.ts). The popup discipline is
 // the run row menu's, not a second pattern: Escape, outside click and scroll
 // all close it without navigating (AC5).
-export default function NotificationsBell({ className = '' }: NotificationsBellProps) {
+export default function NotificationsBell() {
   const { status, items, unreadCount } = useNotifications();
   const [placement, setPlacement] = useState<PanelPlacement | null>(null);
   // Frozen when the panel opens, so every row's "2h ago" is measured against
@@ -128,13 +142,19 @@ export default function NotificationsBell({ className = '' }: NotificationsBellP
 
   const openPanel = () => {
     const rect = buttonRef.current!.getBoundingClientRect();
-    // clientWidth, not window.innerWidth: fixed offsets resolve against the
+    // clientWidth/Height, not the window's: fixed offsets resolve against the
     // initial containing block, which excludes a classical scrollbar (the
     // run row menu's reasoning).
     const viewport = document.documentElement;
+    const top = rect.bottom + 8;
     setPlacement({
-      top: rect.bottom + 8,
+      top,
       right: Math.max(VIEWPORT_MARGIN, viewport.clientWidth - rect.right),
+      maxHeight: Math.min(
+        MAX_PANEL_HEIGHT,
+        Math.max(MIN_PANEL_HEIGHT, viewport.clientHeight - top - VIEWPORT_MARGIN),
+      ),
+      width: Math.min(MAX_PANEL_WIDTH, viewport.clientWidth - VIEWPORT_MARGIN * 2),
     });
     setOpenedAt(Date.now());
     setMarkAllError(null);
@@ -170,13 +190,32 @@ export default function NotificationsBell({ className = '' }: NotificationsBellP
       closePanel(false);
     };
 
+    // Tabbing past the last row would otherwise leave focus on page content
+    // sitting UNDER the scrim (review fix): reachable by keyboard, unclickable
+    // by mouse, with an open panel that no longer relates to anything. The run
+    // row menu closes on Tab outright; this panel is a list of links, so Tab
+    // must keep walking the rows and only leaving the panel closes it.
+    const onFocusOut = (event: FocusEvent) => {
+      const next = event.relatedTarget;
+      if (
+        next instanceof Node &&
+        (panelRef.current?.contains(next) || buttonRef.current?.contains(next))
+      ) {
+        return;
+      }
+      closePanel(false);
+    };
+
+    const panel = panelRef.current;
     document.addEventListener('keydown', onKeyDown);
     window.addEventListener('scroll', onAnchorLost, { capture: true });
     window.addEventListener('resize', onAnchorLost);
+    panel?.addEventListener('focusout', onFocusOut);
     return () => {
       document.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('scroll', onAnchorLost, { capture: true });
       window.removeEventListener('resize', onAnchorLost);
+      panel?.removeEventListener('focusout', onFocusOut);
     };
   }, [isOpen, closePanel]);
 
@@ -197,7 +236,7 @@ export default function NotificationsBell({ className = '' }: NotificationsBellP
   const hasUnread = unreadCount > 0;
 
   return (
-    <span className={className}>
+    <span>
       <button
         ref={buttonRef}
         type="button"
@@ -235,13 +274,8 @@ export default function NotificationsBell({ className = '' }: NotificationsBellP
             role="dialog"
             aria-label="Notifications"
             tabIndex={-1}
-            style={{
-              ...placement,
-              // Full width minus a margin on a phone, where a fixed 340px
-              // panel would run off the screen.
-              width: `min(340px, calc(100vw - ${VIEWPORT_MARGIN * 2}px))`,
-            }}
-            className="fixed z-40 flex max-h-[min(440px,calc(100vh-96px))] flex-col overflow-hidden rounded-[14px] border border-line bg-white shadow-[0_16px_40px_0_rgba(0,0,0,0.16)] outline-none"
+            style={placement}
+            className="fixed z-40 flex flex-col overflow-hidden rounded-[14px] border border-line bg-white shadow-[0_16px_40px_0_rgba(0,0,0,0.16)] outline-none"
           >
             <div className="flex items-center justify-between gap-3 border-b border-line-subtle px-[16px] py-[12px]">
               <p className="text-[14px] font-semibold text-text-primary">Notifications</p>
@@ -263,7 +297,10 @@ export default function NotificationsBell({ className = '' }: NotificationsBellP
               </p>
             ) : null}
 
-            <div className="min-h-0 flex-1 overflow-y-auto">
+            {/* overscroll-contain: without it, overscrolling this list on iOS
+                chains to the document, whose scroll event closes the panel
+                out from under the person reading it. */}
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
               {status === 'error' && items.length === 0 ? (
                 // The panel owns the load failure, so the header around it
                 // never breaks over a read nobody asked for.
