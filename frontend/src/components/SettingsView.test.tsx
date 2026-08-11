@@ -1,14 +1,32 @@
-import { act, render, screen, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderToString } from 'react-dom/server';
+import { getAccountRecord, type AccountRecord } from '@/lib/account';
 import { fetchWeekTarget } from '@/lib/accountApi';
 import { todayIso } from '@/lib/goal';
-import { getProfileRecord, type Profile } from '@/lib/onboarding';
+import { __resetProfileStoreForTests, getProfileRecord } from '@/lib/onboarding';
 import { startOfWeek } from '@/lib/runs';
-import { failProfileApi, seedProfile } from '@/test/runsApiMock';
+import { failAccountApi, failProfileApi, seedAccount, seedProfile } from '@/test/runsApiMock';
 import SettingsView from './SettingsView';
 
-const STORED: Profile = { firstName: 'Marko', lastName: 'Kovač', email: 'marko@email.com' };
+// The screen sends an un-onboarded account to the wizard (RUN-59), so the
+// router has to be mocked like on every other routing screen.
+const replace = jest.fn();
+
+jest.mock('next/navigation', () => ({
+  useRouter: () => ({ replace, push: jest.fn() }),
+}));
+
+// Two records behind one form since RUN-59: the name and email are the
+// ACCOUNT's, the default weekly goal is the profile's.
+const STORED: AccountRecord = { firstName: 'Marko', lastName: 'Kovač', email: 'marko@email.com' };
+
+// The state every test starts from: a named account that finished setup with
+// the default 20 km weekly goal.
+function seedSettings() {
+  seedAccount(STORED);
+  seedProfile({ defaultWeeklyGoalKm: 20 });
+}
 
 function profileCard() {
   return within(screen.getByRole('region', { name: 'Profile' }));
@@ -26,16 +44,24 @@ function increase() {
   return trainingCard().getByRole('button', { name: 'Increase default weekly goal' });
 }
 
-// Every PUT /api/profile body the mock backend received: the persistence
+// Every PUT body the mock backend received for a path: the persistence
 // assertions read what actually went over the wire, the way the old suite
 // read localStorage back.
-function profilePutBodies(): Array<Profile & { defaultWeeklyGoalKm: number }> {
+function putBodies(path: string): Array<Record<string, unknown>> {
   return (global.fetch as jest.Mock).mock.calls
-    .filter(([url, init]) => url === '/api/profile' && (init as RequestInit)?.method === 'PUT')
+    .filter(([url, init]) => url === path && (init as RequestInit)?.method === 'PUT')
     .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
 }
 
-// Clicks Save changes and lets the PUT settle: the save is async since
+function accountPutBodies() {
+  return putBodies('/api/account');
+}
+
+function profilePutBodies() {
+  return putBodies('/api/profile');
+}
+
+// Clicks Save changes and lets both PUTs settle: the save is async since
 // RUN-50, so assertions wait for the promise chain, not just the click.
 async function save(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole('button', { name: /save changes/i }));
@@ -48,7 +74,7 @@ describe('Settings profile card (RUN-37)', () => {
     // next test's first PUT would 401 and silently re-auth, doubling the
     // requests the assertions count.
     window.localStorage.clear();
-    seedProfile(STORED);
+    seedSettings();
   });
 
   it('shows the avatar block with initials, label and caption, and no upload control (AC1)', () => {
@@ -67,7 +93,7 @@ describe('Settings profile card (RUN-37)', () => {
     expect(profileCard().queryByRole('button')).toBeNull();
   });
 
-  it('prefills First name, Last name and Email from the stored profile (AC2)', () => {
+  it('prefills First name, Last name and Email from the stored account (AC2)', () => {
     render(<SettingsView />);
 
     expect(profileCard().getByLabelText('First name')).toHaveValue('Marko');
@@ -83,9 +109,10 @@ describe('Settings profile card (RUN-37)', () => {
     await save(user);
 
     expect(screen.getByRole('alert')).toHaveTextContent('First name is required');
-    // Nothing reached the server and the store still holds the seeded record.
+    // Neither write happened and the store still holds the seeded identity.
+    expect(accountPutBodies()).toHaveLength(0);
     expect(profilePutBodies()).toHaveLength(0);
-    expect(getProfileRecord()).toMatchObject(STORED);
+    expect(getAccountRecord()).toEqual(STORED);
   });
 
   it('rejects an invalid email with an inline message and persists nothing (AC3)', async () => {
@@ -98,11 +125,11 @@ describe('Settings profile card (RUN-37)', () => {
     await save(user);
 
     expect(screen.getByRole('alert')).toHaveTextContent('Enter a valid email address');
-    expect(profilePutBodies()).toHaveLength(0);
-    expect(getProfileRecord()).toMatchObject(STORED);
+    expect(accountPutBodies()).toHaveLength(0);
+    expect(getAccountRecord()).toEqual(STORED);
   });
 
-  it('requires the last name too, matching the Welcome rules (WEL-5)', async () => {
+  it('requires the last name too, matching the Sign up rules (WEL-5)', async () => {
     const user = userEvent.setup();
     render(<SettingsView />);
 
@@ -110,8 +137,8 @@ describe('Settings profile card (RUN-37)', () => {
     await save(user);
 
     expect(screen.getByRole('alert')).toHaveTextContent('Last name is required');
-    expect(profilePutBodies()).toHaveLength(0);
-    expect(getProfileRecord()).toMatchObject(STORED);
+    expect(accountPutBodies()).toHaveLength(0);
+    expect(getAccountRecord()).toEqual(STORED);
   });
 
   it('persists a valid draft and updates the avatar initials automatically (AC4)', async () => {
@@ -123,7 +150,7 @@ describe('Settings profile card (RUN-37)', () => {
     await user.type(firstName, 'Ana');
     await save(user);
 
-    expect(getProfileRecord()).toMatchObject({ ...STORED, firstName: 'Ana' });
+    expect(getAccountRecord()).toEqual({ ...STORED, firstName: 'Ana' });
     expect(within(screen.getByTestId('avatar-block')).getByText('AK')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
   });
@@ -137,7 +164,7 @@ describe('Settings profile card (RUN-37)', () => {
     await user.type(firstName, '  Ana  ');
     await save(user);
 
-    expect(getProfileRecord()).toMatchObject({ ...STORED, firstName: 'Ana' });
+    expect(getAccountRecord()).toEqual({ ...STORED, firstName: 'Ana' });
     expect(firstName).toHaveValue('Ana');
   });
 
@@ -154,10 +181,39 @@ describe('Settings profile card (RUN-37)', () => {
     await save(user);
 
     expect(screen.queryByRole('alert')).toBeNull();
-    expect(getProfileRecord()).toMatchObject({ ...STORED, firstName: 'Ana' });
+    expect(getAccountRecord()).toEqual({ ...STORED, firstName: 'Ana' });
   });
 
-  it('keeps the failure on screen when the save itself fails (RUN-50)', async () => {
+  it('keeps the failure on screen when the identity write fails (RUN-59)', async () => {
+    const user = userEvent.setup();
+    failAccountApi(500);
+    render(<SettingsView />);
+
+    const firstName = profileCard().getByLabelText('First name');
+    await user.clear(firstName);
+    await user.type(firstName, 'Ana');
+    await user.click(increase());
+    await save(user);
+
+    // Pessimistic like every write since RUN-48: the failure is inline,
+    // nothing pretends to be saved, and the button is back for a retry. The
+    // identity goes first, so a failure there leaves the weekly default
+    // untouched as well.
+    expect(screen.getByRole('alert')).toHaveTextContent('Saving your details failed (500).');
+    expect(getAccountRecord()).toEqual(STORED);
+    expect(profilePutBodies()).toHaveLength(0);
+    expect(getProfileRecord()).toMatchObject({ defaultWeeklyGoalKm: 20 });
+    // The initials derive from the STORED record, so they did not follow the
+    // typed name anywhere.
+    expect(within(screen.getByTestId('avatar-block')).getByText('MK')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /save changes/i })).toBeEnabled();
+  });
+
+  it('names the PARTIAL result when only the weekly-default write fails (RUN-59)', async () => {
+    // The two writes are two requests, so this state is reachable: the
+    // identity is already live in the sidebar and the greeting. Saying
+    // "nothing was saved" here would be a lie, and leaving the stepper on the
+    // rejected number would be a second one.
     const user = userEvent.setup();
     failProfileApi(500);
     render(<SettingsView />);
@@ -165,19 +221,50 @@ describe('Settings profile card (RUN-37)', () => {
     const firstName = profileCard().getByLabelText('First name');
     await user.clear(firstName);
     await user.type(firstName, 'Ana');
+    await user.click(increase());
     await save(user);
 
-    // Pessimistic like every write since RUN-48: the failure is inline,
-    // nothing pretends to be saved, and the button is back for a retry.
-    expect(screen.getByRole('alert')).toHaveTextContent('Saving your profile failed (500).');
-    expect(getProfileRecord()).toMatchObject(STORED);
-    expect(within(screen.getByTestId('avatar-block')).getByText('MK')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Your name and email were saved, but the weekly goal default was not: Saving your profile failed (500).',
+    );
+    // The identity really did land; the default really did not.
+    expect(getAccountRecord()).toEqual({ ...STORED, firstName: 'Ana' });
+    expect(getProfileRecord()).toMatchObject({ defaultWeeklyGoalKm: 20 });
+    // And the stepper shows the number the server still holds, not the one
+    // that was refused.
+    expect(trainingCard().getByRole('status')).toHaveTextContent('20');
     expect(screen.getByRole('button', { name: /save changes/i })).toBeEnabled();
   });
 
-  it('renders no store-derived values on the server, where the profile is unknown', () => {
+  it('adopts the email spelling the server stored, not the one typed (RUN-59)', async () => {
+    // The address is the login credential and the server normalizes it, so
+    // the input and the sidebar footer must not show two spellings of it.
+    const user = userEvent.setup();
+    render(<SettingsView />);
+
+    const email = profileCard().getByLabelText('Email');
+    await user.clear(email);
+    await user.type(email, 'Marko.Kovac@Example.COM');
+    await save(user);
+
+    expect(email).toHaveValue('marko.kovac@example.com');
+    expect(getAccountRecord()?.email).toBe('marko.kovac@example.com');
+  });
+
+  it('sends an account that never finished setup to the wizard instead of a half-usable form', async () => {
+    // Reachable only by deep link (the landing route sends them to setup):
+    // with no profile row the Training card has nothing to save into, so
+    // showing the form would promise a save that cannot happen.
+    __resetProfileStoreForTests(null);
+    render(<SettingsView />);
+
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/setup/goal'));
+    expect(screen.queryByTestId('settings-body')).toBeNull();
+  });
+
+  it('renders no store-derived values on the server, where the account is unknown', () => {
     // The pre-hydration markup must not contain the prefilled inputs: the
-    // draft is seeded from the client-side profile cache, which the server
+    // draft is seeded from the client-side account cache, which the server
     // snapshot never reads.
     expect(renderToString(<SettingsView />)).not.toMatch(/Marko/);
   });
@@ -185,11 +272,8 @@ describe('Settings profile card (RUN-37)', () => {
 
 describe('Settings training card (RUN-38)', () => {
   beforeEach(() => {
-    // Each save mints a device session into localStorage; left behind, the
-    // next test's first PUT would 401 and silently re-auth, doubling the
-    // requests the assertions count.
     window.localStorage.clear();
-    seedProfile(STORED);
+    seedSettings();
   });
 
   it('shows the label, the designed caption and the minus / value / plus stepper (AC1)', () => {
@@ -208,7 +292,7 @@ describe('Settings training card (RUN-38)', () => {
     // Onboarding bakes the goal km into profile.defaultWeeklyGoalKm
     // (finishOnboarding), so the profile default is the stepper's single
     // seed - there is no separate "onboarding goal" fallback anymore.
-    seedProfile({ ...STORED, defaultWeeklyGoalKm: 45 });
+    seedProfile({ defaultWeeklyGoalKm: 45 });
 
     render(<SettingsView />);
 
@@ -229,7 +313,7 @@ describe('Settings training card (RUN-38)', () => {
 
   it('stays within the 0-60 km bounds, disabling the button at each bound (AC2, A17)', async () => {
     const user = userEvent.setup();
-    seedProfile({ ...STORED, defaultWeeklyGoalKm: 60 });
+    seedProfile({ defaultWeeklyGoalKm: 60 });
     const { unmount } = render(<SettingsView />);
 
     // At the ceiling only plus is out of play; a click must not move it.
@@ -239,7 +323,7 @@ describe('Settings training card (RUN-38)', () => {
     expect(trainingCard().getByText('60 km')).toBeInTheDocument();
     unmount();
 
-    seedProfile({ ...STORED, defaultWeeklyGoalKm: 0 });
+    seedProfile({ defaultWeeklyGoalKm: 0 });
     render(<SettingsView />);
 
     expect(decrease()).toBeDisabled();
@@ -268,16 +352,19 @@ describe('Settings training card (RUN-38)', () => {
     });
   });
 
-  it('carries the untouched default through the save unchanged', async () => {
+  it('carries the untouched default and the stored level through the save unchanged', async () => {
     const user = userEvent.setup();
     render(<SettingsView />);
 
     await save(user);
 
-    // The save is one full-replace PUT (RUN-39), so the untouched stepper
-    // rides along at its stored value; an unchanged default triggers no
-    // SET-6 freeze server-side.
-    expect(profilePutBodies().at(-1)).toMatchObject({ defaultWeeklyGoalKm: 20 });
+    // The profile write is a full replace (RUN-39), so the untouched stepper
+    // rides along at its stored value and the running level - not editable
+    // after onboarding - rides along too.
+    expect(profilePutBodies().at(-1)).toEqual({
+      defaultWeeklyGoalKm: 20,
+      runningLevel: 'Beginner',
+    });
   });
 
   it('does not persist the stepper value while the profile draft is invalid', async () => {
@@ -290,20 +377,18 @@ describe('Settings training card (RUN-38)', () => {
 
     // A single Save gate: nothing on the page persists until the form is
     // valid (RUN-39 saves everything in one action).
+    expect(accountPutBodies()).toHaveLength(0);
     expect(profilePutBodies()).toHaveLength(0);
   });
 });
 
 describe('Settings save changes persistence (RUN-39)', () => {
   beforeEach(() => {
-    // Each save mints a device session into localStorage; left behind, the
-    // next test's first PUT would 401 and silently re-auth, doubling the
-    // requests the assertions count.
     window.localStorage.clear();
-    seedProfile(STORED);
+    seedSettings();
   });
 
-  it('persists edited profile and training values in one action (AC1)', async () => {
+  it('persists edited identity and training values in one action (AC1)', async () => {
     const user = userEvent.setup();
     render(<SettingsView />);
 
@@ -313,14 +398,11 @@ describe('Settings save changes persistence (RUN-39)', () => {
     await user.click(increase());
     await save(user);
 
-    // One click, one PUT carrying both cards; neither waited for its own
-    // action.
+    // One click, one write per record; neither card waited for its own action.
+    expect(accountPutBodies()).toHaveLength(1);
     expect(profilePutBodies()).toHaveLength(1);
-    expect(getProfileRecord()).toMatchObject({
-      ...STORED,
-      firstName: 'Ana',
-      defaultWeeklyGoalKm: 21,
-    });
+    expect(getAccountRecord()).toEqual({ ...STORED, firstName: 'Ana' });
+    expect(getProfileRecord()).toMatchObject({ defaultWeeklyGoalKm: 21 });
   });
 
   it('saves silently and stays on the page: no confirmation or success state (AC2)', async () => {
@@ -343,7 +425,7 @@ describe('Settings save changes persistence (RUN-39)', () => {
     expect(screen.getByRole('button', { name: /save changes/i })).toBeInTheDocument();
   });
 
-  it('shows the saved profile and training values again after a reload (AC3)', async () => {
+  it('shows the saved identity and training values again after a reload (AC3)', async () => {
     const user = userEvent.setup();
     const { unmount } = render(<SettingsView />);
 
@@ -354,7 +436,7 @@ describe('Settings save changes persistence (RUN-39)', () => {
     await save(user);
     unmount();
 
-    // A fresh mount seeds every draft from the store alone, so this render is
+    // A fresh mount seeds every draft from the stores alone, so this render is
     // exactly what a full app reload would show.
     render(<SettingsView />);
 
@@ -376,7 +458,9 @@ describe('Settings save changes persistence (RUN-39)', () => {
     await save(user);
 
     expect(screen.getByRole('alert')).toHaveTextContent('Email is required');
+    expect(accountPutBodies()).toHaveLength(1);
     expect(profilePutBodies()).toHaveLength(1);
-    expect(getProfileRecord()).toMatchObject({ ...STORED, defaultWeeklyGoalKm: 21 });
+    expect(getAccountRecord()).toEqual(STORED);
+    expect(getProfileRecord()).toMatchObject({ defaultWeeklyGoalKm: 21 });
   });
 });

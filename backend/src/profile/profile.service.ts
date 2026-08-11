@@ -20,10 +20,9 @@ import {
 // The API shape of the profile: exactly the Profile table from
 // docs/data-model.md. One row per user, so there is no id in the contract -
 // the owner is implicit in the token, same as every entity since RUN-57.
+// Since RUN-59 this is the SETUP ANSWERS only; the runner's name and email
+// come from GET /api/account.
 export interface ProfileResponse {
-  firstName: string;
-  lastName: string;
-  email: string;
   runningLevel: RunningLevel;
   defaultWeeklyGoalKm: number;
 }
@@ -50,9 +49,6 @@ export class ProfileService {
 
   private toResponse(row: ProfileRow): ProfileResponse {
     return {
-      firstName: row.firstName,
-      lastName: row.lastName,
-      email: row.email,
       runningLevel: toRunningLevel(row.id, row.runningLevel),
       defaultWeeklyGoalKm: row.defaultWeeklyGoalKm,
     };
@@ -113,9 +109,6 @@ export class ProfileService {
     // write the moment the DTO gains a field that is not a column (or not
     // meant to be client-writable).
     const data = {
-      firstName: dto.firstName,
-      lastName: dto.lastName,
-      email: dto.email,
       runningLevel: dto.runningLevel,
       defaultWeeklyGoalKm: dto.defaultWeeklyGoalKm,
     };

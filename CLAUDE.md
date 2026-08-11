@@ -108,8 +108,9 @@ enabled on the backend (`main.ts`, origin `FRONTEND_URL`) for any genuinely cros
 fetch.
 
 **Every app-data store is an API-backed cache (RUN-48 pattern, app-wide since
-RUN-50).** `frontend/src/lib/runs.ts`, `onboarding.ts` (profile) and `goal.ts` (goal +
-week target) keep in-memory caches behind `useSyncExternalStore`; the hooks stay
+RUN-50).** `frontend/src/lib/runs.ts`, `account.ts` (the runner's name and email, the
+single source of truth since RUN-59), `onboarding.ts` (profile = the setup answers)
+and `goal.ts` (goal + week target) keep in-memory caches behind `useSyncExternalStore`; the hooks stay
 synchronous, every data screen renders through one `AppDataBoundary` (nothing while
 loading, one retry card on error, gates all three stores), and mutations are awaited
 with inline `role="alert"` failure lines in the forms. Follow this pattern (not a new

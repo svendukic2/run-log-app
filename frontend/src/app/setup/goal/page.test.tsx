@@ -1,7 +1,8 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { todayIso } from '@/lib/goal';
-import { getOnboardingDraft, saveDraftGoal, saveDraftProfile } from '@/lib/onboarding';
+import { getOnboardingDraft, saveDraftGoal } from '@/lib/onboarding';
+import { seedAccount } from '@/test/runsApiMock';
 import WeeklyGoalPage from './page';
 
 const push = jest.fn();
@@ -24,17 +25,15 @@ function draftGoal() {
   return getOnboardingDraft().goal;
 }
 
-function plantDraftProfile() {
-  saveDraftProfile({ firstName: 'Marko', lastName: 'Horvat', email: 'marko@email.com' });
-}
-
 describe('Weekly goal step (RUN-8 / RUN-9)', () => {
   beforeEach(() => {
     window.localStorage.clear();
   });
 
-  it('shows Step 1 of 2, the Welcome badge with the drafted first name and the heading', () => {
-    plantDraftProfile();
+  it("shows Step 1 of 2, the Welcome badge with the account's first name and the heading", () => {
+    // The badge greets from the ACCOUNT since RUN-59, so setup resumed on
+    // another device still knows the runner's name.
+    seedAccount({ firstName: 'Marko', lastName: 'Horvat', email: 'marko@email.com' });
 
     render(<WeeklyGoalPage />);
 

@@ -1,6 +1,7 @@
 import { Module, ValidationPipe } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD, APP_PIPE } from '@nestjs/core';
+import { AccountModule } from './account/account.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
@@ -31,6 +32,7 @@ import { WeekTargetsModule } from './week-targets/week-targets.module';
     AuthModule,
     EventsModule,
     FollowModule,
+    AccountModule,
     ProfileModule,
     GoalModule,
     WeekTargetsModule,

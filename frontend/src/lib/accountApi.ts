@@ -16,11 +16,18 @@ import { ApiError, apiFetch } from './session';
 export const RUNNING_LEVELS = ['Beginner', 'Intermediate', 'Advanced'] as const;
 export type RunningLevel = (typeof RUNNING_LEVELS)[number];
 
-// The full per-account profile, exactly the GET/PUT /api/profile contract.
-export interface ProfileRecord {
+// The account's identity, exactly the GET/PUT /api/account contract
+// (RUN-59): the User row's human-facing fields, the app's single source of
+// truth for a runner's name and email.
+export interface AccountRecord {
   firstName: string;
   lastName: string;
   email: string;
+}
+
+// The setup answers, exactly the GET/PUT /api/profile contract. Its
+// existence server-side is what "onboarding complete" means (RUN-50).
+export interface ProfileRecord {
   runningLevel: RunningLevel;
   defaultWeeklyGoalKm: number;
 }
@@ -30,13 +37,19 @@ export interface WeekTarget {
   targetKm: number;
 }
 
-function isProfileRecord(body: unknown): body is ProfileRecord {
-  const record = body as ProfileRecord;
+function isAccountRecord(body: unknown): body is AccountRecord {
+  const record = body as AccountRecord;
   return (
     typeof record?.firstName === 'string' &&
     typeof record.lastName === 'string' &&
-    typeof record.email === 'string' &&
-    (RUNNING_LEVELS as readonly string[]).includes(record.runningLevel) &&
+    typeof record.email === 'string'
+  );
+}
+
+function isProfileRecord(body: unknown): body is ProfileRecord {
+  const record = body as ProfileRecord;
+  return (
+    (RUNNING_LEVELS as readonly string[]).includes(record?.runningLevel) &&
     typeof record.defaultWeeklyGoalKm === 'number'
   );
 }
@@ -72,12 +85,55 @@ async function parsed<T>(
   return body;
 }
 
+// Nest's ValidationPipe answers { message: string | string[] }; the first
+// line is a sentence a form can show ("firstName must be at most 120
+// characters").
+async function validationMessage(response: Response): Promise<string | null> {
+  try {
+    const body = (await response.json()) as { message?: string | string[] };
+    const message = Array.isArray(body.message) ? body.message[0] : body.message;
+    return typeof message === 'string' && message.length > 0 ? message : null;
+  } catch {
+    return null;
+  }
+}
+
 function putJson(path: string, body: unknown): Promise<Response> {
   return apiFetch(path, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
+}
+
+// The signed-in account's identity. No 404 branch: the token was minted for
+// this row, so its absence is an authentication problem the server answers
+// with 401 (and session.ts turns into a clean sign-out).
+export async function fetchAccount(): Promise<AccountRecord> {
+  const response = await apiFetch('/api/account');
+  if (!response.ok) {
+    throw new ApiError(`Loading your account failed (${response.status}).`, response.status);
+  }
+  return parsed(response, isAccountRecord, 'an account');
+}
+
+// Changing the email changes the login credential, so a 409 (someone else
+// owns that address) gets its own message: the Settings form shows it inline
+// and the user can pick another. A 400 carries the server's own field
+// message: the DTO's bounds (name length, address shape) are stricter than
+// the form's, and "failed (400)" would leave the user with nothing to act on.
+export async function putAccount(record: AccountRecord): Promise<AccountRecord> {
+  const response = await putJson('/api/account', record);
+  if (response.status === 409) {
+    throw new ApiError('That email is already used by another account.', 409);
+  }
+  if (response.status === 400) {
+    throw new ApiError((await validationMessage(response)) ?? 'Those details were rejected.', 400);
+  }
+  if (!response.ok) {
+    throw new ApiError(`Saving your details failed (${response.status}).`, response.status);
+  }
+  return parsed(response, isAccountRecord, 'an account');
 }
 
 // 404 means "this account never finished onboarding" - an expected state

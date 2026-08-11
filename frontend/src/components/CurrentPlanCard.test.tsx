@@ -280,12 +280,7 @@ describe('Current plan card (RUN-32)', () => {
 
     it('does not disturb the Settings default that seeds future weeks', async () => {
       const user = clock();
-      seedProfile({
-        firstName: 'Marko',
-        lastName: 'Kovač',
-        email: 'marko@email.com',
-        defaultWeeklyGoalKm: 45,
-      });
+      seedProfile({ defaultWeeklyGoalKm: 45 });
       seedRun({ date: '2026-07-28' });
 
       render(<CurrentPlanCard />);

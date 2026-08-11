@@ -1,11 +1,14 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { ACCENT_PILL_CLASSES } from '@/components/accentPill';
 import TextField from '@/components/TextField';
+import { accountInitials, saveAccountDetails, useAccount, type AccountRecord } from '@/lib/account';
 import { clampGoal, GOAL_DEFAULT_KM, GOAL_MAX_KM, GOAL_MIN_KM } from '@/lib/goal';
-import { profileInitials, saveProfileSettings, useProfile, type Profile } from '@/lib/onboarding';
+import { saveWeeklyDefault, useProfile } from '@/lib/onboarding';
 import { validateProfileForm, type ProfileFormErrors } from '@/lib/profileValidation';
+import { ROUTES } from '@/lib/routes';
 import { ApiError } from '@/lib/session';
 import { useHydrated } from '@/lib/useHydrated';
 
@@ -27,15 +30,15 @@ function SettingsCard({ title, children }: { title: string; children?: React.Rea
 }
 
 // The avatar block of the Profile card (RUN-37 AC1). The initials derive from
-// the *stored* profile, not from what is typed in the inputs, so they only
+// the *stored* account, not from what is typed in the inputs, so they only
 // change once a save succeeds (AC4). There is deliberately no upload control:
 // the caption is the whole story ("no upload exists", SET-2).
-function AvatarBlock({ profile }: { profile: Profile | null }) {
+function AvatarBlock({ account }: { account: AccountRecord | null }) {
   return (
     <div data-testid="avatar-block" className="mt-[26px] flex items-center gap-[18px]">
       <div className="flex size-[64px] shrink-0 items-center justify-center rounded-full bg-accent-soft">
         <span className="font-display text-[20px] font-bold text-accent">
-          {profile ? profileInitials(profile) : ''}
+          {account ? accountInitials(account) : ''}
         </span>
       </div>
       <div className="flex min-w-0 flex-col gap-[3px]">
@@ -59,14 +62,17 @@ const STEPPER_BUTTON_CLASSES =
 // single "Save changes" button (RUN-36): submit persists the profile (RUN-37)
 // and the Training default in one action (RUN-38, RUN-39).
 function SettingsForm() {
-  // Mounted behind the app-data boundary (RUN-50), so the profile store has
-  // settled and the record is available to seed the draft synchronously -
-  // no effect, no controlled-input flicker.
+  // Mounted behind the app-data boundary (RUN-50/59), so both stores have
+  // settled and the records are available to seed the draft synchronously -
+  // no effect, no controlled-input flicker. Two records, two writes: the
+  // name/email are the ACCOUNT's (RUN-59), the weekly default is the
+  // profile's.
+  const account = useAccount();
   const profile = useProfile();
-  const [firstName, setFirstName] = useState(profile?.firstName ?? '');
-  const [lastName, setLastName] = useState(profile?.lastName ?? '');
-  const [email, setEmail] = useState(profile?.email ?? '');
-  // The stepper's draft, like the profile fields: seeded from the stored
+  const [firstName, setFirstName] = useState(account?.firstName ?? '');
+  const [lastName, setLastName] = useState(account?.lastName ?? '');
+  const [email, setEmail] = useState(account?.email ?? '');
+  // The stepper's draft, like the identity fields: seeded from the stored
   // default and only persisted on Save.
   const [goalKm, setGoalKm] = useState(() => profile?.defaultWeeklyGoalKm ?? GOAL_DEFAULT_KM);
   const [errors, setErrors] = useState<ProfileFormErrors>({});
@@ -83,30 +89,55 @@ function SettingsForm() {
     // (AC3), so reloading would still bring back the last saved values.
     if (Object.keys(nextErrors).length > 0) return;
 
-    const draft: Profile = {
+    const draft: AccountRecord = {
       firstName: firstName.trim(),
       lastName: lastName.trim(),
       email: email.trim(),
     };
     setSaving(true);
     setSaveError('');
+
+    // Two writes behind one button (RUN-36's single "Save changes"): the
+    // identity to /api/account, the weekly default to /api/profile. The
+    // identity goes FIRST because it is the one that can be rejected for a
+    // reason the user must act on (a 409: that email belongs to another
+    // account), so the common failure costs nothing.
+    // They are two requests, so a partial result is REACHABLE and must not be
+    // narrated as "nothing was saved": the identity is already live in the
+    // sidebar and the greeting by the time the second write can fail. Each
+    // write therefore reports itself, and the stepper snaps back to the value
+    // the server still holds - retrying is safe either way (both PUTs are
+    // idempotent full replaces).
+    // SET-6 - a changed default leaves the running week's target alone -
+    // stays the server's job: it freezes the current week before the new
+    // default lands (RUN-49).
+    let stored: AccountRecord;
     try {
-      // One full-replace PUT carries the profile fields AND the default
-      // weekly goal (SET-3). SET-6 - a changed default leaves the running
-      // week's target alone - is the server's job now: it freezes the
-      // current week before the new default lands (RUN-49).
-      await saveProfileSettings({ ...draft, defaultWeeklyGoalKm: goalKm });
-      // The inputs adopt the trimmed values that were actually stored, so
-      // what the card shows is exactly what a reload would show.
-      setFirstName(draft.firstName);
-      setLastName(draft.lastName);
-      setEmail(draft.email);
+      stored = await saveAccountDetails(draft);
     } catch (error) {
-      // Pessimistic like every write since RUN-48: the failure stays on
-      // screen and nothing pretends to be saved.
       setSaveError(
-        error instanceof ApiError ? error.message : 'Saving the changes failed. Try again.',
+        error instanceof ApiError ? error.message : 'Saving your details failed. Try again.',
       );
+      setSaving(false);
+      return;
+    }
+    // The inputs adopt what the server STORED (trimmed names, and an email
+    // normalized to lowercase), so the card and the footer never show two
+    // spellings of the same value.
+    setFirstName(stored.firstName);
+    setLastName(stored.lastName);
+    setEmail(stored.email);
+
+    try {
+      await saveWeeklyDefault(goalKm);
+    } catch (error) {
+      setSaveError(
+        error instanceof ApiError
+          ? `Your name and email were saved, but the weekly goal default was not: ${error.message}`
+          : 'Your name and email were saved, but the weekly goal default was not. Try again.',
+      );
+      // Show the number that is actually stored, not the one that failed.
+      setGoalKm(profile?.defaultWeeklyGoalKm ?? GOAL_DEFAULT_KM);
     } finally {
       setSaving(false);
     }
@@ -123,7 +154,7 @@ function SettingsForm() {
       className="flex max-w-[660px] flex-col gap-5"
     >
       <SettingsCard title="Profile">
-        <AvatarBlock profile={profile} />
+        <AvatarBlock account={account} />
         {/* The name fields share a row from `sm` up and stack on a phone
             (responsive addendum); Welcome does the same, just from `md`,
             because its column sits in a wider, sidebar-less page. */}
@@ -225,15 +256,29 @@ function SettingsForm() {
 }
 
 // 17 · Settings. The form only mounts after hydration because its draft is
-// seeded from localStorage (RUN-37 AC2), which the server cannot read;
-// rendering nothing until then beats hydrating prefilled inputs against
-// server-rendered empty ones.
+// seeded from the stores, which the server cannot read; rendering nothing
+// until then beats hydrating prefilled inputs against server-rendered empty
+// ones.
+//
+// An account that signed up but never finished setup has no profile row, so
+// the Training card would have nothing to save into (saveWeeklyDefault
+// refuses to invent a running level). Such a visitor can only get here by
+// deep link - the landing route sends them to the wizard - so this screen
+// sends them there too instead of showing a form whose second half cannot
+// work.
 export default function SettingsView() {
   const hydrated = useHydrated();
+  const router = useRouter();
+  const profile = useProfile();
+  const onboarded = profile !== null;
+
+  useEffect(() => {
+    if (hydrated && !onboarded) router.replace(ROUTES.setupGoal);
+  }, [hydrated, onboarded, router]);
 
   return (
     <div className="px-5 pb-6 sm:px-8 lg:px-[40px] lg:pb-[32px]">
-      {hydrated && <SettingsForm />}
+      {hydrated && onboarded && <SettingsForm />}
     </div>
   );
 }

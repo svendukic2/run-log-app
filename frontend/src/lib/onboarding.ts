@@ -15,6 +15,12 @@
 // signup ever starts creating profile rows, this derivation dies and a
 // stored flag comes back.
 //
+// The profile holds the SETUP ANSWERS only since RUN-59 (running level and
+// the default weekly goal). The runner's name and email live on the account
+// (account.ts, GET/PUT /api/account) - the single source of truth every
+// social surface already read from - so nothing here needs local identity
+// data, which is what lets setup resume on any device after signing in.
+//
 // The wizard draft itself lives in onboardingDraft.ts (a leaf); this module
 // owns the profile store and the onboarding actions. The one-time import of
 // v1 localStorage data died with RUN-58: real sign-in replaced the device
@@ -40,16 +46,13 @@ import {
   clearOnboardingDraft,
   getOnboardingDraft,
   saveDraftGoal,
-  saveDraftProfile,
   type OnboardingDraft,
-  type Profile,
 } from './onboardingDraft';
-import { validateProfileForm } from './profileValidation';
 import { ROUTES } from './routes';
 import { ApiError, hasStoredSession } from './session';
 
 export { RUNNING_LEVELS, type ProfileRecord, type RunningLevel };
-export { getOnboardingDraft, saveDraftGoal, saveDraftProfile, type OnboardingDraft, type Profile };
+export { getOnboardingDraft, saveDraftGoal, type OnboardingDraft };
 
 /* Store -------------------------------------------------------------------- */
 
@@ -191,35 +194,27 @@ export function useProfileError(): ProfileError | null {
 /* Onboarding actions --------------------------------------------------------- */
 
 // "Finish setup" (RUN-11): the moment the wizard's answers become the
-// account's records. The draft is validated LOCALLY first - a bad draft
-// (hand-edited storage) must fail before it burns a round trip. Names and
-// email come from the Sign up form (RUN-58), which seeds the draft; a
-// missing draft profile means this device never went through signup's form
-// (signed in on a fresh device with unfinished setup - the resume story is
-// RUN-59's). Goal first, then the profile (whose defaultWeeklyGoalKm starts
-// as the goal km - the Settings stepper edits it from there, SET-3); the
-// draft dies only after both landed, so a failed finish keeps every answer
-// and the button retries. A failure between the two PUTs leaves a goal row
-// on an account with no profile, which the landing route correctly treats
-// as unfinished and the retried finish repairs (full-replace PUTs).
+// account's records. Since RUN-59 the ONLY thing it needs from local state
+// is the drafted goal - name and email already live on the account from
+// signup - which is exactly what makes setup resumable after signing in on
+// another device (AC3). Goal first, then the profile (whose
+// defaultWeeklyGoalKm starts as the goal km - the Settings stepper edits it
+// from there, SET-3); the draft dies only after both landed, so a failed
+// finish keeps the answers and the button retries. A failure between the two
+// PUTs leaves a goal row on an account with no profile, which the landing
+// route correctly treats as unfinished and the retried finish repairs
+// (full-replace PUTs).
 export async function finishOnboarding(level: RunningLevel): Promise<void> {
   const draft = getOnboardingDraft();
-  if (!draft.profile || Object.keys(validateProfileForm(draft.profile)).length > 0) {
-    // No advice in this message on purpose: until RUN-59 lands the resume
-    // story, signing in on a fresh device cannot re-seed the draft, so any
-    // "do X to fix it" here would be a promise the app cannot keep.
-    throw new ApiError('Your sign-up details are missing on this device, so setup cannot finish here yet.');
-  }
   // Nothing is fabricated. The goal step always drafts a goal (Skip drafts
   // the 20 km default explicitly), so a missing one means this screen was
   // reached out of order.
   if (!draft.goal) {
-    throw new ApiError('Your weekly goal from the second step is missing. Go back a step.');
+    throw new ApiError('Your weekly goal from the first step is missing. Go back a step.');
   }
   const goal = draft.goal;
   await putGoal(goal);
   const profile = await putProfile({
-    ...draft.profile,
     runningLevel: level,
     defaultWeeklyGoalKm: goal.km,
   });
@@ -229,25 +224,23 @@ export async function finishOnboarding(level: RunningLevel): Promise<void> {
   window.dispatchEvent(new Event(ACCOUNT_RECORDS_CHANGED_EVENT));
 }
 
-// The Settings save (RUN-37/38/39): names, email and the default weekly
-// goal in one full-replace PUT. The running level is not editable after
-// onboarding (by design, flagged on RUN-11), so the stored one rides
-// along - and because a full replace with a guessed level would silently
-// rewrite data, a missing record is a hard error, not a default. (The
-// Settings form mounts behind the boundary, so the record is loaded; this
-// throw is the enforcement of that assumption, not a code path.) SET-6 (a
-// changed default leaves the running week's target alone) is enforced by
-// the SERVER, which freezes the current week before the new default lands.
-export async function saveProfileSettings(
-  update: Profile & { defaultWeeklyGoalKm: number },
-): Promise<void> {
+// The Settings save for the SETUP half (RUN-37/38/39, narrowed by RUN-59):
+// the default weekly goal. Name and email are the account's and go through
+// saveAccountDetails (account.ts). The running level is not editable after
+// onboarding (by design, flagged on RUN-11), so the stored one rides along -
+// and because a full replace with a guessed level would silently rewrite
+// data, a missing record is a hard error, not a default. (The Settings form
+// mounts behind the boundary, so the record is loaded; this throw is the
+// enforcement of that assumption, not a code path.) SET-6 (a changed default
+// leaves the running week's target alone) is enforced by the SERVER, which
+// freezes the current week before the new default lands.
+export async function saveWeeklyDefault(defaultWeeklyGoalKm: number): Promise<void> {
   const current = snapshot.profile;
   if (!current) {
     throw new ApiError('Your profile has not loaded yet. Reload the page and try again.');
   }
   const profile = await putProfile({
-    ...update,
-    defaultWeeklyGoalKm: clampGoal(update.defaultWeeklyGoalKm),
+    defaultWeeklyGoalKm: clampGoal(defaultWeeklyGoalKm),
     runningLevel: current.runningLevel,
   });
   publish({ status: 'ready', profile, error: null });
@@ -281,25 +274,6 @@ export function useLandingRoute(): string | null {
   if (current.status !== 'ready') return null;
   if (!hasStoredSession()) return ROUTES.signIn;
   return current.profile ? ROUTES.dashboard : ROUTES.setupGoal;
-}
-
-/* Display helpers (RUN-14) ---------------------------------------------------- */
-
-// There is no avatar upload, so the "avatar" is always the derived initials.
-function firstGrapheme(value: string): string {
-  // Spread instead of [0] so surrogate pairs ("Đurđa", emoji) stay intact.
-  return [...value.trim()][0] ?? '';
-}
-
-export function profileInitials(profile: Profile): string {
-  return (firstGrapheme(profile.firstName) + firstGrapheme(profile.lastName)).toUpperCase();
-}
-
-// "Marko Kovačić" renders as "Marko K." per the Figma footer (node 47:39).
-export function profileShortName(profile: Profile): string {
-  const lastInitial = firstGrapheme(profile.lastName);
-  const firstName = profile.firstName.trim();
-  return lastInitial ? `${firstName} ${lastInitial.toUpperCase()}.` : firstName;
 }
 
 /* Test hook -------------------------------------------------------------------- */

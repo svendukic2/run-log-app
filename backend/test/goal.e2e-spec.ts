@@ -181,9 +181,6 @@ describe('Goal and week targets API (e2e)', () => {
         .set(auth)
         .send({ ...validGoal(), km: 30 });
       await request(server).put('/api/profile').set(auth).send({
-        firstName: 'Ana',
-        lastName: 'Anić',
-        email: 'ana@example.com',
         runningLevel: 'Beginner',
         defaultWeeklyGoalKm: 45,
       });
@@ -258,9 +255,6 @@ describe('Goal and week targets API (e2e)', () => {
     it('freezes the running week under the old default when the Settings default changes (SET-6)', async () => {
       const server = app.getHttpServer();
       const profile = {
-        firstName: 'Ana',
-        lastName: 'Anić',
-        email: 'ana@example.com',
         runningLevel: 'Beginner',
         defaultWeeklyGoalKm: 45,
       };

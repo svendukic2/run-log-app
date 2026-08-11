@@ -25,8 +25,14 @@ export default function RequireSession({ children }: { children: React.ReactNode
   const hasSession = useHasSession();
 
   useEffect(() => {
-    if (!hasSession) router.replace(ROUTES.signIn);
-  }, [hasSession, router]);
+    // Read the session HERE rather than trusting the render-time value: on a
+    // hydrating page that value is still the server snapshot (false, because
+    // the server cannot see localStorage), and redirecting on it would bounce
+    // every deep link into a guarded route through Sign in - which, for a
+    // signed-in visitor, lands them on the Dashboard instead of the page they
+    // asked for. By effect time the real session is readable.
+    if (!hasStoredSession()) router.replace(ROUTES.signIn);
+  }, [router]);
 
   if (!hasSession) return null;
   return <>{children}</>;

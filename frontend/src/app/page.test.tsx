@@ -35,8 +35,9 @@ describe('Landing router (RUN-13, reshaped by RUN-58)', () => {
   });
 
   it('redirects to the Dashboard when the profile exists on the server', async () => {
-    // A profile on the server IS "onboarding complete" (RUN-50 derivation).
-    seedProfile({ firstName: 'Marko', lastName: 'Horvat', email: 'marko@email.com' });
+    // A profile on the server IS "onboarding complete" (RUN-50 derivation);
+    // since RUN-59 it holds the setup answers only, no identity.
+    seedProfile();
 
     const { container } = render(<LandingPage />);
 

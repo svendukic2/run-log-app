@@ -4,7 +4,7 @@ import { useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ROUTES, isActiveRoute } from '@/lib/routes';
-import { profileInitials, profileShortName, useProfile } from '@/lib/onboarding';
+import { accountInitials, accountShortName, useAccount } from '@/lib/account';
 import { signOut } from '@/lib/session';
 
 // Icon geometry is taken 1:1 from the Figma exports (20x20 viewBox, node 47:40);
@@ -124,7 +124,7 @@ interface SidebarProps {
 // in as an off-canvas drawer (RUN-13, responsive addendum).
 export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   const pathname = usePathname();
-  const profile = useProfile();
+  const account = useAccount();
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
   // Opening the drawer moves focus into it so keyboard and screen-reader users
@@ -204,10 +204,11 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
 
       <div className="min-h-[26px] flex-1" />
 
-      {/* Profile footer (RUN-14). useProfile is null on the server snapshot, so
+      {/* Identity footer (RUN-14, reading the account since RUN-59).
+          useAccount is null on the server snapshot, so
           the footer appears right after hydration; rendering nothing until then
           beats guessing a placeholder identity. */}
-      {profile && (
+      {account && (
         <div
           data-testid="profile-footer"
           className="flex w-full flex-col border-t border-ink-border px-[10px] pt-[14px] pb-[6px]"
@@ -218,14 +219,14 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
               className="flex size-[36px] shrink-0 items-center justify-center rounded-full bg-ink-elevated"
             >
               <span className="text-[14px] font-semibold text-white">
-                {profileInitials(profile)}
+                {accountInitials(account)}
               </span>
             </div>
             <div className="flex min-w-0 flex-1 flex-col gap-px">
               <span className="truncate text-[13px] font-medium text-on-dark-soft">
-                {profileShortName(profile)}
+                {accountShortName(account)}
               </span>
-              <span className="truncate text-[11.5px] text-on-dark-subtle">{profile.email}</span>
+              <span className="truncate text-[11.5px] text-on-dark-subtle">{account.email}</span>
             </div>
           </div>
           {/* Sign out (RUN-58 AC5): clears the session and lands on Sign in

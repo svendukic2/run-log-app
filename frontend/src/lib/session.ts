@@ -114,6 +114,15 @@ function writeSession(session: StoredSession): void {
   }
 }
 
+// Keeps the stored email in step with a Settings rename (RUN-59): it is the
+// address the user will type at the next Sign in, so a stale copy here would
+// be a second, wrong truth. No-op when signed out.
+export function updateSessionEmail(email: string): void {
+  const session = readSession();
+  if (!session) return;
+  writeSession({ ...session, email });
+}
+
 function clearSession(): void {
   memorySession = null;
   persistenceFailed = false;

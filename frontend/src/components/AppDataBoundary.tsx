@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { reloadAccount, useAccountError, useAccountStatus } from '@/lib/account';
 import { useHydrated } from '@/lib/useHydrated';
 import { reloadGoal, useGoalStoreError, useGoalStoreStatus } from '@/lib/goal';
 import { reloadProfile, useProfileError, useProfileStatus } from '@/lib/onboarding';
@@ -62,20 +63,22 @@ function LoadingNotice({ immediate }: { immediate: boolean }) {
 export default function AppDataBoundary({ children }: { children: React.ReactNode }) {
   const hydrated = useHydrated();
   const runsStatus = useRunsStatus();
+  const accountStatus = useAccountStatus();
   const profileStatus = useProfileStatus();
   const goalStatus = useGoalStoreStatus();
   const runsError = useRunsError();
+  const accountError = useAccountError();
   const profileError = useProfileError();
   const goalError = useGoalStoreError();
   const notice = useRunsNotice();
   const [retried, setRetried] = useState(false);
 
-  const statuses = [runsStatus, profileStatus, goalStatus];
+  const statuses = [runsStatus, accountStatus, profileStatus, goalStatus];
   // One card, one message - but a TERMINAL error always outranks a
   // transient one: showing "Try again" because the runs load happened to
   // fail first, while the profile is terminally unable to authenticate,
   // would loop the user through retries that can never end well.
-  const errors = [runsError, profileError, goalError].filter(
+  const errors = [runsError, accountError, profileError, goalError].filter(
     (candidate): candidate is NonNullable<typeof candidate> => candidate !== null,
   );
   const error = errors.find((candidate) => candidate.terminal) ?? errors[0] ?? null;
@@ -117,6 +120,7 @@ export default function AppDataBoundary({ children }: { children: React.ReactNod
               // Only the failed stores actually refetch: reload on a store
               // that is already 'ready' or mid-flight coalesces.
               if (runsStatus === 'error') reloadRuns();
+              if (accountStatus === 'error') reloadAccount();
               if (profileStatus === 'error') reloadProfile();
               if (goalStatus === 'error') reloadGoal();
             }}

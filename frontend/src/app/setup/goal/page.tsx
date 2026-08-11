@@ -6,7 +6,17 @@ import Badge from '@/components/Badge';
 import Brand from '@/components/Brand';
 import DateField from '@/components/DateField';
 import StepDots from '@/components/StepDots';
-import { clampGoal, GOAL_DEFAULT_KM, GOAL_MAX_KM, GOAL_MIN_KM, todayIso } from '@/lib/goal';
+import { useAccount } from '@/lib/account';
+import {
+  clampGoal,
+  GOAL_DEFAULT_KM,
+  GOAL_MAX_KM,
+  GOAL_MIN_KM,
+  todayIso,
+  useGoal,
+  useGoalStoreStatus,
+  type Goal,
+} from '@/lib/goal';
 import { getOnboardingDraft, saveDraftGoal } from '@/lib/onboarding';
 import { ROUTES } from '@/lib/routes';
 import { useHydrated } from '@/lib/useHydrated';
@@ -16,14 +26,14 @@ import { useHydrated } from '@/lib/useHydrated';
 // the wizard DRAFT (RUN-50: nothing reaches the server until "Finish setup")
 // and open Setup - Running level (03). A goal already drafted (e.g. after
 // coming Back from step 03) refills the controls so entered values are kept
-// (RUN-11).
-export default function WeeklyGoalPage() {
+// (RUN-11). The badge greets from the ACCOUNT (RUN-59), so a runner resuming
+// setup after signing in on another device is still greeted by name.
+function WeeklyGoalForm({ seed }: { seed: Goal | null }) {
   const router = useRouter();
-  const hydrated = useHydrated();
-  const [draft] = useState(() => getOnboardingDraft());
-  const [km, setKm] = useState(() => draft.goal?.km ?? GOAL_DEFAULT_KM);
-  const [startDate, setStartDate] = useState(() => draft.goal?.startDate ?? todayIso());
-  const [endDate, setEndDate] = useState(() => draft.goal?.endDate ?? '');
+  const account = useAccount();
+  const [km, setKm] = useState(() => seed?.km ?? GOAL_DEFAULT_KM);
+  const [startDate, setStartDate] = useState(() => seed?.startDate ?? todayIso());
+  const [endDate, setEndDate] = useState(() => seed?.endDate ?? '');
   const [dateError, setDateError] = useState('');
 
   const handleStartTracking = () => {
@@ -43,10 +53,6 @@ export default function WeeklyGoalPage() {
     router.push(ROUTES.setupLevel);
   };
 
-  // The stored goal and "today" only exist on the client; render after
-  // hydration so the prerendered HTML never disagrees with restored values.
-  if (!hydrated) return null;
-
   return (
     <main className="flex flex-1 flex-col bg-canvas">
       <header className="px-6 pt-[30px] md:px-12">
@@ -56,7 +62,7 @@ export default function WeeklyGoalPage() {
         <div className="flex w-full max-w-[600px] flex-col items-center">
           <StepDots step={1} label="Step 1 of 2" />
           <div className="mt-[26px]">
-            <Badge>{draft.profile ? `Welcome, ${draft.profile.firstName}` : 'Welcome'}</Badge>
+            <Badge>{account ? `Welcome, ${account.firstName}` : 'Welcome'}</Badge>
           </div>
           <h1 className="mt-[22px] text-center font-display text-[32px] leading-[1.08] font-bold tracking-[-0.8px] text-ink md:text-[40px]">
             How far do you want
@@ -147,4 +153,28 @@ export default function WeeklyGoalPage() {
       </div>
     </main>
   );
+}
+
+// The gate: the controls are seeded ONCE, so they must not mount before the
+// seed is known. Two seeds, in order - the local wizard draft (a goal picked
+// but not finished with, including coming Back from step 03), then the goal
+// the server already holds (RUN-59 AC3: setup resuming on a device that has
+// no draft, or after a finish whose profile PUT failed). Neither existing
+// means a genuinely fresh setup, which starts at the 20 km default.
+export default function WeeklyGoalPage() {
+  const hydrated = useHydrated();
+  const goalStatus = useGoalStoreStatus();
+  const storedGoal = useGoal();
+  // Read once per mount: the draft is local and synchronous, and re-reading
+  // it on every render would fight the controls the user is editing.
+  const [draftGoal] = useState(() =>
+    typeof window === 'undefined' ? null : (getOnboardingDraft().goal ?? null),
+  );
+
+  // "today" and both seeds only exist on the client, and the server goal
+  // needs its store settled; rendering nothing until then beats seeding the
+  // controls twice.
+  if (!hydrated || goalStatus !== 'ready') return null;
+
+  return <WeeklyGoalForm seed={draftGoal ?? storedGoal} />;
 }
