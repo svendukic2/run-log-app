@@ -9,9 +9,9 @@ import { PrismaService } from '../prisma/prisma.service';
 import { Prisma } from '../generated/prisma/client';
 import type { Notification as NotificationRow } from '../generated/prisma/client';
 
-// The notification vocabulary (RUN-65). 'event-joined' is defined now so the
-// payload contract exists before events do; nothing writes it until events
-// land in C2.
+// The notification vocabulary (RUN-65). 'event-joined' was defined here as
+// contract before events existed; the events module (RUN-67) writes it via
+// recordEventJoined.
 export const NOTIFICATION_TYPES = [
   'new-follower',
   'followed-ran',
@@ -48,7 +48,8 @@ export type FollowedRanPayload = {
   date: string; // yyyy-mm-dd, like every calendar day in the contract
 };
 
-// Someone joined your event. Contract only until C2 activates events.
+// Someone joined your event (RUN-67 AC4): the joiner's id and name plus the
+// event's id and name, snapshotted like every other payload.
 export type EventJoinedPayload = {
   joinerId: string;
   firstName: string;
@@ -135,6 +136,57 @@ export class NotificationsService {
       data: {
         userId: followeeId,
         type: 'new-follower' satisfies NotificationType,
+        payload,
+      },
+    });
+  }
+
+  // RUN-67 AC4: someone joined your event -> you get one 'event-joined' with
+  // the joiner's name and the event's name. Called only when the participant
+  // row was actually created and the joiner is not the owner, so the repeat
+  // join and the owner's own creation-join never reach this.
+  async recordEventJoined(
+    db: Db,
+    ownerId: string,
+    joinerId: string,
+    event: { id: string; name: string },
+  ): Promise<void> {
+    // Bounds the join/leave spam loop exactly like recordNewFollower bounds
+    // follow churn: while the owner still has an UNREAD event-joined from
+    // this joiner for this event, a fresh join writes nothing. Reading it
+    // re-arms the next genuine join.
+    const alreadyPending = await db.notification.findFirst({
+      where: {
+        userId: ownerId,
+        type: 'event-joined' satisfies NotificationType,
+        readAt: null,
+        AND: [
+          { payload: { path: ['joinerId'], equals: joinerId } },
+          { payload: { path: ['eventId'], equals: event.id } },
+        ],
+      },
+      select: { id: true },
+    });
+    if (alreadyPending) return;
+
+    // The participant row's FK just verified the joiner exists, so inside
+    // this transaction the name lookup cannot miss (same reasoning as
+    // recordNewFollower).
+    const joiner = await db.user.findUniqueOrThrow({
+      where: { id: joinerId },
+      select: { firstName: true, lastName: true },
+    });
+    const payload: EventJoinedPayload = {
+      joinerId,
+      firstName: joiner.firstName,
+      lastName: joiner.lastName,
+      eventId: event.id,
+      eventName: event.name,
+    };
+    await db.notification.create({
+      data: {
+        userId: ownerId,
+        type: 'event-joined' satisfies NotificationType,
         payload,
       },
     });

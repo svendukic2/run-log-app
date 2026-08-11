@@ -6,6 +6,7 @@ import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { validateEnv } from './config/env.validation';
+import { EventsModule } from './events/events.module';
 import { FollowModule } from './follow/follow.module';
 import { GoalModule } from './goal/goal.module';
 import { NotificationsModule } from './notifications/notifications.module';
@@ -28,6 +29,7 @@ import { WeekTargetsModule } from './week-targets/week-targets.module';
     PrismaModule,
     RunsModule,
     AuthModule,
+    EventsModule,
     FollowModule,
     ProfileModule,
     GoalModule,

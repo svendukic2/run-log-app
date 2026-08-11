@@ -116,6 +116,71 @@ describe('NotificationsService', () => {
     });
   });
 
+  describe('recordEventJoined', () => {
+    const EVENT = { id: 'event-1', name: 'Summer 100k' };
+
+    it('writes one self-contained event-joined notification for the owner (RUN-67 AC4)', async () => {
+      prisma.notification.findFirst.mockResolvedValue(null);
+      prisma.user.findUniqueOrThrow.mockResolvedValue({
+        firstName: 'Bruno',
+        lastName: 'Tester',
+      });
+      prisma.notification.create.mockResolvedValue({});
+
+      await service.recordEventJoined(
+        prisma as never,
+        'user-owner',
+        'user-bruno',
+        EVENT,
+      );
+
+      // Joiner name and event name are copied into the payload at write
+      // time, never joined later.
+      expect(prisma.notification.create).toHaveBeenCalledWith({
+        data: {
+          userId: 'user-owner',
+          type: 'event-joined',
+          payload: {
+            joinerId: 'user-bruno',
+            firstName: 'Bruno',
+            lastName: 'Tester',
+            eventId: 'event-1',
+            eventName: 'Summer 100k',
+          },
+        },
+      });
+    });
+
+    it('writes nothing while an unread event-joined from the same joiner and event is pending (spam bound)', async () => {
+      prisma.notification.findFirst.mockResolvedValue({ id: 'notif-1' });
+
+      await service.recordEventJoined(
+        prisma as never,
+        'user-owner',
+        'user-bruno',
+        EVENT,
+      );
+
+      // The pending-unread check matches on BOTH payload keys: only this
+      // joiner's unread row for this event suppresses the write, so joining
+      // a second event still notifies.
+      expect(prisma.notification.findFirst).toHaveBeenCalledWith({
+        where: {
+          userId: 'user-owner',
+          type: 'event-joined',
+          readAt: null,
+          AND: [
+            { payload: { path: ['joinerId'], equals: 'user-bruno' } },
+            { payload: { path: ['eventId'], equals: 'event-1' } },
+          ],
+        },
+        select: { id: true },
+      });
+      expect(prisma.user.findUniqueOrThrow).not.toHaveBeenCalled();
+      expect(prisma.notification.create).not.toHaveBeenCalled();
+    });
+  });
+
   describe('fanOutRunLogged', () => {
     const RUN = {
       id: 'run-9',
