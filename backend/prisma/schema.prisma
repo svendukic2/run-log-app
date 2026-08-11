@@ -158,6 +158,11 @@ model Notification {
 // distance goal, Float like Run.distanceKm because the leaderboard sums run
 // distances against it. The owner cascade deletes the event (and, through
 // it, the participant rows): an event does not outlive its owner.
+//
+// Not visible here: the add_event_date_order_check migration adds
+// CHECK ("endDate" >= "startDate") at the database level, because Prisma
+// cannot express CHECK constraints. It backstops the service-side
+// validation against concurrent PATCHes racing the merged-pair check.
 model Event {
   id           String             @id @default(cuid())
   name         String

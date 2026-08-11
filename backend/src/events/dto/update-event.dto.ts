@@ -15,9 +15,11 @@ import {
 
 // PATCH /api/events/:id (RUN-67 AC5): every field optional, same rules as
 // create for whatever is present. Deliberately a hand-written mirror rather
-// than PartialType(CreateEventDto): the app takes no dependency on
-// @nestjs/mapped-types, and targetKm's rule genuinely differs (null clears
-// the goal here; create rejects null).
+// than PartialType(CreateEventDto): PartialType's @IsOptional waves an
+// explicit null through, and {"name": null} must stay a 400, not a null
+// reaching a NOT NULL column - ValidateIfPresent semantics, the same reason
+// update-run.dto.ts documents. targetKm's rule also genuinely differs (null
+// clears the goal here; create rejects null).
 export class UpdateEventDto {
   @ValidateIfPresent()
   @Transform(({ value }): unknown =>

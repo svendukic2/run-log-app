@@ -9,12 +9,23 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { deriveEventState, EventsService } from './events.service';
 
+// Freeze "today" for the whole suite: the fixture days below are computed
+// once at module load, but the service calls utcTodayIso() per request, so
+// a suite run straddling UTC midnight would otherwise compare day N
+// fixtures against day N+1 queries and flake exactly once a day.
+jest.mock('../common/dates', () => {
+  const actual =
+    jest.requireActual<typeof import('../common/dates')>('../common/dates');
+  const frozenToday = actual.utcTodayIso();
+  return { ...actual, utcTodayIso: (): string => frozenToday };
+});
+
 const USER_ID = 'user-me';
 const OWNER_ID = 'user-owner';
 
-// The suite computes its calendar days from the real today: state derivation
-// runs against utcTodayIso() inside the service, so fixed literals would
-// start failing the day after they were written.
+// The suite computes its calendar days from the (frozen) real today: state
+// derivation is relative to it, so fixed literals would start failing the
+// day after they were written.
 const TODAY = utcTodayIso();
 const YESTERDAY = addDaysIso(TODAY, -1);
 const TOMORROW = addDaysIso(TODAY, 1);
@@ -435,13 +446,19 @@ describe('EventsService', () => {
       expect(result.targetKm).toBeNull();
     });
 
-    it('answers an empty PATCH from the read without writing', async () => {
+    it('answers an empty PATCH as a plain read without writing', async () => {
       prisma.event.findFirst.mockResolvedValue(eventRow({ ownerId: USER_ID }));
+      prisma.event.findUnique.mockResolvedValue(eventRow({ ownerId: USER_ID }));
 
       const result = await service.update(USER_ID, 'event-1', {});
 
       expect(result.id).toBe('event-1');
       expect(prisma.event.update).not.toHaveBeenCalled();
+      // The pre-read stays lean: only the dates the merged check needs.
+      expect(prisma.event.findFirst).toHaveBeenCalledWith({
+        where: { id: 'event-1', ownerId: USER_ID },
+        select: { startDate: true, endDate: true },
+      });
     });
 
     it('404s when the event vanishes between the read and the write', async () => {

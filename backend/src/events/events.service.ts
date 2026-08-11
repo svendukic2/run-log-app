@@ -250,9 +250,12 @@ export class EventsService {
     id: string,
     dto: UpdateEventDto,
   ): Promise<EventResponse> {
+    // The pre-read exists for the merged date-order check below (plus the
+    // ownership 404), so it fetches exactly the two dates; the full
+    // include-shaped row is paid for once, by whichever branch answers.
     const existing = await this.prisma.event.findFirst({
       where: { id, ownerId: userId },
-      include: eventInclude(userId),
+      select: { startDate: true, endDate: true },
     });
     if (!existing) throw new NotFoundException(`Event ${id} not found`);
 
@@ -274,10 +277,11 @@ export class EventsService {
       ...(dto.targetKm !== undefined && { targetKm: dto.targetKm }),
     };
 
-    // An empty PATCH is a deliberate no-op, answered from the read above
-    // (the runs update sets this precedent).
+    // An empty PATCH is a deliberate no-op, answered like a plain read (the
+    // runs update sets this precedent); the scoped pre-read above already
+    // proved the caller owns the row, so the any-user findOne is safe here.
     if (Object.keys(data).length === 0) {
-      return this.toResponse(existing, utcTodayIso());
+      return this.findOne(userId, id);
     }
 
     try {

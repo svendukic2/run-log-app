@@ -207,12 +207,14 @@ membership is structural, not a preference.
 | startDate | date | Inclusive calendar day (yyyy-mm-dd in the API) |
 | endDate | date | Inclusive; on/after startDate, validated on the merged pair for PATCH |
 | targetKm | number, nullable | Optional collective distance goal; Float like Run.distanceKm |
+| createdAt | timestamp | ISO instant in the API, like Notification's |
 | ownerId | string FK -> User | Cascades on user delete: an event does not outlive its owner |
 
 | Field (EventParticipant) | Type | Notes |
 | --- | --- | --- |
 | eventId | string FK -> Event | Cascades on event delete |
 | userId | string FK -> User | Cascades on user delete |
+| createdAt | timestamp | When they joined; not exposed in the API yet |
 | (eventId, userId) | unique | A repeat join is impossible at the schema level, so the API treats it as an idempotent no-op (the Follow construction) |
 
 The lifecycle state - `upcoming` | `active` | `finished` - is **derived from the
