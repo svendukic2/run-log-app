@@ -64,7 +64,9 @@ describe('Dashboard header (RUN-15)', () => {
     expect(within(emptyCard).getByText('No records yet')).toBeInTheDocument();
     // The card sits below the coach card, per 04/05's right column.
     const coach = within(body).getByRole('region', { name: 'AI Coach' });
-    expect(coach.compareDocumentPosition(emptyCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      coach.compareDocumentPosition(emptyCard) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     unmount();
 
     // Filled state (05): rows derived from the stored runs.

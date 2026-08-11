@@ -112,9 +112,7 @@ describe('AI Coach teaser card (RUN-21)', () => {
       render(<CoachTeaserCard />);
 
       expect(
-        screen.getByText(
-          "You're 6 km from your goal with 1 day left. 6 km today gets you there.",
-        ),
+        screen.getByText("You're 6 km from your goal with 1 day left. 6 km today gets you there."),
       ).toBeInTheDocument();
     });
 

@@ -181,17 +181,28 @@ describe('Events API (e2e)', () => {
   });
 
   it('lets bruno join idempotently and notifies the owner exactly once (AC2, AC4)', async () => {
-    await request(app.getHttpServer())
-      .post(`/api/events/${eventId}/join`)
-      .set(bruno.auth)
-      .expect(200)
-      .expect({ joined: true });
+    // Join answers the updated event, so the card that clicked needs no
+    // follow-up read (review fix).
+    const joined = (
+      await request(app.getHttpServer())
+        .post(`/api/events/${eventId}/join`)
+        .set(bruno.auth)
+        .expect(200)
+    ).body as EventResponse;
+    expect(joined).toMatchObject({
+      id: eventId,
+      joined: true,
+      mine: false,
+      participantCount: 2,
+    });
     // The repeat join is an idempotent no-op and must not re-notify.
-    await request(app.getHttpServer())
-      .post(`/api/events/${eventId}/join`)
-      .set(bruno.auth)
-      .expect(200)
-      .expect({ joined: true });
+    const repeat = (
+      await request(app.getHttpServer())
+        .post(`/api/events/${eventId}/join`)
+        .set(bruno.auth)
+        .expect(200)
+    ).body as EventResponse;
+    expect(repeat).toMatchObject({ joined: true, participantCount: 2 });
 
     const detail = (
       await request(app.getHttpServer())
@@ -220,11 +231,17 @@ describe('Events API (e2e)', () => {
   });
 
   it('owner joining their own event stays one participant row and never self-notifies', async () => {
-    await request(app.getHttpServer())
-      .post(`/api/events/${eventId}/join`)
-      .set(ana.auth)
-      .expect(200)
-      .expect({ joined: true });
+    const body = (
+      await request(app.getHttpServer())
+        .post(`/api/events/${eventId}/join`)
+        .set(ana.auth)
+        .expect(200)
+    ).body as EventResponse;
+    expect(body).toMatchObject({
+      joined: true,
+      mine: true,
+      participantCount: 2,
+    });
 
     const bell = (
       await request(app.getHttpServer())
@@ -241,7 +258,7 @@ describe('Events API (e2e)', () => {
     await request(app.getHttpServer())
       .delete(`/api/events/${eventId}/join`)
       .set(bruno.auth)
-      .expect(204);
+      .expect(200);
     await request(app.getHttpServer())
       .post(`/api/events/${eventId}/join`)
       .set(bruno.auth)
@@ -263,18 +280,29 @@ describe('Events API (e2e)', () => {
       .post('/api/events/nonexistent/join')
       .set(bruno.auth)
       .expect(404);
+    await request(app.getHttpServer())
+      .delete('/api/events/nonexistent/join')
+      .set(bruno.auth)
+      .expect(404);
   });
 
   it('leave is idempotent for members; the owner cannot leave (AC2)', async () => {
-    await request(app.getHttpServer())
-      .delete(`/api/events/${eventId}/join`)
-      .set(bruno.auth)
-      .expect(204);
+    // Leave answers the updated event too (review fix; was a bare 204).
+    const left = (
+      await request(app.getHttpServer())
+        .delete(`/api/events/${eventId}/join`)
+        .set(bruno.auth)
+        .expect(200)
+    ).body as EventResponse;
+    expect(left).toMatchObject({ joined: false, participantCount: 1 });
     // Leaving again (or an event never joined) lands in the same state.
-    await request(app.getHttpServer())
-      .delete(`/api/events/${eventId}/join`)
-      .set(bruno.auth)
-      .expect(204);
+    const again = (
+      await request(app.getHttpServer())
+        .delete(`/api/events/${eventId}/join`)
+        .set(bruno.auth)
+        .expect(200)
+    ).body as EventResponse;
+    expect(again).toMatchObject({ joined: false, participantCount: 1 });
 
     await request(app.getHttpServer())
       .delete(`/api/events/${eventId}/join`)

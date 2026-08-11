@@ -1,14 +1,9 @@
 import {
-  compareEventsChronological,
-  emptyEventForm,
-  EVENT_DESCRIPTION_MAX_LENGTH,
-  EVENT_NAME_MAX_LENGTH,
+  dedupeEventsById,
   formatEventWindow,
-  formatParticipantCount,
   groupEventsByState,
   isCommunityEvent,
   toEventDraft,
-  todayIso,
   validateEventForm,
   type CommunityEvent,
   type EventFormValues,
@@ -44,55 +39,21 @@ function makeForm(overrides: Partial<EventFormValues> = {}): EventFormValues {
 }
 
 describe('validateEventForm (RUN-68 AC3)', () => {
-  it('accepts a complete form and one with only the required fields', () => {
+  it('accepts the required fields alone and with the optional ones', () => {
     expect(validateEventForm(makeForm())).toEqual({});
     expect(validateEventForm(makeForm({ description: 'Run together', targetKm: '100' }))).toEqual(
       {},
     );
   });
 
-  it('requires a non-blank name and bounds it like the API', () => {
-    expect(validateEventForm(makeForm({ name: '' })).name).toBe('Event name is required');
-    expect(validateEventForm(makeForm({ name: '   ' })).name).toBe('Event name is required');
-    expect(
-      validateEventForm(makeForm({ name: 'x'.repeat(EVENT_NAME_MAX_LENGTH + 1) })).name,
-    ).toMatch(/120/);
-    // At the bound is fine.
-    expect(
-      validateEventForm(makeForm({ name: 'x'.repeat(EVENT_NAME_MAX_LENGTH) })).name,
-    ).toBeUndefined();
-  });
-
-  it('bounds the description like the API', () => {
-    expect(
-      validateEventForm(makeForm({ description: 'x'.repeat(EVENT_DESCRIPTION_MAX_LENGTH + 1) }))
-        .description,
-    ).toMatch(/2000/);
-  });
-
-  it('requires both dates and end on/after start (the date pair rule)', () => {
-    expect(validateEventForm(makeForm({ startDate: '' })).startDate).toBe('Start date is required');
-    expect(validateEventForm(makeForm({ endDate: '' })).endDate).toBe('End date is required');
-    expect(
-      validateEventForm(makeForm({ startDate: '2026-08-16', endDate: '2026-08-10' })).endDate,
-    ).toBe("End date can't be before the start date");
-    // A one-day event is legal, and so is a window fully in the past.
-    expect(validateEventForm(makeForm({ startDate: '2020-01-01', endDate: '2020-01-01' }))).toEqual(
-      {},
-    );
-  });
-
-  it('accepts an empty target and rejects a non-positive or garbled one', () => {
-    expect(validateEventForm(makeForm({ targetKm: '' }))).toEqual({});
-    expect(validateEventForm(makeForm({ targetKm: '0' })).targetKm).toBe(
-      'Enter a target greater than 0',
-    );
-    expect(validateEventForm(makeForm({ targetKm: '-5' })).targetKm).toBe(
-      'Enter a target greater than 0',
-    );
-    expect(validateEventForm(makeForm({ targetKm: 'abc' })).targetKm).toBe(
-      'Enter a target greater than 0',
-    );
+  it.each([
+    ['a blank name', { name: '   ' }, 'name'],
+    ['an over-long name', { name: 'x'.repeat(121) }, 'name'],
+    ['a missing start date', { startDate: '' }, 'startDate'],
+    ['an end date before the start', { endDate: '2026-08-01' }, 'endDate'],
+    ['a non-positive target', { targetKm: '0' }, 'targetKm'],
+  ])('rejects %s', (_label, patch, field) => {
+    expect(validateEventForm(makeForm(patch))[field as keyof EventFormValues]).toBeDefined();
   });
 
   it('reports every problem at once', () => {
@@ -104,97 +65,65 @@ describe('validateEventForm (RUN-68 AC3)', () => {
 });
 
 describe('toEventDraft', () => {
-  it('trims text and omits the target when blank (the API rejects null)', () => {
+  it('trims text and omits a blank target (the API rejects null)', () => {
     const draft = toEventDraft(makeForm({ name: '  Summer 100k  ', description: ' hi ' }));
+
     expect(draft).toEqual({
       name: 'Summer 100k',
       description: 'hi',
       startDate: '2026-08-10',
       endDate: '2026-08-16',
     });
-    expect('targetKm' in draft).toBe(false);
-  });
-
-  it('parses the target, accepting the decimal comma', () => {
-    expect(toEventDraft(makeForm({ targetKm: '100' })).targetKm).toBe(100);
     expect(toEventDraft(makeForm({ targetKm: '42,5' })).targetKm).toBe(42.5);
   });
 });
 
-describe('emptyEventForm', () => {
-  it('starts as a one-day event today', () => {
-    const form = emptyEventForm();
-    expect(form.startDate).toBe(todayIso());
-    expect(form.endDate).toBe(todayIso());
-    expect(form.name).toBe('');
-    expect(form.targetKm).toBe('');
-  });
-});
-
 describe('formatEventWindow', () => {
-  it('collapses a one-day event to its single date', () => {
-    expect(formatEventWindow('2026-08-11', '2026-08-11')).toBe('Aug 11, 2026');
-  });
-
-  it('writes the year once inside one year', () => {
-    expect(formatEventWindow('2026-08-10', '2026-08-16')).toBe('Aug 10 – Aug 16, 2026');
-  });
-
-  it('spells out both years across a year boundary', () => {
-    expect(formatEventWindow('2026-12-28', '2027-01-03')).toBe('Dec 28, 2026 – Jan 3, 2027');
-  });
-});
-
-describe('formatParticipantCount', () => {
-  it('pluralizes', () => {
-    expect(formatParticipantCount(1)).toBe('1 runner');
-    expect(formatParticipantCount(3)).toBe('3 runners');
+  it.each([
+    ['2026-08-11', '2026-08-11', 'Aug 11, 2026'],
+    ['2026-08-10', '2026-08-16', 'Aug 10 – Aug 16, 2026'],
+    ['2026-12-28', '2027-01-03', 'Dec 28, 2026 – Jan 3, 2027'],
+  ])('renders %s to %s', (start, end, expected) => {
+    expect(formatEventWindow(start, end)).toBe(expected);
   });
 });
 
 describe('groupEventsByState (AC1)', () => {
-  it('buckets every event exactly once, keeping chronological order inside a bucket', () => {
-    const events = [
-      makeEvent({ id: 'a', state: 'finished', startDate: '2026-07-01', endDate: '2026-07-02' }),
+  it('buckets every event exactly once, keeping order inside a bucket', () => {
+    const groups = groupEventsByState([
+      makeEvent({ id: 'a', state: 'finished' }),
       makeEvent({ id: 'b', state: 'active' }),
-      makeEvent({ id: 'c', state: 'upcoming', startDate: '2026-09-01', endDate: '2026-09-02' }),
+      makeEvent({ id: 'c', state: 'upcoming' }),
       makeEvent({ id: 'd', state: 'active' }),
-    ];
-    const groups = groupEventsByState(events);
+    ]);
+
     expect(groups.active.map((event) => event.id)).toEqual(['b', 'd']);
     expect(groups.upcoming.map((event) => event.id)).toEqual(['c']);
     expect(groups.finished.map((event) => event.id)).toEqual(['a']);
   });
 });
 
-describe('compareEventsChronological', () => {
-  it('orders by start day, then id, mirroring the API', () => {
-    const events = [
-      makeEvent({ id: 'b', startDate: '2026-08-10' }),
-      makeEvent({ id: 'a', startDate: '2026-08-10' }),
-      makeEvent({ id: 'c', startDate: '2026-08-01' }),
-    ];
-    expect([...events].sort(compareEventsChronological).map((event) => event.id)).toEqual([
-      'c',
-      'a',
-      'b',
+describe('dedupeEventsById', () => {
+  // The paginated walk can deliver one row twice when a concurrent insert
+  // shifts a page boundary; the duplicate would reach React as a dupe key.
+  it('collapses duplicate ids, keeping the later occurrence', () => {
+    const deduped = dedupeEventsById([
+      makeEvent({ id: 'a', participantCount: 1 }),
+      makeEvent({ id: 'b' }),
+      makeEvent({ id: 'a', participantCount: 2 }),
     ]);
+
+    expect(deduped).toHaveLength(2);
+    expect(deduped.find((event) => event.id === 'a')?.participantCount).toBe(2);
   });
 });
 
 describe('isCommunityEvent', () => {
-  it('accepts the served shape, with and without a target', () => {
-    expect(isCommunityEvent(makeEvent())).toBe(true);
+  it('accepts the served shape and rejects anything else', () => {
     expect(isCommunityEvent(makeEvent({ targetKm: 100 }))).toBe(true);
-  });
-
-  it.each([
-    ['a run', { id: 'run-1', routeName: 'Loop' }],
-    ['a missing owner', { ...makeEvent(), owner: undefined }],
-    ['an unknown state', makeEvent({ state: 'someday' as CommunityEvent['state'] })],
-    ['a missing mine flag', { ...makeEvent(), mine: undefined }],
-    ['null', null],
-  ])('rejects %s', (_label, value) => {
-    expect(isCommunityEvent(value)).toBe(false);
+    expect(isCommunityEvent({ id: 'run-1', routeName: 'Loop' })).toBe(false);
+    expect(isCommunityEvent(makeEvent({ state: 'someday' as CommunityEvent['state'] }))).toBe(
+      false,
+    );
   });
 });

@@ -439,9 +439,7 @@ describe('failure paths (RUN-50 review)', () => {
     saveDraftGoal({ km: 30, startDate: '2026-08-03', endDate: null });
     failProfileApi(500);
 
-    await expect(finishOnboarding('Beginner')).rejects.toThrow(
-      'Saving your profile failed (500).',
-    );
+    await expect(finishOnboarding('Beginner')).rejects.toThrow('Saving your profile failed (500).');
 
     // The goal PUT landed (one already-minted account with a goal row and
     // no profile), the draft survived whole for the retry.
@@ -542,9 +540,9 @@ describe('failure paths (RUN-50 review)', () => {
   it('refuses a Settings save while no profile record is loaded', async () => {
     // A full-replace PUT with a guessed runningLevel would silently rewrite
     // data; a missing record must be a hard error instead.
-    await expect(
-      saveProfileSettings({ ...ANA_DRAFT, defaultWeeklyGoalKm: 25 }),
-    ).rejects.toThrow('Your profile has not loaded yet.');
+    await expect(saveProfileSettings({ ...ANA_DRAFT, defaultWeeklyGoalKm: 25 })).rejects.toThrow(
+      'Your profile has not loaded yet.',
+    );
     expect(fetchCalls()).toHaveLength(0);
   });
 });

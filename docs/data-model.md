@@ -247,7 +247,12 @@ joined, mine, owner: { id, firstName, lastName }, createdAt }`; `joined` is the
 caller's own participation and `mine` their ownership (RUN-68), so the list alone
 renders Join/Leave buttons and knows which cards must not offer Leave - the
 device-session frontend does not track its own user id, so the API answers the
-ownership question instead of making the client compare ids. A join
+ownership question instead of making the client compare ids. Both membership
+verbs answer the **updated event** (RUN-68 review fix): the card that clicked
+learns the flipped flag and the fresh participant count in one round trip,
+instead of a follow-up read that could fail after the membership already
+changed. Leaving an event never joined is an idempotent 200; an unknown event
+is 404 for both verbs. A join
 notifies the owner (`event-joined`, see Notification above) in the same
 transaction; the owner joining their own event and repeat joins never notify.
 

@@ -17,7 +17,6 @@ import { EventListQueryDto } from './dto/event-list-query.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
 import {
   EventsService,
-  type EventJoinStateResponse,
   type EventListResponse,
   type EventResponse,
 } from './events.service';
@@ -59,27 +58,28 @@ export class EventsController {
     return this.events.findOne(user.id, id);
   }
 
-  // 200 rather than 201, like the follow endpoint: this is "ensure I am in",
-  // and the repeat call answers exactly like the first (AC2), so no response
-  // ever claims a row was created.
+  // 200 rather than 201: this is "ensure I am in", and the repeat call
+  // answers exactly like the first (AC2), so no response ever claims a row
+  // was created. Both membership verbs answer the updated event, so the
+  // card that clicked learns the flipped flag and the fresh participant
+  // count in the same round trip (review fix; the follow endpoints predate
+  // this and still answer a state stub).
   @Post(':id/join')
   @HttpCode(HttpStatus.OK)
   join(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
-  ): Promise<EventJoinStateResponse> {
+  ): Promise<EventResponse> {
     return this.events.join(user.id, id);
   }
 
-  // 204 like unfollow: nothing useful to return, and leaving an event you
-  // never joined lands here too (idempotent). The owner gets a 400 instead
-  // (AC2); their membership is structural.
+  // Leaving an event never joined lands here too (idempotent); the owner
+  // gets a 400 instead (AC2), their membership is structural.
   @Delete(':id/join')
-  @HttpCode(HttpStatus.NO_CONTENT)
   leave(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
-  ): Promise<void> {
+  ): Promise<EventResponse> {
     return this.events.leave(user.id, id);
   }
 

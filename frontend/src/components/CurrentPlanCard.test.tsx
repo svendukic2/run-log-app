@@ -229,9 +229,7 @@ describe('Current plan card (RUN-32)', () => {
       // The card confirms only what the server accepted: no status line,
       // just the server's own failure message inline (the app-wide write
       // convention since RUN-48).
-      expect(screen.getByRole('alert')).toHaveTextContent(
-        'Applying the weekly goal failed (500).',
-      );
+      expect(screen.getByRole('alert')).toHaveTextContent('Applying the weekly goal failed (500).');
       expect(screen.getByRole('status')).toHaveTextContent('');
     });
 

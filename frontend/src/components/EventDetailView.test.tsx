@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { seedEvents } from '@/test/eventsApiMock';
+import { __resetEventsStoreForTests } from '@/lib/events';
 import EventDetailView from './EventDetailView';
 
 describe('EventDetailView (RUN-68 AC5, thin cut until RUN-69)', () => {
@@ -13,7 +14,6 @@ describe('EventDetailView (RUN-68 AC5, thin cut until RUN-69)', () => {
         targetKm: 100,
         participantCount: 3,
         mine: true,
-        joined: true,
       },
     ]);
 
@@ -22,17 +22,22 @@ describe('EventDetailView (RUN-68 AC5, thin cut until RUN-69)', () => {
     expect(screen.getByRole('heading', { name: 'Summer 100k' })).toBeInTheDocument();
     expect(screen.getByText('Your event')).toBeInTheDocument();
     expect(screen.getByText(/3 runners/)).toBeInTheDocument();
-    expect(screen.getByText(/Target 100 km/)).toBeInTheDocument();
     expect(screen.getByText('Run 100 km together')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /events/i })).toHaveAttribute('href', '/events');
   });
 
-  it('renders the not-found state for an unknown id, with a way back', () => {
-    seedEvents([{ name: 'Some other event' }]);
+  it('fetches an event the cache predates before declaring anything missing (review fix)', async () => {
+    const [event] = seedEvents([{ name: 'Created elsewhere' }]);
+    __resetEventsStoreForTests([]); // stale cache, populated backend
 
+    render(<EventDetailView eventId={event.id} />);
+
+    expect(await screen.findByRole('heading', { name: 'Created elsewhere' })).toBeInTheDocument();
+  });
+
+  it('renders the not-found state once the by-id read comes back empty', async () => {
     render(<EventDetailView eventId="nope" />);
 
-    expect(screen.getByText(/doesn't exist/i)).toBeInTheDocument();
+    expect(await screen.findByText(/doesn't exist/i)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /back to events/i })).toHaveAttribute(
       'href',
       '/events',

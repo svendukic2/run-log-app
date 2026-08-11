@@ -118,7 +118,10 @@ export default function RunningLevelPage() {
               {finishError.includes('first step') && (
                 <>
                   {' '}
-                  <Link href={ROUTES.welcome} className="font-semibold underline underline-offset-2">
+                  <Link
+                    href={ROUTES.welcome}
+                    className="font-semibold underline underline-offset-2"
+                  >
                     Go to the first step
                   </Link>
                 </>

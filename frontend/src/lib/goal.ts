@@ -320,7 +320,9 @@ export function useGoalTarget(todayIsoDate: string): number {
     if (!matched && current.status === 'ready') void refreshWeekTarget(weekStart);
   }, [matched, current.status, weekStart]);
 
-  return matched ? matched.targetKm : (profile?.defaultWeeklyGoalKm ?? current.goal?.km ?? GOAL_DEFAULT_KM);
+  return matched
+    ? matched.targetKm
+    : (profile?.defaultWeeklyGoalKm ?? current.goal?.km ?? GOAL_DEFAULT_KM);
 }
 
 // "Apply to weekly goal" on the coach's plan card (AIC-5, A15): the
@@ -336,9 +338,7 @@ export async function applyGoalTarget(km: number): Promise<void> {
   // Refused, not clamped: silently storing a different number than the one
   // the runner accepted, then confirming "applied", would be lying twice.
   if (km > WEEK_TARGET_MAX_KM) {
-    throw new ApiError(
-      `That weekly target is above the maximum of ${WEEK_TARGET_MAX_KM} km.`,
-    );
+    throw new ApiError(`That weekly target is above the maximum of ${WEEK_TARGET_MAX_KM} km.`);
   }
   const weekTarget = await putWeekTarget(startOfWeek(todayIso()), Math.round(km));
   mergeWeekTarget(weekTarget);

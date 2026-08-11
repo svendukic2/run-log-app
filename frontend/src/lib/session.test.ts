@@ -62,14 +62,13 @@ describe('device session (RUN-48)', () => {
     const response = await apiFetch('/api/runs');
 
     expect(response.ok).toBe(true);
-    expect(authCalls().map((call) => call.url)).toEqual([
-      '/api/auth/login',
-      '/api/auth/signup',
-    ]);
+    expect(authCalls().map((call) => call.url)).toEqual(['/api/auth/login', '/api/auth/signup']);
     const signup = authCalls()[1];
     // Synthetic per-device identity: unique by construction, never the
     // profile's human email, names never empty (signup validates WEL-5).
-    expect((signup.body as { email: string }).email).toMatch(/^runner-[0-9a-f]{16}@device\.runlog$/);
+    expect((signup.body as { email: string }).email).toMatch(
+      /^runner-[0-9a-f]{16}@device\.runlog$/,
+    );
     expect((signup.body as { firstName: string }).firstName).not.toHaveLength(0);
     expect((signup.body as { lastName: string }).lastName).not.toHaveLength(0);
     expect(storedSession()?.token).toBe('fresh-token');

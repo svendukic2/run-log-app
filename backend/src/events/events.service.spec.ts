@@ -272,15 +272,26 @@ describe('EventsService', () => {
   });
 
   describe('join', () => {
-    it('creates the participant and notifies the owner in one transaction (AC2, AC4)', async () => {
-      prisma.event.findUnique.mockResolvedValue({
-        ownerId: OWNER_ID,
-        name: 'Summer 100k',
-      });
+    // The membership read inside the transaction (select ownerId/name) and
+    // the answering findOne (full include) share the findUnique mock, so
+    // the happy paths chain a lean row, then the full one.
+    function mockJoinReads(ownerId: string) {
+      prisma.event.findUnique
+        .mockResolvedValueOnce({ ownerId, name: 'Summer 100k' })
+        .mockResolvedValue(
+          eventRow({ ownerId, participants: [{ id: 'part-1' }] }),
+        );
+    }
+
+    it('creates the participant, notifies the owner and answers the updated event (AC2, AC4)', async () => {
+      mockJoinReads(OWNER_ID);
       prisma.eventParticipant.create.mockResolvedValue({});
 
-      await expect(service.join(USER_ID, 'event-1')).resolves.toEqual({
+      await expect(service.join(USER_ID, 'event-1')).resolves.toMatchObject({
+        id: 'event-1',
         joined: true,
+        mine: false,
+        participantCount: 3,
       });
 
       expect(prisma.eventParticipant.create).toHaveBeenCalledWith({
@@ -295,13 +306,10 @@ describe('EventsService', () => {
     });
 
     it('treats a repeat join as an idempotent no-op that never re-notifies (AC2)', async () => {
-      prisma.event.findUnique.mockResolvedValue({
-        ownerId: OWNER_ID,
-        name: 'Summer 100k',
-      });
+      mockJoinReads(OWNER_ID);
       prisma.eventParticipant.create.mockRejectedValue(prismaError('P2002'));
 
-      await expect(service.join(USER_ID, 'event-1')).resolves.toEqual({
+      await expect(service.join(USER_ID, 'event-1')).resolves.toMatchObject({
         joined: true,
       });
       // The unique violation aborts the transaction before the notification
@@ -310,10 +318,7 @@ describe('EventsService', () => {
     });
 
     it('does not notify the owner about their own join (their P2002 aside, ownership short-circuits)', async () => {
-      prisma.event.findUnique.mockResolvedValue({
-        ownerId: USER_ID,
-        name: 'Summer 100k',
-      });
+      mockJoinReads(USER_ID);
       prisma.eventParticipant.create.mockResolvedValue({});
 
       await service.join(USER_ID, 'event-1');
@@ -371,11 +376,16 @@ describe('EventsService', () => {
   });
 
   describe('leave', () => {
-    it('removes the participant row idempotently (AC2)', async () => {
-      prisma.event.findUnique.mockResolvedValue({ ownerId: OWNER_ID });
+    it('removes the participant row idempotently and answers the updated event (AC2)', async () => {
+      prisma.event.findUnique
+        .mockResolvedValueOnce({ ownerId: OWNER_ID })
+        .mockResolvedValue(eventRow());
       prisma.eventParticipant.deleteMany.mockResolvedValue({ count: 1 });
 
-      await expect(service.leave(USER_ID, 'event-1')).resolves.toBeUndefined();
+      await expect(service.leave(USER_ID, 'event-1')).resolves.toMatchObject({
+        id: 'event-1',
+        joined: false,
+      });
 
       expect(prisma.eventParticipant.deleteMany).toHaveBeenCalledWith({
         where: { eventId: 'event-1', userId: USER_ID },
@@ -391,11 +401,13 @@ describe('EventsService', () => {
       expect(prisma.eventParticipant.deleteMany).not.toHaveBeenCalled();
     });
 
-    it('succeeds silently on an event that does not exist (nothing to leave)', async () => {
+    it('404s an event that does not exist (review fix: was a silent 204, but the response now carries the updated event and there is none)', async () => {
       prisma.event.findUnique.mockResolvedValue(null);
-      prisma.eventParticipant.deleteMany.mockResolvedValue({ count: 0 });
 
-      await expect(service.leave(USER_ID, 'nope')).resolves.toBeUndefined();
+      await expect(service.leave(USER_ID, 'nope')).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(prisma.eventParticipant.deleteMany).not.toHaveBeenCalled();
     });
   });
 

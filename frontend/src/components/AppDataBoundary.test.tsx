@@ -80,9 +80,7 @@ describe('AppDataBoundary (RUN-48, widened in RUN-50)', () => {
       await act(async () => {
         jest.advanceTimersByTime(API_TIMEOUT_MS);
       });
-      expect(
-        screen.getByRole('heading', { name: "Your data didn't load" }),
-      ).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: "Your data didn't load" })).toBeInTheDocument();
     } finally {
       jest.useRealTimers();
     }

@@ -410,7 +410,8 @@ async function runLegacyImport(): Promise<void> {
   await putProfile({
     ...legacyProfile,
     runningLevel: readLegacyLevel(),
-    defaultWeeklyGoalKm: readLegacyDefaultGoalKm() ?? goal?.km ?? readLegacyGoalKm() ?? GOAL_DEFAULT_KM,
+    defaultWeeklyGoalKm:
+      readLegacyDefaultGoalKm() ?? goal?.km ?? readLegacyGoalKm() ?? GOAL_DEFAULT_KM,
   });
   const applied = readLegacyAppliedGoal();
   if (applied && applied.weekStart === startOfWeek(todayIso())) {

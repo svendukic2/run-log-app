@@ -602,9 +602,7 @@ describe('store (API-backed since RUN-48)', () => {
     expect(getRuns()).toHaveLength(2);
     const calls = (global.fetch as jest.Mock).mock.calls as Array<[string, RequestInit?]>;
     const logins = calls.filter(([url]) => url === '/api/auth/login');
-    const posts = calls.filter(
-      ([url, init]) => url === '/api/runs' && init?.method === 'POST',
-    );
+    const posts = calls.filter(([url, init]) => url === '/api/runs' && init?.method === 'POST');
     // One login per addRun's session (first mint + post-expiry re-login),
     // and exactly three POSTs: the first run, the 401ed attempt, its single
     // retry. No duplicate run was created.

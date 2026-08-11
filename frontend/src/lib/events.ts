@@ -28,6 +28,7 @@ import { createContext, useContext, useEffect, useSyncExternalStore } from 'reac
 import { ApiError, apiFetch } from './session';
 import {
   compareEventsChronological,
+  dedupeEventsById,
   isCommunityEvent,
   type CommunityEvent,
   type CommunityEventDraft,
@@ -111,7 +112,10 @@ async function fetchAllEvents(): Promise<CommunityEvent[]> {
     }
     collected.push(...envelope.items);
     if (collected.length >= envelope.total || envelope.items.length < LOAD_PAGE_SIZE) {
-      return collected;
+      // Offset pages are not one snapshot: a row created by someone else
+      // mid-walk shifts the boundary and the same event arrives twice,
+      // which would reach React as a duplicate key. Last write wins.
+      return dedupeEventsById(collected);
     }
   }
   throw new ApiError('Loading events failed (too many pages).');
@@ -124,8 +128,18 @@ function toEventsError(error: unknown): EventsError {
   return { message: 'Something went wrong loading events.', terminal: false };
 }
 
+// A load requested while another is in flight must not be dropped: the
+// in-flight walk publishes pages fetched BEFORE whatever prompted the new
+// request (say, a create from the header while the first load runs), so
+// coalescing into it would silently lose that mutation. The queued flag
+// makes the settling load run once more with fresh reads.
+let reloadQueued = false;
+
 async function loadEvents(): Promise<void> {
-  if (loadInFlight) return;
+  if (loadInFlight) {
+    reloadQueued = true;
+    return;
+  }
   loadInFlight = true;
   publish({ status: 'loading', events: [], error: null });
   try {
@@ -138,6 +152,10 @@ async function loadEvents(): Promise<void> {
     publish({ status: 'error', events: [], error: toEventsError(error) });
   } finally {
     loadInFlight = false;
+    if (reloadQueued) {
+      reloadQueued = false;
+      void loadEvents();
+    }
   }
 }
 
@@ -187,55 +205,72 @@ export async function createEvent(draft: CommunityEventDraft): Promise<Community
   return event;
 }
 
-// After join/leave the card needs the new participant count alongside the
-// flipped flag, and only the server knows both (someone else may have
-// joined meanwhile). One re-read answers everything; a 404 means the event
-// was deleted under us, so the ghost row leaves the cache.
-async function refreshEvent(id: string): Promise<void> {
-  const response = await apiFetch(`/api/events/${id}`);
-  if (response.status === 404) {
-    mergeAfterMutation(snapshot.events.filter((event) => event.id !== id));
-    return;
-  }
-  if (!response.ok) {
-    throw new ApiError(`Refreshing the event failed (${response.status}).`, response.status);
-  }
-  const fresh = parseEventBody(await response.json());
-  mergeAfterMutation([fresh, ...snapshot.events.filter((event) => event.id !== id)]);
+// The 404 eviction every membership path shares: the event was deleted
+// under us, so the ghost row leaves the cache (and the card with it, which
+// is the whole explanation the user gets - a message on the card could
+// never render, the card unmounts in the same publish).
+function dropEvent(id: string): void {
+  mergeAfterMutation(snapshot.events.filter((event) => event.id !== id));
 }
 
-// Joins through the API, then refreshes the row so the button flips and the
-// count moves without a reload (AC2). Idempotent server-side: a repeat POST
-// answers the same { joined: true }.
+// Replaces one row with what the server just answered. Join and leave
+// return the UPDATED event (review fix): the flipped flag and the fresh
+// participant count arrive in the mutation's own response, so there is no
+// follow-up read that could fail after the membership already changed.
+function mergeEvent(fresh: CommunityEvent): void {
+  mergeAfterMutation([fresh, ...snapshot.events.filter((event) => event.id !== fresh.id)]);
+}
+
+// Joins through the API; the response is the updated event and the cache
+// takes it as-is (AC2). Idempotent server-side: a repeat POST answers the
+// same event.
 export async function joinEvent(id: string): Promise<void> {
   const response = await apiFetch(`/api/events/${id}/join`, { method: 'POST' });
   if (response.status === 404) {
-    // Deleted under us: the requested membership is impossible, the ghost
-    // card goes, and the caller's inline error says why the click "did
-    // nothing".
-    mergeAfterMutation(snapshot.events.filter((event) => event.id !== id));
-    throw new ApiError('This event no longer exists.', 404);
+    dropEvent(id);
+    return;
   }
   if (!response.ok) {
     throw new ApiError(`Joining the event failed (${response.status}).`, response.status);
   }
-  await refreshEvent(id);
+  mergeEvent(parseEventBody(await response.json()));
 }
 
-// Leaves through the API (idempotent server-side), then refreshes the row.
-// The owner never sees a Leave button (`mine` gates it), so the server's
-// owner-400 here surfaces only if a stale UI raced an ownership change -
-// the inline error line handles it like any failure.
+// Leaves through the API; same shape as joinEvent. The owner never sees a
+// Leave button (`mine` gates it), so the server's owner-400 here surfaces
+// only if a stale UI raced an ownership change - the inline error line
+// handles it like any failure.
 export async function leaveEvent(id: string): Promise<void> {
   const response = await apiFetch(`/api/events/${id}/join`, { method: 'DELETE' });
-  if (!response.ok && response.status !== 404) {
-    throw new ApiError(`Leaving the event failed (${response.status}).`, response.status);
-  }
   if (response.status === 404) {
-    mergeAfterMutation(snapshot.events.filter((event) => event.id !== id));
+    dropEvent(id);
     return;
   }
-  await refreshEvent(id);
+  if (!response.ok) {
+    throw new ApiError(`Leaving the event failed (${response.status}).`, response.status);
+  }
+  mergeEvent(parseEventBody(await response.json()));
+}
+
+// The detail page's stale-cache escape hatch: the store loads once per
+// page load, so an event created after that (reached by a link) is absent
+// from the cache while being perfectly real. One by-id read settles it -
+// merged when found, evicted when the server confirms it is gone. Errors
+// resolve false so the caller can fall back to its not-found state instead
+// of crashing the view.
+export async function ensureEvent(id: string): Promise<boolean> {
+  try {
+    const response = await apiFetch(`/api/events/${id}`);
+    if (response.status === 404) {
+      dropEvent(id);
+      return false;
+    }
+    if (!response.ok) return false;
+    mergeEvent(parseEventBody(await response.json()));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function subscribeToEvents(onStoreChange: () => void): () => void {

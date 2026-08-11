@@ -103,8 +103,8 @@ export default function AppDataBoundary({ children }: { children: React.ReactNod
         </p>
         {terminal ? (
           <p className="text-[13.5px] leading-[1.55] text-secondary">
-            Retrying won&apos;t help here. Clearing this site&apos;s data starts a fresh log;
-            the previous data stays locked to the old sign-in.
+            Retrying won&apos;t help here. Clearing this site&apos;s data starts a fresh log; the
+            previous data stays locked to the old sign-in.
           </p>
         ) : (
           <button
