@@ -65,6 +65,24 @@ export const ROUTE_PLAN_ERRORS = {
 export type RoutePlanErrorCode =
   (typeof ROUTE_PLAN_ERRORS)[keyof typeof ROUTE_PLAN_ERRORS];
 
+// One place per code, because several of these are reachable from more than
+// one branch of mapFailure and a message that drifts between them turns into
+// two different modal texts for one condition. Each says what the user can do
+// next; every provider-fault one says the run can still be saved by hand,
+// which is the half of AC2 that is easy to forget.
+const MESSAGES = {
+  NOT_CONFIGURED: 'Route planning is not configured on this server.',
+  UNAVAILABLE:
+    'The routing provider could not be reached. Save the run manually and try the map again later.',
+  RATE_LIMITED:
+    'Route planning has hit its usage limit. Save the run manually and try the map again later.',
+  PROVIDER_ERROR:
+    'The routing provider could not plan this route. Save the run manually and try the map again later.',
+  UNEXPECTED: 'The routing provider returned an unexpected response.',
+  NOT_FOUND:
+    'No walking route could be found between those points. Try moving them closer to a path.',
+} as const;
+
 // The body shape of every failure above. Hand-mirrored into the frontend
 // when RUN-54 consumes it - the same wart CLAUDE.md records for
 // HelloResponse, and the same fix (a generated OpenAPI spec) applies.
@@ -115,11 +133,16 @@ function routingFailure(
   return new HttpException(body, status);
 }
 
-// Reads a JSON body without letting a truncated or non-JSON one become the
-// error the caller sees. Anything unparseable is simply "no detail".
+// Separates the two ways reading a body can fail, because they are different
+// diagnoses. A failed transfer - including our own timeout aborting the stream
+// after the headers already arrived - propagates, so a provider that answers
+// and then stalls is reported as unreachable like any other timeout. Bytes
+// that simply are not JSON return "no detail" instead: the status code is
+// still the useful signal there.
 async function readJsonBody(response: Response): Promise<unknown> {
+  const text = await response.text();
   try {
-    return (await response.json()) as unknown;
+    return JSON.parse(text) as unknown;
   } catch {
     return undefined;
   }
@@ -129,10 +152,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-// ORS failures arrive as { error: { code, message } }, but a gateway in front
-// of it can answer with anything, so both halves are optional here.
+// ORS's own failures arrive as { error: { code, message } }, but the gateway in
+// front of it uses a flat { error: "..." } for some conditions - exhausted
+// quota among them - so both shapes are read. Missing the flat one is not
+// cosmetic: it leaves QUOTA_MESSAGE below nothing to match, which turns "out
+// of quota" into "bad key" and logs a failure with no reason in it.
 function providerError(body: unknown): { code?: number; message?: string } {
-  if (!isRecord(body) || !isRecord(body.error)) return {};
+  if (!isRecord(body)) return {};
+  if (typeof body.error === 'string') return { message: body.error };
+  if (!isRecord(body.error)) return {};
   const { code, message } = body.error;
   return {
     code: typeof code === 'number' ? code : undefined,
@@ -166,7 +194,7 @@ export class RoutesService {
       throw routingFailure(
         HttpStatus.SERVICE_UNAVAILABLE,
         ROUTE_PLAN_ERRORS.NOT_CONFIGURED,
-        'Route planning is not configured on this server.',
+        MESSAGES.NOT_CONFIGURED,
       );
     }
 
@@ -199,19 +227,33 @@ export class RoutesService {
       });
     } catch (error) {
       // DNS failure, connection refused, or our own timeout above.
-      this.logger.warn(
-        `Routing provider unreachable: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      throw routingFailure(
-        HttpStatus.SERVICE_UNAVAILABLE,
-        ROUTE_PLAN_ERRORS.UNAVAILABLE,
-        'The routing provider could not be reached. Save the run manually and try the map again later.',
-      );
+      throw this.unreachable(error);
     }
 
-    const body = await readJsonBody(response);
+    let body: unknown;
+    try {
+      body = await readJsonBody(response);
+    } catch (error) {
+      // The headers arrived but the body did not finish - a stalled stream our
+      // own timeout then aborted. That is the same diagnosis as never
+      // connecting at all, and saying so beats reporting it as a provider that
+      // answered with something unexpected.
+      throw this.unreachable(error);
+    }
+
     if (!response.ok) throw this.mapFailure(response.status, body);
     return this.normaliseRoute(body);
+  }
+
+  private unreachable(error: unknown): HttpException {
+    this.logger.warn(
+      `Routing provider unreachable: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return routingFailure(
+      HttpStatus.SERVICE_UNAVAILABLE,
+      ROUTE_PLAN_ERRORS.UNAVAILABLE,
+      MESSAGES.UNAVAILABLE,
+    );
   }
 
   // Everything the provider can say that is not a route, turned into one of
@@ -228,7 +270,7 @@ export class RoutesService {
       return routingFailure(
         HttpStatus.SERVICE_UNAVAILABLE,
         ROUTE_PLAN_ERRORS.RATE_LIMITED,
-        'Route planning has hit its usage limit. Save the run manually and try the map again later.',
+        MESSAGES.RATE_LIMITED,
       );
     }
 
@@ -237,12 +279,12 @@ export class RoutesService {
         ? routingFailure(
             HttpStatus.SERVICE_UNAVAILABLE,
             ROUTE_PLAN_ERRORS.RATE_LIMITED,
-            'Route planning has hit its usage limit. Save the run manually and try the map again later.',
+            MESSAGES.RATE_LIMITED,
           )
         : routingFailure(
             HttpStatus.SERVICE_UNAVAILABLE,
             ROUTE_PLAN_ERRORS.NOT_CONFIGURED,
-            'Route planning is not configured on this server.',
+            MESSAGES.NOT_CONFIGURED,
           );
     }
 
@@ -254,7 +296,7 @@ export class RoutesService {
       return routingFailure(
         HttpStatus.UNPROCESSABLE_ENTITY,
         ROUTE_PLAN_ERRORS.NOT_FOUND,
-        'No walking route could be found between those points. Try moving them closer to a path.',
+        MESSAGES.NOT_FOUND,
       );
     }
 
@@ -262,14 +304,14 @@ export class RoutesService {
       return routingFailure(
         HttpStatus.SERVICE_UNAVAILABLE,
         ROUTE_PLAN_ERRORS.UNAVAILABLE,
-        'The routing provider could not be reached. Save the run manually and try the map again later.',
+        MESSAGES.UNAVAILABLE,
       );
     }
 
     return routingFailure(
       HttpStatus.BAD_GATEWAY,
       ROUTE_PLAN_ERRORS.PROVIDER_ERROR,
-      'The routing provider could not plan this route. Save the run manually and try the map again later.',
+      MESSAGES.PROVIDER_ERROR,
     );
   }
 
@@ -283,7 +325,7 @@ export class RoutesService {
       throw routingFailure(
         HttpStatus.BAD_GATEWAY,
         ROUTE_PLAN_ERRORS.PROVIDER_ERROR,
-        'The routing provider returned an unexpected response.',
+        MESSAGES.UNEXPECTED,
       );
     }
 
@@ -294,7 +336,7 @@ export class RoutesService {
       throw routingFailure(
         HttpStatus.UNPROCESSABLE_ENTITY,
         ROUTE_PLAN_ERRORS.NOT_FOUND,
-        'No walking route could be found between those points. Try moving them closer to a path.',
+        MESSAGES.NOT_FOUND,
       );
     }
 
@@ -305,7 +347,7 @@ export class RoutesService {
       throw routingFailure(
         HttpStatus.BAD_GATEWAY,
         ROUTE_PLAN_ERRORS.PROVIDER_ERROR,
-        'The routing provider returned an unexpected response.',
+        MESSAGES.UNEXPECTED,
       );
     }
 

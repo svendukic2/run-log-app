@@ -95,6 +95,13 @@ describe('PlanRouteDto', () => {
     ['a start that is not an object', { start: 'here' }],
     ['an explicit null waypoints', { waypoints: null }],
     ['waypoints that is not an array', { waypoints: START }],
+    // An array is an object as far as @ValidateNested is concerned, so
+    // without the paired @IsObject all three of these validate clean and the
+    // service sends [null, null] to the provider - a client mistake charged to
+    // our quota and reported as a provider fault.
+    ['an empty array as start', { start: [] }],
+    ['an array-wrapped start', { start: [START] }],
+    ['an array-wrapped waypoint', { waypoints: [[]] }],
   ])('rejects %s', async (_label, overrides) => {
     expect((await errorsFor(overrides)).length).toBeGreaterThan(0);
   });

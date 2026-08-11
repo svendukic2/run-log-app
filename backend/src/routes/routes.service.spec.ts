@@ -229,6 +229,37 @@ describe('RoutesService', () => {
       expect(body.code).toBe(ROUTE_PLAN_ERRORS.RATE_LIMITED);
     });
 
+    it('reads a quota message out of the flat { error: "..." } body shape too', async () => {
+      // The gateway in front of ORS uses a flat string error for some
+      // conditions. Reading only the nested { error: { message } } shape would
+      // leave nothing to match here and answer NOT_CONFIGURED - telling the
+      // user to talk to an administrator when the real advice is to wait.
+      fetchMock.mockResolvedValue(
+        jsonResponse(403, { error: 'Quota exceeded for this API key' }),
+      );
+
+      expect((await failureOf(plan())).body.code).toBe(
+        ROUTE_PLAN_ERRORS.RATE_LIMITED,
+      );
+    });
+
+    it('calls a body that dies mid-stream unreachable, not unexpected', async () => {
+      // The timeout aborts the body stream as well as the connect, so a
+      // provider that sends headers and then stalls surfaces here. Reporting
+      // that as "returned an unexpected response" would send whoever reads the
+      // log looking for a response-shape change that never happened.
+      fetchMock.mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: () => Promise.reject(new Error('The operation was aborted')),
+      } as unknown as Response);
+
+      const { status, body } = await failureOf(plan());
+
+      expect(status).toBe(HttpStatus.SERVICE_UNAVAILABLE);
+      expect(body.code).toBe(ROUTE_PLAN_ERRORS.UNAVAILABLE);
+    });
+
     it('reads an exhausted quota out of ORS 403, which is not a 429', async () => {
       // The free tier reports a spent daily allowance as 403, with the reason
       // only in the message, so the status alone would misfile this as a key

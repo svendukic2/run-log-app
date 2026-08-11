@@ -6,6 +6,7 @@ import {
   IsLatitude,
   IsLongitude,
   IsNumber,
+  IsObject,
   ValidateNested,
 } from 'class-validator';
 import { ValidateIfPresent } from '../../common/validation';
@@ -41,18 +42,24 @@ export class CoordinateDto {
 // the contract. @Type is what makes the nested checks run at all - without
 // it the nested objects stay plain and @ValidateNested has no class to
 // validate against.
-// Both endpoints are required, and @IsDefined is what makes that true:
-// @ValidateNested on its own has nothing to descend into when the property is
-// absent, so it passes an undefined straight through. Without these two lines
-// a body of {} validates, and the service then reads .lng off undefined - a
-// TypeError, which is the generic 500 AC2 exists to prevent.
+// @ValidateNested needs two companions to actually mean "a required point",
+// and both are load-bearing. @IsDefined, because nested validation has nothing
+// to descend into when the property is absent and so passes undefined straight
+// through - a body of {} would validate and the service would then read .lng
+// off undefined. @IsObject, because an array is an object to @ValidateNested
+// but not to us: `{"start": []}` and `{"start": [{...}]}` otherwise validate
+// clean, and the service sends [null, null] to the provider and charges a
+// quota request to report the client's mistake as a provider fault. Both
+// cases are the generic-error leak AC2 exists to prevent.
 export class PlanRouteDto {
   @IsDefined({ message: 'start is required' })
+  @IsObject({ message: 'start must be a { lat, lng } object' })
   @ValidateNested()
   @Type(() => CoordinateDto)
   start!: CoordinateDto;
 
   @IsDefined({ message: 'finish is required' })
+  @IsObject({ message: 'finish must be a { lat, lng } object' })
   @ValidateNested()
   @Type(() => CoordinateDto)
   finish!: CoordinateDto;
@@ -65,6 +72,12 @@ export class PlanRouteDto {
   @IsArray({ message: 'waypoints must be an array' })
   @ArrayMaxSize(MAX_WAYPOINTS, {
     message: `waypoints must contain at most ${MAX_WAYPOINTS} points`,
+  })
+  // Same reason as start/finish above, applied per element: without it a
+  // nested array like [[]] is a valid waypoint.
+  @IsObject({
+    each: true,
+    message: 'each waypoint must be a { lat, lng } object',
   })
   @ValidateNested({ each: true })
   @Type(() => CoordinateDto)
