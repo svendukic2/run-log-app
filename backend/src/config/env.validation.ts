@@ -30,6 +30,26 @@ export function validateEnv(
     );
   }
 
+  // Required since RUN-56: AuthModule signs JWTs with it at boot. The same
+  // placeholder check as DATABASE_URL catches an unedited .env.example, and
+  // the length floor catches "secret123" - a guessable secret means anyone
+  // can mint valid tokens.
+  const secret =
+    config.JWT_SECRET === undefined ? '' : asString(config.JWT_SECRET);
+  if (!secret) {
+    errors.push(
+      'JWT_SECRET is not set. Copy backend/.env.example to backend/.env and generate one as the template describes.',
+    );
+  } else if (secret.includes('<')) {
+    errors.push(
+      'JWT_SECRET still contains a "<...>" placeholder from .env.example. Generate a real secret as the template describes.',
+    );
+  } else if (secret.length < 32) {
+    errors.push(
+      `JWT_SECRET must be at least 32 characters, got ${secret.length}. Generate a longer one as the template describes.`,
+    );
+  }
+
   // Optional with a default, but a present-and-garbage value should fail
   // here rather than as EADDRINUSE-style noise later.
   if (config.PORT !== undefined) {

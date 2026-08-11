@@ -68,6 +68,22 @@ model Run {
   @@index([date])
 }
 
+// One row per registered account (RUN-56), the anchor entity of the v2
+// community phase. Deliberately standalone: the single-row Profile above
+// stays untouched until the phase B per-user-scoping tasks decide how v1
+// data attaches to accounts. passwordHash is a bcrypt hash and must never
+// leave the auth service in any response or log line (RUN-56 AC4). The
+// privacy toggles (profilePublic, showOnLeaderboard, showRoutes) arrive
+// additively in RUN-64.
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  firstName    String
+  lastName     String
+  createdAt    DateTime @default(now())
+}
+
 // One row per generation (AIC-3..9). The newest row for the current week is
 // "This week's plan"; the newest row of each past week feeds "Previous plans".
 // ranKm and the Hit/Missed outcome are derived from Run and WeekTarget.
