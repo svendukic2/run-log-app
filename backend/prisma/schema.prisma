@@ -24,11 +24,11 @@ datasource db {
 // One row per user since RUN-57 (was single-row in v1, WEL-4). runningLevel
 // is one of Beginner | Intermediate | Advanced (LVL-2); defaultWeeklyGoalKm
 // seeds future weeks only (SET-3, SET-6).
+// The setup answers only, since RUN-59: the runner's name and email live on
+// the User row, which every social surface already reads, so keeping copies
+// here only created two truths for one fact.
 model Profile {
   id                  String @id @default(cuid())
-  firstName           String
-  lastName            String
-  email               String
   runningLevel        String
   defaultWeeklyGoalKm Int
   userId              String @unique

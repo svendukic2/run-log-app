@@ -1,5 +1,5 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react';
-import { saveProfileSettings } from '@/lib/onboarding';
+import { saveWeeklyDefault } from '@/lib/onboarding';
 import { addRun } from '@/lib/runs';
 import { seedGoal, seedProfile, seedRuns } from '@/test/runsApiMock';
 import WeeklyGoalCard from './WeeklyGoalCard';
@@ -14,8 +14,6 @@ function runOn(date: string, distanceKm: number, durationSeconds: number) {
     note: '',
   };
 }
-
-const PROFILE = { firstName: 'Marko', lastName: 'Kovač', email: 'marko@email.com' };
 
 // Only Date is faked; real timers stay in place so React's scheduler and
 // anything async keep working.
@@ -174,7 +172,7 @@ describe('WeeklyGoalCard (RUN-17)', () => {
 
   it('keeps the current week on its target when a new default is saved (RUN-38 AC4)', async () => {
     freezeDateAt(FRIDAY);
-    seedProfile(PROFILE); // default weekly goal 20
+    seedProfile({ defaultWeeklyGoalKm: 20 });
     const { unmount } = render(<WeeklyGoalCard />);
 
     // Saved mid-week from Settings while the card is mounted: the server
@@ -182,7 +180,7 @@ describe('WeeklyGoalCard (RUN-17)', () => {
     // lands (SET-6), and the save silently reloads the goal store, so the
     // card settles on the frozen 20, never the new 35.
     await act(async () => {
-      await saveProfileSettings({ ...PROFILE, defaultWeeklyGoalKm: 35 });
+      await saveWeeklyDefault(35);
     });
     await waitFor(() => expect(within(readout()).getByText('/ 20 km')).toBeInTheDocument());
 
@@ -196,7 +194,7 @@ describe('WeeklyGoalCard (RUN-17)', () => {
   it('seeds a fresh week from the profile default (RUN-38 AC3)', () => {
     // The next Monday arrives with no target row yet; the week seeds from
     // profile.defaultWeeklyGoalKm, exactly what the server would snapshot.
-    seedProfile({ ...PROFILE, defaultWeeklyGoalKm: 35 });
+    seedProfile({ defaultWeeklyGoalKm: 35 });
     freezeDateAt(new Date(2026, 7, 10, 9, 0, 0));
 
     render(<WeeklyGoalCard />);

@@ -11,9 +11,6 @@ import type { PutProfileDto } from './dto/put-profile.dto';
 function makeMocks(existingDefault: number | null) {
   const row = (defaultWeeklyGoalKm: number) => ({
     id: 'profile-1',
-    firstName: 'Ana',
-    lastName: 'Anić',
-    email: 'ana@example.com',
     runningLevel: 'Beginner',
     defaultWeeklyGoalKm,
     userId: 'user-1',
@@ -45,9 +42,6 @@ function makeMocks(existingDefault: number | null) {
 
 function dto(defaultWeeklyGoalKm: number): PutProfileDto {
   return {
-    firstName: 'Ana',
-    lastName: 'Anić',
-    email: 'ana@example.com',
     runningLevel: 'Beginner',
     defaultWeeklyGoalKm,
   };

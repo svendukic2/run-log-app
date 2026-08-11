@@ -1,8 +1,8 @@
 'use client';
 
 import { useState } from 'react';
+import { useAccount } from '@/lib/account';
 import { greetingForHour } from '@/lib/greeting';
-import { useProfile } from '@/lib/onboarding';
 import { useHydrated } from '@/lib/useHydrated';
 
 // The dashboard overline: "Good morning, Marko" (DSH-2), varying with the
@@ -11,7 +11,9 @@ import { useHydrated } from '@/lib/useHydrated';
 // overline's line so the title does not shift while that happens.
 export default function DashboardGreeting() {
   const hydrated = useHydrated();
-  const profile = useProfile();
+  // The account, not the profile: the name is the account's since RUN-59, so
+  // the greeting works before setup finishes too.
+  const account = useAccount();
   // Read once per mount rather than in the render body: the render stays pure,
   // and navigating back to the Dashboard remounts it, which is when a fresher
   // greeting matters.
@@ -20,7 +22,7 @@ export default function DashboardGreeting() {
   if (!hydrated) return null;
 
   const greeting = greetingForHour(hour);
-  // No profile happens only when /dashboard is opened directly before
-  // onboarding; the greeting simply drops the name rather than inventing one.
-  return <>{profile ? `${greeting}, ${profile.firstName}` : greeting}</>;
+  // No account record yet means the identity is still loading; the greeting
+  // simply drops the name rather than inventing one.
+  return <>{account ? `${greeting}, ${account.firstName}` : greeting}</>;
 }

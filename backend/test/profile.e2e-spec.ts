@@ -16,6 +16,8 @@ function errorMessages(response: request.Response): string[] {
 
 // Full-path GET/PUT /api/profile against the real database (RUN-49). One
 // resource per account: the routes carry no id, the owner is the token.
+// Since RUN-59 the profile holds the setup answers only - the runner's name
+// and email live on /api/account (see account.e2e-spec.ts).
 describe('Profile API (e2e)', () => {
   let app: INestApplication<App>;
   let prisma: PrismaService;
@@ -23,9 +25,6 @@ describe('Profile API (e2e)', () => {
 
   function validProfile() {
     return {
-      firstName: 'Ana',
-      lastName: 'Anić',
-      email: 'ana@example.com',
       runningLevel: 'Intermediate',
       defaultWeeklyGoalKm: 25,
     };
@@ -66,7 +65,8 @@ describe('Profile API (e2e)', () => {
       .send(validProfile())
       .expect(200);
 
-    // No id, no userId: the owner is implicit in the token.
+    // No id, no userId: the owner is implicit in the token. And no name or
+    // email: those are the account's, not the profile's (RUN-59).
     expect(response.body).toEqual(validProfile());
 
     const read = await request(app.getHttpServer())
@@ -81,8 +81,7 @@ describe('Profile API (e2e)', () => {
     await request(server).put('/api/profile').set(auth).send(validProfile());
 
     const replaced = {
-      ...validProfile(),
-      firstName: 'Vesna',
+      runningLevel: 'Advanced',
       defaultWeeklyGoalKm: 40,
     };
     await request(server)
@@ -101,22 +100,11 @@ describe('Profile API (e2e)', () => {
     expect(await prisma.profile.count()).toBe(1);
   });
 
-  it('trims the names it stores', async () => {
-    const response = await request(app.getHttpServer())
-      .put('/api/profile')
-      .set(auth)
-      .send({ ...validProfile(), firstName: '  Ana  ' })
-      .expect(200);
-    expect(profileBody(response).firstName).toBe('Ana');
-  });
-
   it('400s validation failures without touching the stored row', async () => {
     const server = app.getHttpServer();
     await request(server).put('/api/profile').set(auth).send(validProfile());
 
     const cases = [
-      { ...validProfile(), firstName: '   ' },
-      { ...validProfile(), email: 'not-an-email' },
       { ...validProfile(), runningLevel: 'intermediate' },
       { ...validProfile(), defaultWeeklyGoalKm: 61 },
       { ...validProfile(), defaultWeeklyGoalKm: -1 },
@@ -145,6 +133,17 @@ describe('Profile API (e2e)', () => {
     expect(errorMessages(response).join(' ')).toContain('isAdmin');
   });
 
+  it('rejects the identity fields that moved to /api/account (RUN-59)', async () => {
+    const response = await request(app.getHttpServer())
+      .put('/api/profile')
+      .set(auth)
+      .send({ ...validProfile(), firstName: 'Ana', email: 'ana@example.com' })
+      .expect(400);
+    const messages = errorMessages(response).join(' ');
+    expect(messages).toContain('firstName');
+    expect(messages).toContain('email');
+  });
+
   it('keeps profiles per account: another user neither sees nor overwrites mine', async () => {
     const server = app.getHttpServer();
     await request(server).put('/api/profile').set(auth).send(validProfile());
@@ -153,9 +152,8 @@ describe('Profile API (e2e)', () => {
     await request(server).get('/api/profile').set(other).expect(404);
 
     const otherProfile = {
-      ...validProfile(),
-      firstName: 'Marko',
-      email: 'marko@example.com',
+      runningLevel: 'Beginner',
+      defaultWeeklyGoalKm: 10,
     };
     await request(server)
       .put('/api/profile')

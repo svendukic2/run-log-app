@@ -1,7 +1,19 @@
 import { render, screen, within } from '@testing-library/react';
+import { seedProfile } from '@/test/runsApiMock';
 import SettingsPage from './page';
 
+// The form routes an un-onboarded account to the wizard (RUN-59), so the
+// router has to exist and the account has to be onboarded for the layout to
+// render at all.
+jest.mock('next/navigation', () => ({
+  useRouter: () => ({ replace: jest.fn(), push: jest.fn() }),
+}));
+
 describe('Settings page header and layout (RUN-36)', () => {
+  beforeEach(() => {
+    seedProfile({ defaultWeeklyGoalKm: 20 });
+  });
+
   it('shows the overline and the title in the header (AC1)', () => {
     render(<SettingsPage />);
 

@@ -12,7 +12,7 @@ import {
   seedWeekTarget,
 } from '@/test/runsApiMock';
 import { fetchWeekTarget } from './accountApi';
-import { finishOnboarding, saveDraftGoal, saveDraftProfile } from './onboarding';
+import { finishOnboarding, saveDraftGoal } from './onboarding';
 import {
   __resetGoalStoreForTests,
   applyGoalTarget,
@@ -48,7 +48,6 @@ function GoalProbe() {
 }
 
 const GOAL_30: Goal = { km: 30, startDate: '2026-08-03', endDate: null };
-const ANA = { firstName: 'Ana', lastName: 'Anić', email: 'ana@example.com' };
 
 function fetchCalls(): Array<[string, RequestInit?]> {
   return (global.fetch as jest.Mock).mock.calls as Array<[string, RequestInit?]>;
@@ -131,7 +130,7 @@ describe('goal store (API-backed since RUN-50)', () => {
     // The fallback answers with the same number the server WOULD freeze, so
     // the figure on screen never changes when the real row lands.
     seedGoal(GOAL_30);
-    seedProfile({ ...ANA, defaultWeeklyGoalKm: 45 });
+    seedProfile({ defaultWeeklyGoalKm: 45 });
 
     render(React.createElement(GoalProbe));
 
@@ -150,7 +149,7 @@ describe('goal store (API-backed since RUN-50)', () => {
   });
 
   it('serves a materialized week target over any seed', () => {
-    seedProfile({ ...ANA, defaultWeeklyGoalKm: 45 });
+    seedProfile({ defaultWeeklyGoalKm: 45 });
     seedGoal(GOAL_30);
     seedWeekTarget(26);
 
@@ -235,7 +234,6 @@ describe('account replacement and refresh failures (RUN-50 review)', () => {
     // with no listeners. The next subscribe must notice the account
     // generation moved and reload - without that, the dashboard would read
     // pre-onboarding nulls forever.
-    saveDraftProfile({ firstName: 'Ana', lastName: 'Anić', email: 'ana@example.com' });
     saveDraftGoal({ km: 31, startDate: '2026-08-03', endDate: null });
     await finishOnboarding('Beginner');
 
@@ -258,7 +256,6 @@ describe('account replacement and refresh failures (RUN-50 review)', () => {
 
     // While the initial load's promises are still settling, the account's
     // records change wholesale.
-    saveDraftProfile({ firstName: 'Ana', lastName: 'Anić', email: 'ana@example.com' });
     saveDraftGoal({ km: 37, startDate: '2026-08-03', endDate: null });
     await finishOnboarding('Beginner');
 

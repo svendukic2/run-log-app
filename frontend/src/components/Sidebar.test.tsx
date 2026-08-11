@@ -1,6 +1,7 @@
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { seedProfile, signInRedirectCount } from '@/test/runsApiMock';
+import { seedAccount, signInRedirectCount } from '@/test/runsApiMock';
+import { __resetAccountStoreForTests } from '@/lib/account';
 import { hasStoredSession } from '@/lib/session';
 import Sidebar from './Sidebar';
 
@@ -79,9 +80,11 @@ describe('Sidebar', () => {
     expect(screen.getByRole('link', { name: /runs/i })).toHaveAttribute('aria-current', 'page');
   });
 
+  // The footer's identity is the ACCOUNT's since RUN-59 (name and email live
+  // on the User row), so these tests seed the account, not the profile.
   describe('profile footer (RUN-14)', () => {
-    it('shows initials, "{First name} {L}." and the email from the stored profile (AC1)', () => {
-      seedProfile({ firstName: 'Marko', lastName: 'Kovačić', email: 'marko@email.com' });
+    it('shows initials, "{First name} {L}." and the email from the stored account (AC1)', () => {
+      seedAccount({ firstName: 'Marko', lastName: 'Kovačić', email: 'marko@email.com' });
       renderSidebar();
 
       const footer = screen.getByTestId('profile-footer');
@@ -91,7 +94,7 @@ describe('Sidebar', () => {
     });
 
     it('derives the initials from first and last name, not a hardcoded pair (AC2)', () => {
-      seedProfile({ firstName: 'ana', lastName: 'barić', email: 'ana@email.com' });
+      seedAccount({ firstName: 'ana', lastName: 'barić', email: 'ana@email.com' });
       renderSidebar();
 
       const footer = screen.getByTestId('profile-footer');
@@ -103,7 +106,7 @@ describe('Sidebar', () => {
       'renders the same footer on %s (AC3)',
       (pathname) => {
         mockUsePathname.mockReturnValue(pathname);
-        seedProfile({ firstName: 'Marko', lastName: 'Kovačić', email: 'marko@email.com' });
+        seedAccount({ firstName: 'Marko', lastName: 'Kovačić', email: 'marko@email.com' });
         renderSidebar();
 
         const footer = screen.getByTestId('profile-footer');
@@ -113,14 +116,15 @@ describe('Sidebar', () => {
       },
     );
 
-    it('renders no footer while the account has no profile yet', () => {
+    it('renders no footer while the identity is still unknown', () => {
+      __resetAccountStoreForTests(null);
       renderSidebar();
 
       expect(screen.queryByTestId('profile-footer')).not.toBeInTheDocument();
     });
 
     it('signs out from the footer: session cleared, redirected to Sign in (RUN-58 AC5)', async () => {
-      seedProfile({ firstName: 'Marko', lastName: 'Kovačić', email: 'marko@email.com' });
+      seedAccount({ firstName: 'Marko', lastName: 'Kovačić', email: 'marko@email.com' });
       const user = userEvent.setup();
       renderSidebar();
 

@@ -18,7 +18,8 @@ onboarding-era entities). What remains in localStorage is device-scoped by natur
 | Entity | Type lives in | Persisted in | Introduced by |
 | --- | --- | --- | --- |
 | Run | `frontend/src/lib/runs.ts` | PostgreSQL via `/api/runs` (RUN-48) | RUN-23 |
-| Profile (incl. level + default goal) | `frontend/src/lib/onboarding.ts` | PostgreSQL via `/api/profile` (RUN-50) | RUN-8 |
+| Account identity (name, email) | `frontend/src/lib/account.ts` | PostgreSQL (the User row) via `/api/account` (RUN-59) | RUN-56 |
+| Profile (level + default goal) | `frontend/src/lib/onboarding.ts` | PostgreSQL via `/api/profile` (RUN-50) | RUN-8 |
 | Goal | `frontend/src/lib/goal.ts` | PostgreSQL via `/api/goal` (RUN-50) | RUN-10 |
 | Week targets | `frontend/src/lib/goal.ts` | PostgreSQL via `/api/week-targets` (RUN-50) | RUN-17/33 |
 | Privacy settings | `frontend/src/lib/privacy.ts` | PostgreSQL via `/api/privacy` (RUN-64) | RUN-64 |
@@ -297,19 +298,44 @@ start or end day counts), computed by one `GROUP BY` at read time and never
 stored, the same rule the event's own derived state follows. Ties share a rank
 and the next distinct distance skips the places they consumed (1, 1, 3).
 
-### Profile (one per user since RUN-57)
+### Account identity (the User row, RUN-59)
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| firstName | string | Feeds greeting (DSH-2) and "Welcome, {name}" badge (GOAL-1) |
+| firstName | string | Feeds greeting (DSH-2), the "Welcome, {name}" setup badge (GOAL-1) and every social surface |
 | lastName | string | With firstName derives avatar initials (SET-2); never uploaded |
-| email | string | Format-validated (WEL-5, A1) |
+| email | string | Also the SIGN-IN credential: unique, normalized (trimmed, lowercased, NFC) on every write path |
+
+`GET`/`PUT /api/account` (RUN-59), cached by `frontend/src/lib/account.ts`. This is
+the app's **single source of truth** for a runner's name and email. It has to be:
+events, follow, notifications and leaderboards all read the names off the `User`
+row, so while the profile kept its own copies (RUN-49/50) a rename in Settings
+changed the runner's own dashboard and nothing anyone else saw. RUN-59 dropped
+those columns (migration `20260812000000_profile_drops_identity` first copies the
+profile's names back onto the User row, so the spelling the user last chose is the
+one that survives; the profile's email is deliberately not copied - `User.email` is
+unique and the only rows where the two ever differed are v1 device-era accounts
+that RUN-58 already made unreachable).
+
+Keeping identity separate from the setup answers is also what makes setup
+resumable: the account exists from signup, the profile only from "Finish setup",
+so the setup steps can greet a runner by name on any device with nothing stored
+locally (RUN-59 AC3).
+
+A 409 on PUT means another account owns that email; the Settings form shows it
+inline. Changing the email does not invalidate the session - the token carries the
+user id, not the address.
+
+### Profile (one per user since RUN-57, setup answers only since RUN-59)
+
+| Field | Type | Notes |
+| --- | --- | --- |
 | runningLevel | 'Beginner' \| 'Intermediate' \| 'Advanced' | Set once in onboarding (LVL-2); not editable after (by design, flagged) |
 | defaultWeeklyGoalKm | number | Settings "Default weekly goal" (SET-3); seeds future weeks only (SET-6) |
 
-`runningLevel` and `defaultWeeklyGoalKm` live on the same `ProfileRecord` in
-`onboarding.ts` since RUN-50 - one record, not separate stores. The level is
-capitalized everywhere now; the lowercase spellings were a v1 localStorage relic.
+Both fields live on the same `ProfileRecord` in `onboarding.ts` - one record, not
+separate stores. The level is capitalized everywhere now; the lowercase spellings
+were a v1 localStorage relic.
 
 The API is `GET`/`PUT /api/profile` (RUN-49): one resource per account, no id in the
 routes or the response - the owner is the token. GET answers 404 until the first PUT,

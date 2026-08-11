@@ -59,7 +59,7 @@ async function seedOnboardedUser(page: Page, request: APIRequestContext): Promis
   expect(goal.ok(), 'goal seed must succeed').toBeTruthy();
   const profile = await request.put('/api/profile', {
     headers: authHeaders,
-    data: { ...PROFILE, email, runningLevel: 'Beginner', defaultWeeklyGoalKm: 20 },
+    data: { runningLevel: 'Beginner', defaultWeeklyGoalKm: 20 },
   });
   expect(profile.ok(), 'profile seed must succeed').toBeTruthy();
 
@@ -135,7 +135,7 @@ test.describe('RUN-58 Auth screens and session', () => {
     });
     await request.put('/api/profile', {
       headers: { Authorization: `Bearer ${token}` },
-      data: { ...PROFILE, email, runningLevel: 'Beginner', defaultWeeklyGoalKm: 20 },
+      data: { runningLevel: 'Beginner', defaultWeeklyGoalKm: 20 },
     });
 
     await page.goto('/signin');
@@ -175,7 +175,7 @@ test.describe('RUN-58 Auth screens and session', () => {
     });
     await request.put('/api/profile', {
       headers: { Authorization: `Bearer ${token}` },
-      data: { ...PROFILE, email, runningLevel: 'Beginner', defaultWeeklyGoalKm: 20 },
+      data: { runningLevel: 'Beginner', defaultWeeklyGoalKm: 20 },
     });
     await page.goto('/signin');
     await page.getByLabel('Email').fill(email);
@@ -191,6 +191,21 @@ test.describe('RUN-58 Auth screens and session', () => {
     // The guard holds after the sign-out too.
     await page.goto('/dashboard');
     await expect(page).toHaveURL(/\/signin$/);
+  });
+
+  test('a deep link into a guarded route stays on that route when signed in', async ({
+    page,
+    request,
+  }) => {
+    // Regression guard: the guard used to decide on its hydration snapshot,
+    // where the session is invisible, so every full page load of a guarded
+    // route bounced through Sign in and ended up on the Dashboard.
+    await seedOnboardedUser(page, request);
+    for (const route of ['/settings', '/runs', '/coach']) {
+      await page.goto(route);
+      await expect(page).toHaveURL(new RegExp(`${route}$`));
+    }
+    await expect(page.getByRole('heading', { name: 'AI Coach', level: 1 })).toBeVisible();
   });
 
   test('an invalid token signs out cleanly instead of showing broken screens (AC6)', async ({
@@ -353,11 +368,100 @@ test.describe('RUN-11 Running level step', () => {
       headers: { Authorization: `Bearer ${session!.token}` },
     });
     expect(response.ok()).toBeTruthy();
-    expect((await response.json()) as { runningLevel: string }).toMatchObject({
+    // The profile holds the SETUP ANSWERS since RUN-59; the identity lives
+    // on the account, which signup already filled.
+    expect((await response.json()) as { runningLevel: string }).toEqual({
+      runningLevel: 'Intermediate',
+      defaultWeeklyGoalKm: 20,
+    });
+    const account = await page.request.get('/api/account', {
+      headers: { Authorization: `Bearer ${session!.token}` },
+    });
+    expect((await account.json()) as { firstName: string }).toMatchObject({
       firstName: PROFILE.firstName,
       lastName: PROFILE.lastName,
-      runningLevel: 'Intermediate',
     });
+  });
+});
+
+/* RUN-59 - Setup runs after signup, from server state ------------------------ */
+
+test.describe('RUN-59 Onboarding after signup', () => {
+  test('setup resumes on another device, greeting the runner by name (AC3)', async ({
+    page,
+    request,
+  }) => {
+    // An account that signed up and abandoned setup: a User row, no profile.
+    const email = uniqueEmail();
+    const signup = await request.post('/api/auth/signup', {
+      data: { email, password: PASSWORD, firstName: 'Ivana', lastName: 'Novak' },
+    });
+    expect(signup.ok()).toBeTruthy();
+
+    // A DIFFERENT browser context (this test's own, with empty storage): no
+    // wizard draft, no local identity - everything must come from the server.
+    await page.goto('/signin');
+    await page.getByLabel('Email').fill(email);
+    await page.getByLabel('Password').fill(PASSWORD);
+    await page.getByRole('button', { name: /^Sign in$/ }).click();
+
+    // Straight into the unfinished setup, greeted from the account (AC3/AC4).
+    await expect(page).toHaveURL(/\/setup\/goal$/);
+    await expect(page.getByText('Welcome, Ivana')).toBeVisible();
+
+    // And it can be finished here, which is what "resumes" has to mean.
+    await page.getByRole('button', { name: /Start tracking/ }).click();
+    await page.getByRole('button', { name: /Finish setup/ }).click();
+    await expect(page).toHaveURL(/\/dashboard$/);
+    await expect(page.getByText('Ivana N.')).toBeVisible();
+  });
+
+  test('a completed account signing in on a fresh device lands on the Dashboard (AC2)', async ({
+    page,
+    request,
+  }) => {
+    const email = uniqueEmail();
+    const signup = await request.post('/api/auth/signup', {
+      data: { email, password: PASSWORD, firstName: PROFILE.firstName, lastName: PROFILE.lastName },
+    });
+    const { token } = (await signup.json()) as { token: string };
+    await request.put('/api/goal', {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { km: 20, startDate: todayIso(), endDate: null },
+    });
+    await request.put('/api/profile', {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { runningLevel: 'Beginner', defaultWeeklyGoalKm: 20 },
+    });
+
+    await page.goto('/signin');
+    await page.getByLabel('Email').fill(email);
+    await page.getByLabel('Password').fill(PASSWORD);
+    await page.getByRole('button', { name: /^Sign in$/ }).click();
+
+    // Server state, not a device flag: this browser has never seen the
+    // account before.
+    await expect(page).toHaveURL(/\/dashboard$/);
+  });
+
+  test('the greeting and sidebar footer read the account, and a rename shows in both (AC4)', async ({
+    page,
+    request,
+  }) => {
+    const account = await seedOnboardedUser(page, request);
+    await page.goto('/settings');
+
+    await expect(page.getByText(`${PROFILE.firstName} K.`)).toBeVisible();
+    await expect(page.getByText(account.email)).toBeVisible();
+
+    await page.getByLabel('First name').fill('Renamed');
+    await page.getByRole('button', { name: /Save changes/ }).click();
+
+    // The sidebar footer follows the account record, not a stale copy.
+    await expect(page.getByText('Renamed K.')).toBeVisible();
+    // And so does the dashboard greeting, on the next visit.
+    await page.getByRole('link', { name: 'Dashboard' }).click();
+    await expect(page.getByText(/Good (morning|afternoon|evening), Renamed/)).toBeVisible();
   });
 });
 
