@@ -22,10 +22,12 @@ interface PersonalRecordsCardProps {
   // any store this browser owns.
   runs?: Run[];
   // The card's heading. The dashboard says "Personal records" about you;
-  // a profile says "Records" about them.
+  // a profile says "Records" about them. The empty-state copy is
+  // deliberately NOT parameterised: a public profile with no runs never
+  // renders this card at all (PublicProfileView answers that with one
+  // "No runs yet" card instead of three empty ones), so the only reader of
+  // the empty branch is the dashboard, talking to its own user.
   title?: string;
-  emptyTitle?: string;
-  emptyMessage?: string;
 }
 
 // The "Personal records" card in the dashboard's right column (RUN-22,
@@ -52,12 +54,7 @@ function OwnRecords(copy: Omit<PersonalRecordsCardProps, 'runs'>) {
   return <Records runs={runs} {...copy} />;
 }
 
-function Records({
-  runs,
-  title = 'Personal records',
-  emptyTitle = 'No records yet',
-  emptyMessage = 'Finish a run to set your first personal record.',
-}: PersonalRecordsCardProps & { runs: Run[] }) {
+function Records({ runs, title = 'Personal records' }: PersonalRecordsCardProps & { runs: Run[] }) {
   const records = useMemo(() => {
     const byKind = new Map(deriveRecords(runs).map((record) => [record.kind, record]));
     return DASHBOARD_RECORD_KINDS.map((kind) => byKind.get(kind)).filter(
@@ -82,8 +79,10 @@ function Records({
           always derive, so the list below can never be empty. */}
       {runs.length === 0 ? (
         <div className="px-2 pt-[18px] pb-[10px] text-center">
-          <p className="text-[14px] font-semibold text-text-primary">{emptyTitle}</p>
-          <p className="mt-[5px] text-[13px] leading-[1.5] text-tertiary">{emptyMessage}</p>
+          <p className="text-[14px] font-semibold text-text-primary">No records yet</p>
+          <p className="mt-[5px] text-[13px] leading-[1.5] text-tertiary">
+            Finish a run to set your first personal record.
+          </p>
         </div>
       ) : (
         <dl className="mt-[4px]">

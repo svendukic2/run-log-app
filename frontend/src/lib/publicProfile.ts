@@ -89,8 +89,7 @@ function isPublicProfile(value: unknown): value is PublicProfile {
     typeof profile.visible === 'boolean' &&
     typeof profile.showRoutes === 'boolean' &&
     // null is the gated case and a real answer; an array must hold runs.
-    (profile.runs === null ||
-      (Array.isArray(profile.runs) && profile.runs.every(isRun)))
+    (profile.runs === null || (Array.isArray(profile.runs) && profile.runs.every(isRun)))
   );
 }
 
@@ -140,9 +139,7 @@ async function load(userId: string): Promise<void> {
       status: 'error',
       profile: null,
       error:
-        error instanceof ApiError
-          ? error.message
-          : 'Something went wrong loading this profile.',
+        error instanceof ApiError ? error.message : 'Something went wrong loading this profile.',
     });
   } finally {
     if (token === loadToken) inFlightFor = null;
@@ -188,6 +185,18 @@ export async function setFollowing(userId: string, next: boolean): Promise<void>
 
   const current = snapshot.profile;
   if (!current || snapshot.userId !== userId || current.following === next) return;
+
+  // Retire whatever read is in flight (review fix). ensureLoaded re-reads on
+  // every visit, and that read publishes nothing while it runs, so the page
+  // is fully clickable during it: without this, a read that STARTED before
+  // the follow lands after it and replaces the whole snapshot, reverting the
+  // button and the count to the pre-follow world. Its own token check cannot
+  // catch that - it is still the newest load. inFlightFor is cleared with the
+  // token because the load's `finally` only clears it while its token is
+  // current, and a stale one would wedge ensureLoaded for this id forever.
+  loadToken += 1;
+  inFlightFor = null;
+
   publish({
     ...snapshot,
     profile: {
@@ -235,9 +244,7 @@ export function usePublicProfile(userId: string): {
 
 // Test-only: puts the cache into a known state without a fetch. Passing
 // null re-arms the load (jest.setup.ts wires this up via usersApiMock).
-export function __resetPublicProfileForTests(
-  profile: PublicProfile | null = null,
-): void {
+export function __resetPublicProfileForTests(profile: PublicProfile | null = null): void {
   if (process.env.NODE_ENV === 'production') {
     throw new Error('__resetPublicProfileForTests is not available in production');
   }

@@ -94,7 +94,8 @@ describe('UsersService.findPublicProfile', () => {
   });
 
   // AC5: only an id that matches nothing is 404. A private account is a 200
-  // above, so no response ever tells a prober which ids are real.
+  // above, because it still has a header it may serve - never 403, which
+  // would be the wrong status for "header yes, body no".
   it('404s an unknown id', async () => {
     const { service } = makeService(null);
 

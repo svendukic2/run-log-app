@@ -1,20 +1,19 @@
 'use client';
 
-import Link from 'next/link';
 import DistanceChartCard from '@/components/DistanceChartCard';
 import FollowButton from '@/components/FollowButton';
 import PersonalRecordsCard from '@/components/PersonalRecordsCard';
-import RecentRunsCard from '@/components/RecentRunsCard';
-import { initialsOf } from '@/lib/eventMath';
 import {
-  reloadPublicProfile,
-  usePublicProfile,
-  type PublicProfile,
-} from '@/lib/publicProfile';
-import { personRunRoute, ROUTES } from '@/lib/routes';
-
-const CARD = 'rounded-[18px] border border-line bg-white';
-const PAGE = 'flex flex-col gap-5 px-5 pt-6 pb-6 sm:px-8 lg:px-[40px] lg:pt-[32px] lg:pb-[32px]';
+  PROFILE_PAGE,
+  ProfileLoadError,
+  ProfileLoading,
+  ProfileNotFound,
+} from '@/components/publicProfileStates';
+import RecentRunsCard from '@/components/RecentRunsCard';
+import { CARD } from '@/components/runDetailParts';
+import { initialsOf } from '@/lib/eventMath';
+import { usePublicProfile, type PublicProfile } from '@/lib/publicProfile';
+import { personRunRoute } from '@/lib/routes';
 
 // One runner's public profile (RUN-63, Figma "V2 - Public profile"): header
 // with initials avatar, name, follow button and counts, then their records,
@@ -31,58 +30,17 @@ const PAGE = 'flex flex-col gap-5 px-5 pt-6 pb-6 sm:px-8 lg:px-[40px] lg:pt-[32p
 export default function PublicProfileView({ userId }: { userId: string }) {
   const { status, profile, error } = usePublicProfile(userId);
 
-  // The same pre-spinner beat every other screen takes: nothing, rather
-  // than a not-found state for a profile that is merely still loading.
-  if (status === 'loading') return null;
-
-  if (status === 'missing') {
-    return (
-      <div className={PAGE}>
-        <section className={`${CARD} flex flex-col items-start gap-[10px] p-[28px]`}>
-          <h1 className="font-display text-[19px] font-bold tracking-[-0.3px] text-text-primary">
-            This runner doesn&apos;t exist
-          </h1>
-          <p className="text-[13.5px] leading-[1.55] text-secondary">
-            The link may be out of date, or the account may have been deleted.
-          </p>
-          <Link
-            href={ROUTES.events}
-            className="mt-[6px] text-[14px] font-semibold text-accent hover:text-accent-pressed"
-          >
-            ← Back to events
-          </Link>
-        </section>
-      </div>
-    );
-  }
-
+  // Every non-content status is answered before anything reads `profile`,
+  // so a load that failed can never be mistaken for a runner who is not
+  // there (the states themselves live in publicProfileStates.tsx).
+  if (status === 'loading') return <ProfileLoading />;
+  if (status === 'missing') return <ProfileNotFound />;
   if (status === 'error' || !profile) {
-    return (
-      <div className={PAGE}>
-        <section
-          role="alert"
-          className={`${CARD} flex flex-col items-start gap-[10px] px-[24px] py-[22px]`}
-        >
-          <h1 className="font-display text-[16px] font-bold tracking-[-0.3px] text-text-primary">
-            This profile didn&apos;t load
-          </h1>
-          <p className="text-[13.5px] leading-[1.55] text-secondary">
-            {error ?? 'Something went wrong loading this profile.'}
-          </p>
-          <button
-            type="button"
-            onClick={() => reloadPublicProfile(userId)}
-            className="mt-[6px] rounded-[12px] bg-accent px-[22px] py-[11px] text-[14px] font-semibold text-white hover:bg-accent-pressed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-          >
-            Try again
-          </button>
-        </section>
-      </div>
-    );
+    return <ProfileLoadError userId={userId} error={error} />;
   }
 
   return (
-    <div className={PAGE}>
+    <div className={PROFILE_PAGE}>
       <ProfileHeader profile={profile} />
       <ProfileBody profile={profile} />
     </div>
@@ -174,12 +132,7 @@ function ProfileBody({ profile }: { profile: PublicProfile }) {
         />
       </div>
       <div className="flex min-w-0 flex-col gap-5">
-        <PersonalRecordsCard
-          runs={runs}
-          title="Records"
-          emptyTitle="No records yet"
-          emptyMessage={`${profile.firstName} hasn't set a personal record yet.`}
-        />
+        <PersonalRecordsCard runs={runs} title="Records" />
       </div>
     </div>
   );

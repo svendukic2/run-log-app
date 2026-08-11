@@ -176,11 +176,14 @@ from this one list with the same helpers the dashboard uses, so a single gate
 covers all three cards, and the read-only run detail at `/people/:id/runs/:runId`
 reads the same list rather than a second endpoint that could forget it.
 
-Two status rules follow, and they matter more than they look. A **missing user is
-404; a private user is not** - a private account is a normal 200 with a gated
-body. Never 403: a 403 would tell anyone walking ids which of them are real
-accounts, which is exactly what the setting withholds. Same rule every scoped
-entity already follows for foreign ids.
+A **missing user is 404; a private user is not** - a private account is a normal
+200 with a gated body, because it still has a header it is entitled to serve, and
+403 is the wrong status for "you may read the header but not the body". Recorded
+plainly, because an earlier draft of this paragraph claimed the opposite: those
+two statuses side by side ARE an id enumeration oracle, and a 403 would have
+revealed less. That is an accepted tradeoff rather than a property the endpoint
+has; ids are `cuid()`, so there is no id space to walk. Do not "fix" it by
+404ing private accounts - AC2 needs their header.
 
 `showRoutes` is strictly narrower than `profilePublic` (the grant is the AND of
 the two), and the owner overrides both on their own profile. Route maps

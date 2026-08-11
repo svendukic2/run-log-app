@@ -14,6 +14,11 @@ import {
 
 const RECENT_RUNS_COUNT = 3;
 
+// One row's layout, applied to whichever element carries it: a plain div on
+// the dashboard, the Link itself on a profile (so the whole row is the
+// target, not just the route name).
+const ROW = 'flex items-center justify-between gap-6 py-[15px]';
+
 interface RecentRunsCardProps {
   // Omitted on the dashboard (the signed-in user's own store); given on
   // someone else's public profile (RUN-63), whose runs arrive with the
@@ -108,22 +113,19 @@ function RecentRuns({
           );
 
           return (
-            // The row's padding lives on the inner element (the whole of
-            // which is the link target on a profile), so the last row's
-            // bottom padding is dropped from the li through it.
-            <li
-              key={run.id}
-              className="border-b border-line last:border-b-0 [&>*]:flex [&>*]:items-center [&>*]:justify-between [&>*]:gap-6 [&>*]:py-[15px] last:[&>*]:pb-0"
-            >
+            // The row's layout lives on the inner element, the whole of
+            // which is the link target on a profile. Only the last row's
+            // dropped bottom padding has to reach through from the li.
+            <li key={run.id} className="border-b border-line last:border-b-0 last:[&>*]:pb-0">
               {runHref ? (
                 <Link
                   href={runHref(run.id)}
-                  className="hover:text-accent-pressed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                  className={`${ROW} hover:text-accent-pressed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent`}
                 >
                   {row}
                 </Link>
               ) : (
-                <div>{row}</div>
+                <div className={ROW}>{row}</div>
               )}
             </li>
           );

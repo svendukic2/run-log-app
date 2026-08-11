@@ -1,18 +1,16 @@
 'use client';
 
 import Link from 'next/link';
-import { CARD, RouteSketch, StatCard } from '@/components/RunDetailView';
+import {
+  PROFILE_PAGE,
+  ProfileLoadError,
+  ProfileLoading,
+  ProfileNotFound,
+} from '@/components/publicProfileStates';
+import { CARD, RouteSketch, StatCard } from '@/components/runDetailParts';
 import { usePublicProfile } from '@/lib/publicProfile';
 import { personRoute } from '@/lib/routes';
-import {
-  EFFORT_CHIP,
-  formatDate,
-  formatDistanceKm,
-  formatDuration,
-  formatPace,
-} from '@/lib/runs';
-
-const PAGE = 'flex flex-col gap-5 px-5 pt-6 pb-6 sm:px-8 lg:px-[40px] lg:pt-[32px] lg:pb-[32px]';
+import { EFFORT_CHIP, formatDate, formatDistanceKm, formatDuration, formatPace } from '@/lib/runs';
 
 // One run on someone else's public profile (RUN-63 AC4). The same page as
 // 09 · Run detail minus every write: no Edit, no Delete, no modals, and not
@@ -26,21 +24,24 @@ const PAGE = 'flex flex-col gap-5 px-5 pt-6 pb-6 sm:px-8 lg:px-[40px] lg:pt-[32p
 // carries no runs, so there is no run here to find. The Route card is gated
 // once more by showRoutes (route maps themselves are RUN-72; the decorative
 // sketch stands in for one until then).
-export default function PublicRunDetailView({
-  userId,
-  runId,
-}: {
-  userId: string;
-  runId: string;
-}) {
-  const { status, profile } = usePublicProfile(userId);
+export default function PublicRunDetailView({ userId, runId }: { userId: string; runId: string }) {
+  const { status, profile, error } = usePublicProfile(userId);
 
-  if (status === 'loading') return null;
+  // Every non-content status first (review fix): without this a timeout or
+  // a 5xx fell through to the "isn't available" copy below and told the
+  // reader a perfectly real run had been deleted, with no way to retry.
+  if (status === 'loading') return <ProfileLoading />;
+  if (status === 'missing') return <ProfileNotFound />;
+  if (status === 'error' || !profile) {
+    return <ProfileLoadError userId={userId} error={error} />;
+  }
 
-  const run = profile?.runs?.find((candidate) => candidate.id === runId);
+  const run = profile.runs?.find((candidate) => candidate.id === runId);
+  // Now genuinely one of two things: the run was deleted, or this profile is
+  // private and carried no runs at all.
   if (!run) {
     return (
-      <div className={PAGE}>
+      <div className={PROFILE_PAGE}>
         <section className={`${CARD} flex flex-col items-start gap-[10px] p-[28px]`}>
           <h1 className="font-display text-[19px] font-bold tracking-[-0.3px] text-text-primary">
             This run isn&apos;t available
@@ -67,14 +68,14 @@ export default function PublicRunDetailView({
   ];
 
   return (
-    <div className={PAGE}>
+    <div className={PROFILE_PAGE}>
       <header className="flex flex-col gap-[10px]">
         <Link
           href={personRoute(userId)}
           className="flex items-center gap-[8px] self-start text-[13px] text-tertiary hover:text-secondary"
         >
           <span aria-hidden="true">←</span>
-          {profile ? `${profile.firstName} ${profile.lastName}` : 'Back to the profile'}
+          {`${profile.firstName} ${profile.lastName}`}
         </Link>
 
         <h1 className="font-display text-[28px] font-bold tracking-[-0.6px] text-text-primary lg:text-[30px]">
@@ -114,7 +115,7 @@ export default function PublicRunDetailView({
         {/* showRoutes off means no Route card at all, not a blurred one:
             the response carries no route data either way (RUN-72 adds the
             real maps and the data behind them). */}
-        {profile?.showRoutes && (
+        {profile.showRoutes && (
           <section aria-labelledby="route-title" className={CARD}>
             <div className="border-b border-line px-[28px] py-[20px]">
               <h2

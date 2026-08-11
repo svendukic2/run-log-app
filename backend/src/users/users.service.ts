@@ -74,9 +74,16 @@ export class UsersService {
       select: PUBLIC_PROFILE_SELECT,
     });
     // Only a genuinely unknown id is a 404. A private account answers 200
-    // with a gated body: a 403 here would tell anyone walking ids which of
-    // them are real accounts, which is exactly what the setting is meant to
-    // withhold.
+    // because there is still a header it is entitled to serve (AC2 wants
+    // the name, the counts and a working follow button), and 403 is simply
+    // the wrong status for "you may read the header but not the body".
+    //
+    // Being honest about the consequence, since the reviewer caught the
+    // earlier comment claiming the opposite: 404-for-unknown next to
+    // 200-for-private IS an id enumeration oracle, and a 403 would have
+    // revealed less. That is an accepted tradeoff, not a property this code
+    // has - the mitigation is that ids are cuid(), so there is no id space
+    // to walk in the first place.
     if (!user) throw new NotFoundException(`User ${id} not found`);
 
     const me = viewerId === id;
