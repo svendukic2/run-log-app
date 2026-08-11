@@ -71,6 +71,17 @@ returning `{ token, user }` with the JWT subject = user id. Passwords are capped
 The privacy toggles (`profilePublic`, `showOnLeaderboard`, `showRoutes`) arrive
 additively in RUN-64.
 
+**Ownership (RUN-57).** Every other entity in this document carries a required
+`userId` foreign key (cascade on user delete) and every endpoint except
+`/api/auth/*` and `/api/hello` demands a `Authorization: Bearer <token>` header;
+queries are scoped `WHERE userId` server-side, and a foreign id answers 404, never
+403. Rows that existed before accounts were adopted by a **documented placeholder
+user** (`legacy-placeholder-user`, email `legacy-data@runlog.invalid`): it exists in
+every database that ran the `scope_entities_to_users` migration, cannot log in (its
+stored hash's preimage was random and discarded), and simply holds pre-account data
+until someone claims or deletes it. Response shapes are unchanged: `userId` never
+appears in API responses, the owner is implicit in the token.
+
 ### Profile (single record)
 
 | Field | Type | Notes |

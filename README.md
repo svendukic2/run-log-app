@@ -444,10 +444,11 @@ for the two supported setups and their trade-offs.
 Things this boilerplate deliberately does not decide for you:
 
 - **Auth.** Signup and login exist since RUN-56 (`POST /api/auth/signup`,
-  `POST /api/auth/login`, JWT in the response). What is still yours to build: the
-  guard that protects routes with those tokens, and attaching the v1 single-profile
-  data to accounts. NestJS guards are the place for the former; see the
-  `backend-nestjs` rules.
+  `POST /api/auth/login`, JWT in the response), and since RUN-57 a global
+  `JwtAuthGuard` protects every endpoint except `/api/auth/*` and `/api/hello`:
+  send `Authorization: Bearer <token>` or get a 401. Every entity is owned by a
+  user and queries are scoped server-side; see `docs/data-model.md` ("Ownership").
+  Still yours to build: the frontend session handling (RUN-58).
 - **Shared types between the apps.** Right now `HelloResponse` is declared in
   `backend/src/app.service.ts` and copied by hand into `frontend/src/app/page.tsx`.
   Changing the response shape means editing both. Generating types from an OpenAPI spec is
