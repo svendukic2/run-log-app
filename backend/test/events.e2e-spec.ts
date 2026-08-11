@@ -125,6 +125,7 @@ describe('Events API (e2e)', () => {
       state: 'active',
       participantCount: 1,
       joined: true,
+      mine: true,
       owner: { id: ana.id, firstName: 'event-ana', lastName: 'Tester' },
     });
   });
@@ -154,13 +155,14 @@ describe('Events API (e2e)', () => {
       'active',
       'upcoming',
     ]);
-    // joined is per caller: bruno owns (and so participates in) only the
-    // finished one.
+    // joined and mine are per caller: bruno owns (and so participates in)
+    // only the finished one.
     expect(all.items.map((event) => event.joined)).toEqual([
       true,
       false,
       false,
     ]);
+    expect(all.items.map((event) => event.mine)).toEqual([true, false, false]);
 
     const active = (await listEvents(bruno, '?state=active'))
       .body as EventListResponse;

@@ -7,11 +7,19 @@ export const ROUTES = {
   dashboard: '/dashboard',
   runs: '/runs',
   coach: '/coach',
+  events: '/events',
   settings: '/settings',
 } as const;
 
-// The four views that live behind the shared shell, in sidebar order.
-export const APP_ROUTES = [ROUTES.dashboard, ROUTES.runs, ROUTES.coach, ROUTES.settings] as const;
+// The views that live behind the shared shell, in sidebar order (Events
+// joined with the COMMUNITY section, RUN-68).
+export const APP_ROUTES = [
+  ROUTES.dashboard,
+  ROUTES.runs,
+  ROUTES.coach,
+  ROUTES.events,
+  ROUTES.settings,
+] as const;
 
 // Dashboard is the default view inside the shell (RUN-13 AC1).
 export const DEFAULT_APP_ROUTE = ROUTES.dashboard;

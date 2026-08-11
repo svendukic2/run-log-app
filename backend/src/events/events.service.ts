@@ -22,7 +22,10 @@ import { UpdateEventDto } from './dto/update-event.dto';
 // an event cannot outlive its owner (cascade), so the name cannot go stale
 // into nonsense. `joined` is the caller's own participation, which is what
 // the list page needs to label each card's Join/Leave button (RUN-68)
-// without a per-event follow-up call.
+// without a per-event follow-up call. `mine` answers "am I the owner" the
+// same way: the device-session frontend (see frontend session.ts) does not
+// track its own user id, and comparing owner.id client-side would force it
+// to - the API knows the caller, so it says so directly.
 export interface EventResponse {
   id: string;
   name: string;
@@ -33,6 +36,7 @@ export interface EventResponse {
   state: EventState;
   participantCount: number;
   joined: boolean;
+  mine: boolean;
   owner: {
     id: string;
     firstName: string;
@@ -120,7 +124,7 @@ export class EventsService {
         },
         include: eventInclude(userId),
       });
-      return this.toResponse(row, utcTodayIso());
+      return this.toResponse(row, utcTodayIso(), userId);
     } catch (error) {
       // Both FKs in the nested create carry the caller's id, so any P2003
       // here means the token's account was deleted mid-session.
@@ -160,7 +164,7 @@ export class EventsService {
     );
 
     return {
-      items: rows.map((row) => this.toResponse(row, today)),
+      items: rows.map((row) => this.toResponse(row, today, userId)),
       total,
       page,
       pageSize,
@@ -176,7 +180,7 @@ export class EventsService {
       include: eventInclude(userId),
     });
     if (!row) throw new NotFoundException(`Event ${id} not found`);
-    return this.toResponse(row, utcTodayIso());
+    return this.toResponse(row, utcTodayIso(), userId);
   }
 
   // AC2 + AC4: ensures the caller participates. Idempotent by way of the
@@ -294,7 +298,7 @@ export class EventsService {
         data,
         include: eventInclude(userId),
       });
-      return this.toResponse(row, utcTodayIso());
+      return this.toResponse(row, utcTodayIso(), userId);
     } catch (error) {
       if (isPrismaError(error, 'P2025')) {
         throw new NotFoundException(`Event ${id} not found`);
@@ -364,7 +368,11 @@ export class EventsService {
     return new NotFoundException(`Event ${eventId} not found`);
   }
 
-  private toResponse(row: EventWithMeta, today: string): EventResponse {
+  private toResponse(
+    row: EventWithMeta,
+    today: string,
+    userId: string,
+  ): EventResponse {
     const startDate = toIsoDate(row.startDate);
     const endDate = toIsoDate(row.endDate);
     return {
@@ -377,6 +385,7 @@ export class EventsService {
       state: deriveEventState(startDate, endDate, today),
       participantCount: row._count.participants,
       joined: row.participants.length > 0,
+      mine: row.ownerId === userId,
       owner: row.owner,
       createdAt: row.createdAt.toISOString(),
     };

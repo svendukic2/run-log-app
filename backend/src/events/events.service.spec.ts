@@ -163,6 +163,7 @@ describe('EventsService', () => {
       );
       expect(result.state).toBe('active');
       expect(result.joined).toBe(true);
+      expect(result.mine).toBe(true);
       expect(result.participantCount).toBe(1);
     });
 
@@ -213,6 +214,7 @@ describe('EventsService', () => {
             state: 'active',
             participantCount: 3,
             joined: true,
+            mine: false,
             owner: { id: OWNER_ID, firstName: 'Ana', lastName: 'Tester' },
             createdAt: '2026-08-11T10:00:00.000Z',
           },
@@ -256,6 +258,7 @@ describe('EventsService', () => {
       const result = await service.findOne(USER_ID, 'event-1');
 
       expect(result.joined).toBe(false);
+      expect(result.mine).toBe(false);
       expect(result.owner.id).toBe(OWNER_ID);
     });
 

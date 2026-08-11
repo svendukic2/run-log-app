@@ -6,7 +6,7 @@ describe('app routes (RUN-13)', () => {
   });
 
   it('lists exactly the four views that live behind the shell', () => {
-    expect(APP_ROUTES).toEqual(['/dashboard', '/runs', '/coach', '/settings']);
+    expect(APP_ROUTES).toEqual(['/dashboard', '/runs', '/coach', '/events', '/settings']);
   });
 
   it('keeps onboarding outside the four shell routes (AC4)', () => {
