@@ -4,6 +4,17 @@
 -- random 48-byte string that was immediately discarded, so no credentials
 -- can ever log in as it; the .invalid TLD is reserved (RFC 2606) so the
 -- email can never collide with a real signup.
+-- User.email is unique too, and IsEmail accepts the .invalid TLD, so a
+-- signup could have squatted the reserved address before this migration
+-- runs and the INSERT would then fail on the email index (which the
+-- ON CONFLICT ("id") clause does not cover). Since .invalid can never be a
+-- deliverable mailbox (RFC 2606), such an account can only be a squat:
+-- remove it. At this point in history no table references User yet, so the
+-- delete cannot cascade into anyone's data.
+DELETE FROM "User"
+WHERE "email" = 'legacy-data@runlog.invalid'
+  AND "id" <> 'legacy-placeholder-user';
+
 INSERT INTO "User" ("id", "email", "passwordHash", "firstName", "lastName")
 VALUES (
     'legacy-placeholder-user',
@@ -13,6 +24,16 @@ VALUES (
     'Data'
 )
 ON CONFLICT ("id") DO NOTHING;
+
+-- v1's "single row" rule for Profile and Goal was app convention only - the
+-- init migration carries no unique constraint - so a database where a seed,
+-- psql session or bug left extra rows would make the UNIQUE userId indexes
+-- below abort the whole migration. Keep the newest row of each (cuids sort
+-- roughly by creation time) and drop the rest BEFORE backfilling.
+DELETE FROM "Profile"
+WHERE "id" NOT IN (SELECT "id" FROM "Profile" ORDER BY "id" DESC LIMIT 1);
+DELETE FROM "Goal"
+WHERE "id" NOT IN (SELECT "id" FROM "Goal" ORDER BY "id" DESC LIMIT 1);
 
 -- Each table follows the same safe sequence: add the column nullable,
 -- backfill to the placeholder, then tighten to NOT NULL and add the

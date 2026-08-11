@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { PrismaService } from '../prisma/prisma.service';
 import { RunsService } from './runs.service';
@@ -29,10 +29,16 @@ describe('RunsService', () => {
       findMany: jest.fn(),
       findFirst: jest.fn(),
       create: jest.fn(),
-      updateMany: jest.fn(),
+      update: jest.fn(),
       deleteMany: jest.fn(),
     },
   };
+
+  // What Prisma throws when a mutation's unique where matches nothing. The
+  // service duck-types on the code, so the mock only needs that shape.
+  function prismaError(code: string) {
+    return Object.assign(new Error(`prisma ${code}`), { code });
+  }
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -142,13 +148,27 @@ describe('RunsService', () => {
     });
   });
 
-  it('updates only the provided fields, scoped to the owner in the WHERE', async () => {
-    prisma.run.updateMany.mockResolvedValue({ count: 1 });
-    prisma.run.findFirst.mockResolvedValue(row({ distanceKm: 9 }));
+  it('answers 401, not 500, when the tokens user row is gone (P2003 on create)', async () => {
+    prisma.run.create.mockRejectedValue(prismaError('P2003'));
+
+    await expect(
+      service.create('deleted-user', {
+        routeName: 'Ghost run',
+        distanceKm: 5,
+        durationSeconds: 1500,
+        date: '2026-08-03',
+      }),
+    ).rejects.toThrow(UnauthorizedException);
+  });
+
+  it('updates atomically with the owner inside the unique WHERE', async () => {
+    prisma.run.update.mockResolvedValue(row({ distanceKm: 9 }));
 
     const updated = await service.update(USER_ID, 'run-1', { distanceKm: 9 });
 
-    expect(prisma.run.updateMany).toHaveBeenCalledWith({
+    // One query carrying {id, userId}: no read-back a concurrent writer
+    // could race (Prisma 7 WhereUniqueInput accepts the non-unique field).
+    expect(prisma.run.update).toHaveBeenCalledWith({
       where: { id: 'run-1', userId: USER_ID },
       data: { distanceKm: 9 },
     });
@@ -156,12 +176,11 @@ describe('RunsService', () => {
   });
 
   it('404s an update of a missing run and of another users run alike (AC3)', async () => {
-    prisma.run.updateMany.mockResolvedValue({ count: 0 });
+    prisma.run.update.mockRejectedValue(prismaError('P2025'));
 
     await expect(
       service.update(USER_ID, 'not-mine', { distanceKm: 9 }),
     ).rejects.toThrow(NotFoundException);
-    expect(prisma.run.findFirst).not.toHaveBeenCalled();
   });
 
   it('treats an empty PATCH as a no-op read, not a write', async () => {
@@ -170,11 +189,11 @@ describe('RunsService', () => {
     const result = await service.update(USER_ID, 'run-1', {});
 
     expect(result.id).toBe('run-1');
-    expect(prisma.run.updateMany).not.toHaveBeenCalled();
+    expect(prisma.run.update).not.toHaveBeenCalled();
   });
 
   it('lets non-Prisma errors from the database escape untouched', async () => {
-    prisma.run.updateMany.mockRejectedValue(new Error('connection reset'));
+    prisma.run.update.mockRejectedValue(new Error('connection reset'));
 
     await expect(
       service.update(USER_ID, 'run-1', { distanceKm: 9 }),

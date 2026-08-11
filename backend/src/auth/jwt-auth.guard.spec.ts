@@ -56,6 +56,22 @@ describe('JwtAuthGuard', () => {
     }
   });
 
+  it('accepts the RFC-permitted spellings: case-insensitive scheme, extra whitespace', async () => {
+    // RFC 9110 s11.1 (auth-scheme is case-insensitive) and RFC 6750 s2.1
+    // ("Bearer" 1*SP token): clients that emit these are conformant and
+    // must not be locked out.
+    const token = await jwt.signAsync({ sub: 'user-1' });
+    for (const authorization of [
+      `bearer ${token}`,
+      `BEARER ${token}`,
+      `Bearer   ${token}`,
+    ]) {
+      const { context, request } = contextFor({ authorization });
+      await expect(guard.canActivate(context)).resolves.toBe(true);
+      expect(request.user).toEqual({ id: 'user-1' });
+    }
+  });
+
   it('401s a token signed with a different secret (AC1)', async () => {
     const forged = await new JwtService({
       secret: 'a-completely-different-secret-32ch',
@@ -85,7 +101,9 @@ describe('JwtAuthGuard', () => {
     );
   });
 
-  it('attaches the verified claims to the request and passes (the happy path)', async () => {
+  it('attaches the verified subject to the request and passes (the happy path)', async () => {
+    // The email claim rides in the token but is deliberately NOT exposed:
+    // only the id is attached (see AuthenticatedUser).
     const token = await jwt.signAsync({
       sub: 'user-1',
       email: 'ana@example.com',
@@ -95,6 +113,6 @@ describe('JwtAuthGuard', () => {
     });
 
     await expect(guard.canActivate(context)).resolves.toBe(true);
-    expect(request.user).toEqual({ id: 'user-1', email: 'ana@example.com' });
+    expect(request.user).toEqual({ id: 'user-1' });
   });
 });

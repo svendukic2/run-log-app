@@ -1,11 +1,9 @@
-import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
-import { AppModule } from './../src/app.module';
 import { PrismaService } from './../src/prisma/prisma.service';
 import type { RunResponse } from './../src/runs/runs.service';
-import type { AuthResponse } from './../src/auth/auth.service';
+import { createE2eApp, signupUser } from './create-test-app';
 
 // supertest types response.body as any; these two keep the assertions
 // type-checked instead of sprinkling casts through every test.
@@ -40,29 +38,11 @@ describe('Runs API (e2e)', () => {
   }
 
   beforeAll(async () => {
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication();
-    // Mirror the global 'api' prefix configured in main.ts so e2e routes
-    // match production.
-    app.setGlobalPrefix('api');
-    await app.init();
-    prisma = app.get(PrismaService);
+    ({ app, prisma } = await createE2eApp());
 
     // Users cascade to runs, so this also clears any leftover rows.
     await prisma.user.deleteMany();
-    const signup = await request(app.getHttpServer())
-      .post('/api/auth/signup')
-      .send({
-        email: 'runner@example.com',
-        password: 'correct horse battery staple',
-        firstName: 'Runa',
-        lastName: 'Runner',
-      })
-      .expect(201);
-    auth = { Authorization: `Bearer ${(signup.body as AuthResponse).token}` };
+    auth = await signupUser(app, 'runner');
   });
 
   beforeEach(async () => {
