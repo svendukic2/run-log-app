@@ -327,10 +327,14 @@ from their own leaderboard. Ranking and rounding are shared with the event board
 distinct distance skips the places they consumed (1, 1, 3), and distances round
 to **one** decimal, the precision the UI prints.
 
-Two reads serve it, exactly one of them the aggregation: the opted-in users, then
-one `GROUP BY` over their runs inside the week. Candidates first is deliberate -
-the opt-in gate applies before any run is touched, so an opted-out runner's
-distances are never read at all.
+Two reads serve it, exactly one of them the aggregation: the opted-in users (for
+their names, and so a runner who sat the week out still gets a row), then one
+`GROUP BY` over the week's runs. The opt-in gate is expressed **inside** that
+aggregation as a relation filter (`user: { showOnLeaderboard: true }`), not as an
+id list built from the first read: an `IN` list would carry one bind parameter
+per opted-in account and fail outright past Postgres' 65535-parameter cap. The
+event board may pass ids because one event's membership is bounded; this one is
+bounded only by the user table.
 
 ### Profile (one per user since RUN-57)
 

@@ -16,18 +16,12 @@ import { jsonResponse } from './apiMockShared';
 
 // One board per week start, exactly what the endpoint serves.
 let db = new Map<string, WeeklyLeaderboard>();
-// When set, GET /api/leaderboard fails with this status before reaching the
-// in-memory backend (makeLeaderboardLoadFail below).
-let failure: number | null = null;
 
 // Everything /api/leaderboard, called by runsApiMock's shared fetch handler
 // AFTER the Bearer check passed. Unknown shapes fall through to the
 // caller's loud throw.
 export function handleLeaderboardRequest(url: string, method: string): Promise<Response> | null {
   if (!url.startsWith('/api/leaderboard') || method !== 'GET') return null;
-  if (failure !== null) {
-    return Promise.resolve(jsonResponse(failure, { message: 'Simulated failure' }));
-  }
   const weekStart =
     new URLSearchParams(url.split('?')[1] ?? '').get('weekStart') ?? currentWeekStart();
   return Promise.resolve(jsonResponse(200, db.get(weekStart) ?? emptyBoard(weekStart)));
@@ -42,7 +36,6 @@ function emptyBoard(weekStart: string): WeeklyLeaderboard {
 // Called from jest.setup.ts before every test: fresh backend, store re-armed.
 export function installLeaderboardApiMock(): void {
   db = new Map();
-  failure = null;
   __resetLeaderboardForTests(null);
 }
 
@@ -76,11 +69,4 @@ export function seedLeaderboard(
   db.set(weekStart, board);
   __resetLeaderboardForTests(board);
   return board;
-}
-
-// Re-arms the initial load against a failing GET: the board lands in
-// 'error' once the page mounts.
-export function makeLeaderboardLoadFail(status = 500): void {
-  failure = status;
-  __resetLeaderboardForTests(null);
 }

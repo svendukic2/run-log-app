@@ -63,8 +63,9 @@ describe('LeaderboardService (RUN-70)', () => {
     expect(board.total).toBe(3);
     expect(board.me).toEqual(board.items[2]);
 
-    // AC6: one GROUP BY, bounded by the candidates and the inclusive week
-    // (the e2e suite proves the boundary days against a real database).
+    // AC6: one GROUP BY, gated on the opt-in inside the query itself and
+    // bounded by the inclusive week. Both boundary days are named here
+    // because they are the whole contract of "this week".
     expect(prisma.user.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { showOnLeaderboard: true } }),
     );
@@ -72,7 +73,7 @@ describe('LeaderboardService (RUN-70)', () => {
       expect.objectContaining({
         by: ['userId'],
         where: {
-          userId: { in: [USER_ID, 'user-ana', 'user-bo'] },
+          user: { showOnLeaderboard: true },
           date: { gte: toDbDate(MONDAY), lte: toDbDate(SUNDAY) },
         },
       }),
@@ -81,8 +82,9 @@ describe('LeaderboardService (RUN-70)', () => {
 
   it('leaves an opted-out caller off the board entirely (AC3)', async () => {
     // The caller is not among the opted-in users the query returns, which
-    // is the only thing "opted out" means here: no row, no rank, and their
-    // runs are never aggregated in the first place.
+    // is the only thing "opted out" means here: no row and no rank. The
+    // aggregation carries the same gate, so their distances are never
+    // summed either.
     prisma.user.findMany.mockResolvedValue([candidate('user-ana')]);
     prisma.run.groupBy.mockResolvedValue([aggregate('user-ana', 8, 1)]);
 
@@ -90,14 +92,6 @@ describe('LeaderboardService (RUN-70)', () => {
 
     expect(board.me).toBeNull();
     expect(board.items.map((row) => row.id)).toEqual(['user-ana']);
-    expect(prisma.run.groupBy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: {
-          userId: { in: ['user-ana'] },
-          date: { gte: toDbDate(MONDAY), lte: toDbDate(SUNDAY) },
-        },
-      }),
-    );
   });
 
   it('gives every runner a shared place at zero km in a week with no runs', async () => {

@@ -53,14 +53,19 @@ export class LeaderboardService {
   constructor(private readonly prisma: PrismaService) {}
 
   // Two reads, exactly one of them the aggregation the ticket asks for
-  // (AC6): the opted-in runners, then one GROUP BY over their runs inside
-  // the week. Prisma's groupBy compiles to that single SQL aggregation,
-  // which is why there is no raw query here - the same one statement, type
-  // checked and injection free, and no per-user follow-up.
+  // (AC6): the opted-in runners (for their names, and so runners who sat
+  // the week out still get a row), then one GROUP BY over the week's runs.
+  // Prisma's groupBy compiles to that single SQL aggregation, which is why
+  // there is no raw query here - the same one statement, type checked and
+  // injection free, and no per-user follow-up.
   //
-  // Candidates first, aggregation second, deliberately: the opt-in gate
-  // applies BEFORE any run is touched, so an opted-out runner's distances
-  // are never even read, let alone filtered out afterwards.
+  // The opt-in gate is expressed INSIDE the aggregation as a relation
+  // filter rather than as an id list built from the first read (review
+  // fix): an `IN` list carries one bind parameter per opted-in account, so
+  // it turns into a hard failure past Postgres' 65535-parameter cap
+  // instead of merely a slow query. The event board can pass ids because
+  // one event's membership is bounded; the global board is bounded only by
+  // the user table.
   async weeklyBoard(
     userId: string,
     query: LeaderboardQueryDto,
@@ -82,7 +87,7 @@ export class LeaderboardService {
     const totals = await this.prisma.run.groupBy({
       by: ['userId'],
       where: {
-        userId: { in: candidates.map((row) => row.id) },
+        user: { showOnLeaderboard: true },
         // The DATE column stores midnight UTC, so gte/lte on the two day
         // boundaries is the closed interval with no time-of-day slack.
         date: { gte: toDbDate(weekStart), lte: toDbDate(weekEnd) },

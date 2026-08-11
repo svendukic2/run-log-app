@@ -57,7 +57,7 @@ describe('LeaderboardView (RUN-70)', () => {
     expect(rows).toHaveLength(2);
     expect(rows[1]).toHaveTextContent('Marko Tester');
     expect(rows[1]).toHaveTextContent('51');
-    expect(board().getByText(/Showing the top 1 of 51 runners/)).toBeInTheDocument();
+    expect(board().getByText(/Showing the top 1 of 51 ranked runners/)).toBeInTheDocument();
   });
 
   it('tells me I am not on the board and links to Settings when I am opted out (AC3)', () => {

@@ -46,9 +46,13 @@ export default function LeaderboardView() {
       {status === 'error' && (
         <section
           role="alert"
+          aria-labelledby="leaderboard-error-heading"
           className={`${CARD} flex flex-col items-start gap-[10px] px-[24px] py-[22px]`}
         >
-          <h2 className="font-display text-[16px] font-bold tracking-[-0.3px] text-text-primary">
+          <h2
+            id="leaderboard-error-heading"
+            className="font-display text-[16px] font-bold tracking-[-0.3px] text-text-primary"
+          >
             The leaderboard didn&apos;t load
           </h2>
           <p className="text-[13.5px] leading-[1.55] text-secondary">
@@ -176,8 +180,12 @@ function LeaderboardCard({ board }: { board: WeeklyLeaderboard }) {
           )}
 
           {board.total > board.items.length && (
+            // "Ranked", not "runners" (review fix): the total counts
+            // everyone on the board, including those who logged nothing
+            // this week, so the plainer word would claim participation
+            // nobody had.
             <p className="pt-[10px] text-[12.5px] text-tertiary">
-              Showing the top {board.items.length} of {board.total} runners.
+              Showing the top {board.items.length} of {board.total} ranked runners.
             </p>
           )}
         </>
