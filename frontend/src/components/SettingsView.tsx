@@ -5,6 +5,7 @@ import { ACCENT_PILL_CLASSES } from '@/components/accentPill';
 import TextField from '@/components/TextField';
 import { clampGoal, GOAL_DEFAULT_KM, GOAL_MAX_KM, GOAL_MIN_KM } from '@/lib/goal';
 import { profileInitials, saveProfileSettings, useProfile, type Profile } from '@/lib/onboarding';
+import { savePrivacySettings, usePrivacy, type PrivacySettings } from '@/lib/privacy';
 import { validateProfileForm, type ProfileFormErrors } from '@/lib/profileValidation';
 import { ApiError } from '@/lib/session';
 import { useHydrated } from '@/lib/useHydrated';
@@ -55,9 +56,67 @@ function AvatarBlock({ profile }: { profile: Profile | null }) {
 const STEPPER_BUTTON_CLASSES =
   'flex size-[48px] shrink-0 items-center justify-center rounded-[14px] border border-line-strong bg-white text-[22px] text-ink hover:bg-muted disabled:opacity-40 disabled:hover:bg-white';
 
+// One privacy row: label and helper copy left, the switch right, matching
+// the Training row's shape (and stacking the same way on a phone).
+//
+// A button with role="switch" rather than a checkbox: these are settings
+// that take effect on Save, and the switch role is what tells a screen
+// reader "on/off state", which is exactly what the control is. The helper
+// copy is wired through aria-describedby, so the reason for the setting is
+// announced with it instead of being decoration for sighted users only.
+function PrivacyToggle({
+  id,
+  label,
+  hint,
+  checked,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  hint: string;
+  checked: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex min-w-0 flex-col gap-[3px]">
+        <p id={`${id}-label`} className="text-[15px] font-semibold text-text-primary">
+          {label}
+        </p>
+        <p id={`${id}-hint`} className="text-[13.5px] leading-[1.45] text-secondary">
+          {hint}
+        </p>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        id={id}
+        aria-checked={checked}
+        aria-labelledby={`${id}-label`}
+        aria-describedby={`${id}-hint`}
+        onClick={() => onChange(!checked)}
+        // The pill is 52x30 by design, which is under the 44 px minimum
+        // touch target on a phone, so a pseudo-element grows the HIT area
+        // to 66x44 without moving anything on screen (responsive addendum).
+        className={`relative h-[30px] w-[52px] shrink-0 self-start rounded-full transition-colors before:absolute before:-inset-[7px] before:content-[''] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:self-auto ${
+          checked ? 'bg-accent' : 'bg-line-strong'
+        }`}
+      >
+        <span
+          aria-hidden="true"
+          className={`absolute top-[3px] size-[24px] rounded-full bg-white transition-[left] ${
+            checked ? 'left-[25px]' : 'left-[3px]'
+          }`}
+        />
+      </button>
+    </div>
+  );
+}
+
 // The settings body owns the draft for every card because the page has a
-// single "Save changes" button (RUN-36): submit persists the profile (RUN-37)
-// and the Training default in one action (RUN-38, RUN-39).
+// single "Save changes" button (RUN-36): submit persists the profile (RUN-37),
+// the Training default (RUN-38, RUN-39) and the privacy toggles (RUN-64) in
+// one action.
 function SettingsForm() {
   // Mounted behind the app-data boundary (RUN-50), so the profile store has
   // settled and the record is available to seed the draft synchronously -
@@ -69,9 +128,20 @@ function SettingsForm() {
   // The stepper's draft, like the profile fields: seeded from the stored
   // default and only persisted on Save.
   const [goalKm, setGoalKm] = useState(() => profile?.defaultWeeklyGoalKm ?? GOAL_DEFAULT_KM);
+  // The privacy draft (RUN-64), seeded from the stored settings for the
+  // same reason: behind the boundary they have loaded, so the switches
+  // render the account's real state on the first paint rather than
+  // flashing the private defaults.
+  const storedPrivacy = usePrivacy();
+  const [privacy, setPrivacy] = useState<PrivacySettings>(storedPrivacy);
   const [errors, setErrors] = useState<ProfileFormErrors>({});
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
+
+  const privacyChanged =
+    privacy.profilePublic !== storedPrivacy.profilePublic ||
+    privacy.showOnLeaderboard !== storedPrivacy.showOnLeaderboard ||
+    privacy.showRoutes !== storedPrivacy.showRoutes;
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -97,10 +167,24 @@ function SettingsForm() {
       // current week before the new default lands (RUN-49).
       await saveProfileSettings({ ...draft, defaultWeeklyGoalKm: goalKm });
       // The inputs adopt the trimmed values that were actually stored, so
-      // what the card shows is exactly what a reload would show.
+      // what the card shows is exactly what a reload would show. Done
+      // BEFORE the privacy PUT below (review fix): that write can fail on
+      // its own, and leaving these inputs on the pre-trim draft would show
+      // untrimmed text next to an avatar already rendering the trimmed
+      // stored name, under a message about privacy.
       setFirstName(draft.firstName);
       setLastName(draft.lastName);
       setEmail(draft.email);
+      // The privacy toggles are a second resource (they live on the
+      // account row, not in the profile), so they take a second PUT - and
+      // only when they actually changed, so editing a name does not
+      // rewrite settings the user never touched. Both PUTs are full
+      // replaces, so a failure of this one leaves the profile saved, the
+      // toggles as drafted and the failure on screen: pressing Save again
+      // re-sends both and repairs it.
+      if (privacyChanged) {
+        await savePrivacySettings(privacy);
+      }
     } catch (error) {
       // Pessimistic like every write since RUN-48: the failure stays on
       // screen and nothing pretends to be saved.
@@ -202,6 +286,37 @@ function SettingsForm() {
               +
             </button>
           </div>
+        </div>
+      </SettingsCard>
+
+      <SettingsCard title="Privacy">
+        {/* Three grants, all off by default (RUN-64 AC3): nothing about an
+            account is shared with other runners until its owner says so
+            here. Each row spells out what turning it on actually exposes,
+            because "Public profile" alone does not say what a visitor
+            would see. */}
+        <div className="mt-[26px] flex flex-col gap-[22px]">
+          <PrivacyToggle
+            id="privacy-profile-public"
+            label="Public profile"
+            hint="Other runners can open your profile and see your records, weekly distance and recent runs."
+            checked={privacy.profilePublic}
+            onChange={(next) => setPrivacy((current) => ({ ...current, profilePublic: next }))}
+          />
+          <PrivacyToggle
+            id="privacy-leaderboard"
+            label="Show me on leaderboards"
+            hint="Your name and distance appear on leaderboards, global and inside events you join. Off means you are ranked nowhere."
+            checked={privacy.showOnLeaderboard}
+            onChange={(next) => setPrivacy((current) => ({ ...current, showOnLeaderboard: next }))}
+          />
+          <PrivacyToggle
+            id="privacy-routes"
+            label="Show my route maps"
+            hint="Route maps on your runs are shown to anyone who can see your profile. Your distances and times are not affected."
+            checked={privacy.showRoutes}
+            onChange={(next) => setPrivacy((current) => ({ ...current, showRoutes: next }))}
+          />
         </div>
       </SettingsCard>
 

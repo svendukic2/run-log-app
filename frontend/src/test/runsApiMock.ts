@@ -7,9 +7,10 @@
 // synchronously through seedRuns()/seedProfile()/seedGoal(), which also
 // prime the store caches - assertions right after render() keep working
 // exactly as they did when the stores were localStorage.
-import { type ProfileRecord, type WeekTarget } from '@/lib/accountApi';
+import { type PrivacySettings, type ProfileRecord, type WeekTarget } from '@/lib/accountApi';
 import { __resetGoalStoreForTests, todayIso, type Goal } from '@/lib/goal';
 import { __resetProfileStoreForTests } from '@/lib/onboarding';
+import { __resetPrivacyStoreForTests, PRIVACY_DEFAULTS } from '@/lib/privacy';
 import { __resetRunsStoreForTests, startOfWeek, type Run } from '@/lib/runs';
 import { __resetSessionForTests, __setHardNavigateForTests, hasStoredSession } from '@/lib/session';
 import { jsonResponse } from './apiMockShared';
@@ -37,6 +38,10 @@ let holdLoading = false;
 let profileDb: ProfileRecord | null = null;
 let goalDb: Goal | null = null;
 let weekTargetsDb = new Map<string, number>();
+// The account's privacy settings (RUN-64). A fresh account starts at the
+// schema defaults - all three false - like a real signup does.
+let privacyDb: PrivacySettings = { ...PRIVACY_DEFAULTS };
+let privacyPutFailure: number | null = null;
 // Statuses to fail the account GETs with (makeProfileLoadFail and friends).
 let profileFailure: number | null = null;
 let goalFailure: number | null = null;
@@ -119,10 +124,29 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
 
   // The account endpoints (RUN-49 contract, consumed since RUN-50). Guarded
   // like the real thing.
-  if (url === '/api/profile' || url === '/api/goal' || url.startsWith('/api/week-targets')) {
+  if (
+    url === '/api/profile' ||
+    url === '/api/goal' ||
+    url === '/api/privacy' ||
+    url.startsWith('/api/week-targets')
+  ) {
     if (!authorized(init)) {
       return Promise.resolve(jsonResponse(401, { message: 'Missing bearer token' }));
     }
+  }
+
+  // The privacy settings (RUN-64). No 404 case: they are columns on the
+  // account row, so a valid session always has them.
+  if (url === '/api/privacy' && method === 'GET') {
+    return Promise.resolve(jsonResponse(200, privacyDb));
+  }
+
+  if (url === '/api/privacy' && method === 'PUT') {
+    if (privacyPutFailure) {
+      return Promise.resolve(jsonResponse(privacyPutFailure, { message: 'Simulated failure' }));
+    }
+    privacyDb = JSON.parse(String(init.body)) as PrivacySettings;
+    return Promise.resolve(jsonResponse(200, privacyDb));
   }
 
   if (url === '/api/profile' && method === 'GET') {
@@ -305,6 +329,8 @@ export function installRunsApiMock(): void {
   goalFailure = null;
   profilePutFailure = null;
   weekTargetPutFailure = null;
+  privacyDb = { ...PRIVACY_DEFAULTS };
+  privacyPutFailure = null;
   signInRedirects = 0;
   hardNavigations = [];
   // jsdom cannot navigate; the session layer's full-load navigations become
@@ -320,6 +346,9 @@ export function installRunsApiMock(): void {
   // prime data the same way.
   __resetProfileStoreForTests(null);
   __resetGoalStoreForTests({ goal: null, weekTarget: null });
+  // A fresh account is private on every count, so that is the state every
+  // test starts in (seedPrivacy below opts one in).
+  __resetPrivacyStoreForTests({ ...PRIVACY_DEFAULTS });
   // The in-memory session outlives the localStorage wipe and would leak
   // identities (with now-invalidated tokens) between tests.
   __resetSessionForTests();
@@ -490,6 +519,21 @@ export function makeGoalLoadFail(status = 500): void {
 // (failRunsApi's counterpart for the profile endpoint).
 export function failProfileApi(status = 500): void {
   profilePutFailure = status;
+}
+
+// Seeds the account's privacy settings in the mock backend AND primes the
+// privacy store, so a card renders the opted-in state from the first
+// render (RUN-64).
+export function seedPrivacy(settings: Partial<PrivacySettings>): PrivacySettings {
+  privacyDb = { ...PRIVACY_DEFAULTS, ...settings };
+  __resetPrivacyStoreForTests(privacyDb);
+  return privacyDb;
+}
+
+// Makes PUT /api/privacy fail: the Settings save must keep the failure on
+// screen instead of pretending a toggle was stored.
+export function failPrivacyApi(status = 500): void {
+  privacyPutFailure = status;
 }
 
 // Makes PUT /api/week-targets/<week> fail: "Apply to weekly goal" resolves

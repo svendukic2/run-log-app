@@ -5,7 +5,7 @@ import { fetchWeekTarget } from '@/lib/accountApi';
 import { todayIso } from '@/lib/goal';
 import { getProfileRecord, type Profile } from '@/lib/onboarding';
 import { startOfWeek } from '@/lib/runs';
-import { failProfileApi, seedProfile } from '@/test/runsApiMock';
+import { failPrivacyApi, failProfileApi, seedPrivacy, seedProfile } from '@/test/runsApiMock';
 import SettingsView from './SettingsView';
 
 const STORED: Profile = { firstName: 'Marko', lastName: 'Kovač', email: 'marko@email.com' };
@@ -32,6 +32,14 @@ function increase() {
 function profilePutBodies(): Array<Profile & { defaultWeeklyGoalKm: number }> {
   return (global.fetch as jest.Mock).mock.calls
     .filter(([url, init]) => url === '/api/profile' && (init as RequestInit)?.method === 'PUT')
+    .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
+}
+
+// The same, for the privacy resource (RUN-64): its toggles ride the same
+// Save button but persist through their own endpoint.
+function privacyPutBodies(): Array<Record<string, boolean>> {
+  return (global.fetch as jest.Mock).mock.calls
+    .filter(([url, init]) => url === '/api/privacy' && (init as RequestInit)?.method === 'PUT')
     .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
 }
 
@@ -378,5 +386,71 @@ describe('Settings save changes persistence (RUN-39)', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Email is required');
     expect(profilePutBodies()).toHaveLength(1);
     expect(getProfileRecord()).toMatchObject({ ...STORED, defaultWeeklyGoalKm: 21 });
+  });
+});
+
+describe('Settings privacy card (RUN-64)', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    seedProfile(STORED);
+  });
+
+  function toggle(name: string) {
+    return within(screen.getByRole('region', { name: 'Privacy' })).getByRole('switch', { name });
+  }
+
+  it('shows the three toggles off, with helper copy, for a fresh account (AC1, AC3)', () => {
+    render(<SettingsView />);
+
+    // All three private by default: nothing is shared until the owner says
+    // so, and each switch explains what turning it on exposes.
+    for (const name of ['Public profile', 'Show me on leaderboards', 'Show my route maps']) {
+      expect(toggle(name)).toHaveAttribute('aria-checked', 'false');
+      expect(toggle(name)).toHaveAccessibleDescription();
+    }
+  });
+
+  it('persists a flipped toggle on Save and leaves untouched settings alone (AC2)', async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(<SettingsView />);
+
+    await user.click(toggle('Show me on leaderboards'));
+    await save(user);
+
+    // One PUT carrying all three values, the two untouched ones unchanged.
+    expect(privacyPutBodies()).toEqual([
+      { profilePublic: false, showOnLeaderboard: true, showRoutes: false },
+    ]);
+
+    // A fresh mount seeds from the store, so this is what a reload shows.
+    unmount();
+    render(<SettingsView />);
+    expect(toggle('Show me on leaderboards')).toHaveAttribute('aria-checked', 'true');
+
+    // Saving again without touching a toggle writes nothing: editing a name
+    // must not rewrite settings the user never opened.
+    await save(user);
+    expect(privacyPutBodies()).toHaveLength(1);
+  });
+
+  it('renders the stored settings and keeps a failed save on screen (AC1)', async () => {
+    seedPrivacy({ profilePublic: true });
+    failPrivacyApi();
+    const user = userEvent.setup();
+    const { unmount } = render(<SettingsView />);
+
+    // The stored state, not the defaults: an opted-in setting shows as on.
+    expect(toggle('Public profile')).toHaveAttribute('aria-checked', 'true');
+
+    await user.click(toggle('Show my route maps'));
+    await save(user);
+
+    // Pessimistic: the failure stays on screen and nothing pretends to be
+    // stored, so a reload still shows what the server actually holds.
+    expect(screen.getByRole('alert')).toHaveTextContent(/privacy settings failed/i);
+    unmount();
+    render(<SettingsView />);
+    expect(toggle('Public profile')).toHaveAttribute('aria-checked', 'true');
+    expect(toggle('Show my route maps')).toHaveAttribute('aria-checked', 'false');
   });
 });

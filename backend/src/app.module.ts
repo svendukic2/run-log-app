@@ -11,6 +11,7 @@ import { FollowModule } from './follow/follow.module';
 import { GoalModule } from './goal/goal.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { PrivacyModule } from './privacy/privacy.module';
 import { ProfileModule } from './profile/profile.module';
 import { RunsModule } from './runs/runs.module';
 import { WeekTargetsModule } from './week-targets/week-targets.module';
@@ -32,6 +33,7 @@ import { WeekTargetsModule } from './week-targets/week-targets.module';
     EventsModule,
     FollowModule,
     ProfileModule,
+    PrivacyModule,
     GoalModule,
     WeekTargetsModule,
     NotificationsModule,

@@ -10,7 +10,7 @@ import {
   type CommunityEvent,
   type EventParticipant,
 } from '@/lib/events';
-import { personRoute } from '@/lib/routes';
+import { personRoute, ROUTES } from '@/lib/routes';
 
 interface EventLeaderboardCardProps {
   event: CommunityEvent;
@@ -28,10 +28,10 @@ const CARD = 'rounded-[18px] border border-line bg-white';
 //
 // - Upcoming (AC4): nothing has been run yet BY DEFINITION, so the card
 //   says when the running starts instead of listing zeroes.
-// - Nobody ranked: every participant is off leaderboards. Until RUN-64
-//   ships the privacy toggles that is the default for every account, so
-//   this state is currently the common one and says so plainly rather than
-//   looking broken.
+// - Nobody ranked: every participant is off leaderboards. That is still
+//   the DEFAULT for every account (RUN-64 shipped the toggles, not a new
+//   default), so this state stays common and points at the Settings
+//   control that changes it rather than looking broken.
 export default function EventLeaderboardCard({ event, participants }: EventLeaderboardCardProps) {
   const rows = leaderboardOf(participants);
 
@@ -50,13 +50,18 @@ export default function EventLeaderboardCard({ event, participants }: EventLeade
           window count towards it.
         </p>
       ) : rows.length === 0 ? (
-        // No link to Settings (review fix): appearing on leaderboards is
-        // opt-in and the toggle granting it is RUN-64's, so until that
-        // ships this would send every reader of this state - currently
-        // every reader - hunting for a control that is not there.
+        // The link is back (RUN-64): the toggle it points at now exists,
+        // so this state can name the control that changes it instead of
+        // describing a setting nobody could find yet.
         <p className="text-[13.5px] leading-[1.55] text-secondary">
-          Nobody here is on leaderboards yet. Appearing on one will be a choice each runner makes in
-          Settings.
+          Nobody here is on leaderboards yet. Appearing on one is a choice each runner makes in{' '}
+          <Link
+            href={ROUTES.settings}
+            className="font-semibold text-accent hover:text-accent-pressed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          >
+            Settings
+          </Link>
+          .
         </p>
       ) : (
         <ol className="flex flex-col">
