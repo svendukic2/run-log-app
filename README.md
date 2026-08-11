@@ -428,9 +428,19 @@ have made both halves cold-start.
 
 Two free-tier catches to know before you rely on this:
 
-- **Free web services sleep after 15 minutes idle** and take roughly a minute to wake. The
-  first person to open the demo after a quiet spell waits; everyone after them does not.
-  Only the backend is affected, so the page paints immediately and the data arrives late.
+- **Free web services sleep after 15 minutes idle** and take roughly a minute to wake, and
+  this is worse than a slow first load. The frontend aborts any API call after 8 seconds
+  (`API_TIMEOUT_MS` in `frontend/src/lib/session.ts`), which is far less than a cold start
+  needs, so the first person to arrive after a quiet spell does not wait - they get a failed
+  sign-in or a retry card. Retrying once the backend is awake works, and everyone after them
+  is unaffected. **Before demoing, open the backend's own URL first** and let it wake:
+
+  ```bash
+  curl https://runlog-backend.onrender.com/api/hello   # first call may take ~1 minute
+  ```
+
+  Raising `API_TIMEOUT_MS` is the wrong fix (it would make every real failure hang for a
+  minute too); a paid instance that never sleeps is the real one.
 - **A free Render Postgres expires 30 days after creation**, then sits in a 14-day grace
   period before the data is deleted. Render emails a warning first. Two ways out, both
   fine: recreate the database and re-run the migrations (a demo's data is disposable), or
@@ -482,7 +492,7 @@ Render, `runlog-backend`:
 | ----------------- | ------ | ------------------------------------------------------------------ |
 | `DATABASE_URL`    | yes    | wired automatically from `runlog-db` (internal URL, no `sslmode`)   |
 | `JWT_SECRET`      | yes    | fresh random string, min 32 chars; generator below                  |
-| `FRONTEND_URL`    | no     | the Vercel origin, no trailing slash, e.g. `https://<app>.vercel.app` |
+| `FRONTEND_URL`    | no     | the Vercel origin, no trailing slash, e.g. `https://<app>.vercel.app` (CORS allow-list; see the note below) |
 | `ROUTING_API_KEY` | yes    | openrouteservice key; optional (see below)                          |
 | `NODE_VERSION`    | no     | `24`, already set in `render.yaml`                                  |
 | `PORT`            | -      | injected by Render; do not set it                                   |
@@ -502,8 +512,19 @@ to it server-side, which is why the browser only ever talks to its own origin an
 is involved. A `NEXT_PUBLIC_` prefix would bake the backend URL into every browser bundle
 permanently.
 
-`FRONTEND_URL` and `BACKEND_URL` point at each other, so the first deploy is a two-step:
-deploy both, then fill in each host's variable with the other's real URL and redeploy.
+It is also read **at build time**: Next evaluates `next.config.ts` during `next build` and
+bakes the rewrite into its routing manifest. Changing `BACKEND_URL` in the Vercel dashboard
+therefore does nothing until you **redeploy**. Expect to be caught by this once.
+
+`FRONTEND_URL` is the mirror of that setting and behaves differently from what you might
+assume: because all of the app's browser traffic is same-origin through the rewrite above,
+CORS is never exercised in the deployed path. A wrong `FRONTEND_URL` will **not** break the
+app and clicking around will never surface it. It is the allow-list for a genuinely
+cross-origin caller. Set it correctly regardless, so it is not a trap for whoever adds one.
+
+The two variables point at each other, so the first deploy is a two-step: deploy both, fill
+in each host's variable with the other's real URL, then **redeploy the frontend** (per the
+build-time note above) and restart the backend.
 
 `ROUTING_API_KEY` is optional (RUN-53). Without it the app works and only
 `POST /api/routes/plan` answers 503 `ROUTING_NOT_CONFIGURED`, which the Add run modal shows

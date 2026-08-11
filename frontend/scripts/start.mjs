@@ -20,6 +20,7 @@
 // real child so the host's SIGTERM still shuts the server down cleanly.
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
+import os from 'node:os';
 
 const require = createRequire(import.meta.url);
 
@@ -32,17 +33,21 @@ const child = spawn(process.execPath, [require.resolve('next/dist/bin/next'), 's
 });
 
 // Forward the shutdown signals a host sends, so `next start` gets to close its
-// connections instead of being killed along with this wrapper.
+// connections instead of being killed alongside this wrapper. Installing these
+// listeners also stops Node from exiting immediately on the signal, which is
+// what gives the child time to finish; we exit below, when it actually has.
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => child.kill(signal));
 }
 
+// Whatever ended the child ends us, with a code a supervisor can read. No
+// attempt to re-raise the signal on ourselves: the listeners above have already
+// replaced the default disposition, so process.kill would just re-enter them and
+// exit 0, reporting success for a killed server. 128 + signal number is the
+// shell convention for "died from this signal" and is the honest answer.
 child.on('exit', (code, signal) => {
-  // Re-raise rather than translate: a process killed by a signal should look
-  // killed by that signal to whatever supervises it.
-  if (signal) {
-    process.kill(process.pid, signal);
-    return;
+  if (signal !== null) {
+    process.exit(128 + (os.constants.signals[signal] ?? 0));
   }
   process.exit(code ?? 0);
 });

@@ -5,7 +5,7 @@
 # root README.md for the whole picture and the reasoning.
 #
 # Create everything from this file once: Render Dashboard > New > Blueprint,
-# point it at this repo. Render then prompts for the two values marked
+# point it at this repo. Render then prompts for the three values marked
 # `sync: false` below, because secrets must never live in the repo (AC3).
 # Editing this file and pushing updates the infrastructure on the next deploy;
 # the `sync: false` values are never overwritten.
@@ -64,7 +64,14 @@ services:
     #
     # `migrate deploy`, never `migrate dev`: it applies the committed migrations
     # verbatim and refuses to invent or reset anything.
-    startCommand: npx prisma migrate deploy && npm run start:prod
+    #
+    # `exec node dist/main`, not `npm run start:prod`: exec replaces the shell
+    # with node, so node is the process Render signals directly. Going through
+    # npm would bury node two processes deep, SIGTERM would stop at the shell,
+    # and main.ts's enableShutdownHooks would never fire - meaning Prisma never
+    # calls $disconnect and in-flight queries get severed rather than drained,
+    # which is the exact thing that comment in main.ts says not to break.
+    startCommand: npx prisma migrate deploy && exec node dist/main
 
     # NOT "/" - main.ts sets a global 'api' prefix, so GET / is a genuine 404 and
     # a health check pointed there would fail forever. /api/hello is @Public()
@@ -105,8 +112,13 @@ services:
 
       # The CORS origin (AC3): the deployed frontend's Vercel origin, scheme and
       # host with no trailing slash, e.g. https://run-log-app.vercel.app
-      # Wrong value here and the browser blocks every API call, so it is a
-      # prompted value rather than a guess baked into this file.
+      #
+      # Worth knowing what this does NOT do: the app's own traffic never uses
+      # CORS, because the browser only ever calls its own origin and Next
+      # rewrites /api/* to this backend server-side. So a wrong value here does
+      # not break the deployed app and will not show up in testing - it only
+      # matters for a genuinely cross-origin caller. Set it correctly anyway;
+      # a stale allow-list is a trap for whoever adds one later.
       - key: FRONTEND_URL
         sync: false
 
