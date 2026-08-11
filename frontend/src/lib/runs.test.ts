@@ -588,7 +588,7 @@ describe('store (API-backed since RUN-48)', () => {
     };
     // React logs the render error itself; keep the test output clean.
     const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
-    expect(() => render(React.createElement(Ungated))).toThrow(/RunsBoundary/);
+    expect(() => render(React.createElement(Ungated))).toThrow(/AppDataBoundary/);
     consoleError.mockRestore();
   });
 

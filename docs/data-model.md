@@ -12,25 +12,32 @@ this document explains the conventions both follow.
 
 ## Where data lives today
 
-Mid-migration, deliberately in two halves. Runs moved to PostgreSQL behind the API
-(RUN-48); the onboarding-era entities are still localStorage until RUN-50. Their API
-endpoints already exist server-side (RUN-49), so RUN-50 is a frontend-only swap:
+App data lives in PostgreSQL behind the API since RUN-48 (runs) and RUN-50 (the
+onboarding-era entities). What remains in localStorage is device-scoped by nature:
 
 | Entity | Type lives in | Persisted in | Introduced by |
 | --- | --- | --- | --- |
 | Run | `frontend/src/lib/runs.ts` | PostgreSQL via `/api/runs` (RUN-48) | RUN-23 |
+| Profile (incl. level + default goal) | `frontend/src/lib/onboarding.ts` | PostgreSQL via `/api/profile` (RUN-50) | RUN-8 |
+| Goal | `frontend/src/lib/goal.ts` | PostgreSQL via `/api/goal` (RUN-50) | RUN-10 |
+| Week targets | `frontend/src/lib/goal.ts` | PostgreSQL via `/api/week-targets` (RUN-50) | RUN-17/33 |
 | Device session | `frontend/src/lib/session.ts` | `runlog.session` (localStorage) | RUN-48 |
-| Profile | `frontend/src/lib/onboarding.ts` | `runlog.profile` (localStorage) | RUN-8 |
-| Onboarding flag | `frontend/src/lib/onboarding.ts` | `runlog.onboardingComplete` | RUN-8 |
-| Goal | `frontend/src/lib/goal.ts` | `runlog.goal` (localStorage) | RUN-10 |
-| Default goal | `frontend/src/lib/goal.ts` | `runlog.defaultGoal` (localStorage) | RUN-38 |
-| Applied goal | `frontend/src/lib/goal.ts` | `runlog.appliedGoal` (localStorage) | RUN-33 |
+| Onboarding wizard draft | `frontend/src/lib/onboarding.ts` | `runlog.onboardingDraft` (localStorage) | RUN-50 |
 | Plan stamp | `frontend/src/lib/plan.ts` | `runlog.plan` (localStorage) | RUN-32 |
+
+Gone with RUN-50 (their v1 localStorage keys are imported once, then deleted):
+`runlog.profile`, `runlog.onboardingComplete`, `runlog.level`, `runlog.goal`,
+`runlog.defaultGoal` (now `Profile.defaultWeeklyGoalKm`), `runlog.appliedGoal` (now a
+`PUT /api/week-targets/:weekStart`). "Onboarding complete" is no longer stored at all:
+it is derived - the profile existing on the server IS the completed onboarding. The
+wizard draft holds a visitor's half-finished setup answers locally on purpose: no
+account exists until "Finish setup", so an abandoned wizard costs nothing server-side.
 
 ## The frontend API pattern (decided in RUN-48, reuse everywhere)
 
-RUN-48 decided the app-wide async pattern once; the profile/goal migration (RUN-50) and
-every v2 screen reuse it rather than inventing another:
+RUN-48 decided the app-wide async pattern once; the profile/goal stores follow it since
+RUN-50 (three stores now: runs, profile, goal + week target) and every v2 screen reuses
+it rather than inventing another:
 
 - **Same-origin calls, proxied.** The browser calls `/api/*` on the frontend's own
   origin; `next.config.ts` rewrites that to the backend server-side. `BACKEND_URL`
@@ -46,20 +53,28 @@ every v2 screen reuse it rather than inventing another:
   in-memory session is the source of truth and localStorage only persists it, so
   blocked storage degrades durability, never identity. `apiFetch()` attaches the token,
   times out hung requests (8s), and retries once on 401 with a silent re-login.
-- **One-time v1 import.** Data still under the old `runlog.runs` key is imported into
-  the device account on first load (oldest first, resumable after transient failures),
-  then the key is deleted. Rows the stricter API rejects (RUN-47 rules the v1 forms
-  never enforced) are dropped and counted, never allowed to wedge the app; the user
-  sees a dismissible notice with the count.
+- **One-time v1 import.** Data still under the v1 localStorage keys is imported into
+  the device account on first load, then the keys are deleted. Runs (RUN-48): POSTed
+  oldest first, resumable after transient failures; rows the stricter API rejects are
+  dropped and counted, never allowed to wedge the app; the user sees a dismissible
+  notice with the count. Onboarding data (RUN-50): a completed v1 onboarding becomes
+  the account's goal + profile (level capitalized, the old default-goal km folded into
+  `defaultWeeklyGoalKm`, an applied goal for the running week PUT as its week target);
+  a half-finished or invalid one moves into the wizard draft instead, so the visitor
+  finishes prefilled rather than the import wedging on a 400.
 - **Reads: cache + screen-level gate.** Stores keep an in-memory cache behind
-  `useSyncExternalStore`; hooks stay synchronous (`useRuns(): Run[]`). Each screen
-  renders through one `RunsBoundary`: blank for the first 250 ms (no spinner flash on
-  the fast local API), then an honest spinner, then either content or one error card.
-  Retryable failures (network, timeout, 5xx) get "Try again"; terminal ones (the device
-  identity cannot authenticate) explain the way out instead. `useRuns()` throws in
-  development when read while loading outside a boundary, so a forgotten gate cannot
-  ship a false empty state. v1 designs no loading or error states; this is the
-  design-review note for that gap.
+  `useSyncExternalStore`; hooks stay synchronous (`useRuns(): Run[]`,
+  `useProfile(): ProfileRecord | null`, `useGoalTarget(iso): number`). Each screen
+  renders through one `AppDataBoundary` (RunsBoundary until RUN-50), which gates all
+  three stores: blank for the first 250 ms (no spinner flash on the fast local API),
+  then an honest spinner, then either content or one error card. Retryable failures
+  (network, timeout, 5xx) get "Try again" that reloads only the failed stores;
+  terminal ones (the device identity cannot authenticate) explain the way out instead.
+  `useRuns()` throws in development when read while loading outside a boundary, so a
+  forgotten gate cannot ship a false empty state; `useProfile()` is deliberately soft
+  (null while loading) because the sidebar footer legitimately reads it outside any
+  boundary. v1 designs no loading or error states; this is the design-review note for
+  that gap.
 - **Writes: pessimistic, awaited.** Mutations return promises; forms disable their
   submit while saving and keep themselves open with an inline `role="alert"` line on
   failure. No optimistic UI: a run the user believes is saved must actually be saved.
@@ -246,8 +261,9 @@ transaction; the owner joining their own event and repeat joins never notify.
 | runningLevel | 'Beginner' \| 'Intermediate' \| 'Advanced' | Set once in onboarding (LVL-2); not editable after (by design, flagged) |
 | defaultWeeklyGoalKm | number | Settings "Default weekly goal" (SET-3); seeds future weeks only (SET-6) |
 
-`runningLevel` and `defaultWeeklyGoalKm` are not in `onboarding.ts` yet; RUN-11 and
-RUN-38 add them to this same interface rather than creating new stores.
+`runningLevel` and `defaultWeeklyGoalKm` live on the same `ProfileRecord` in
+`onboarding.ts` since RUN-50 - one record, not separate stores. The level is
+capitalized everywhere now; the lowercase spellings were a v1 localStorage relic.
 
 The API is `GET`/`PUT /api/profile` (RUN-49): one resource per account, no id in the
 routes or the response - the owner is the token. GET answers 404 until the first PUT,

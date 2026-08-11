@@ -102,7 +102,7 @@ describe('runs loading (RUN-48)', () => {
     holdRunsLoading();
     render(<DashboardPage />);
 
-    // The whole state-dependent body sits behind RunsBoundary, so neither
+    // The whole state-dependent body sits behind AppDataBoundary, so neither
     // the empty-state prompt nor the filled cards can flash while loading.
     expect(screen.queryByTestId('dashboard-body')).not.toBeInTheDocument();
     expect(screen.queryByText('Log your first run')).not.toBeInTheDocument();
@@ -114,7 +114,7 @@ describe('runs loading (RUN-48)', () => {
     makeRunsLoadFail();
     render(<DashboardPage />);
 
-    expect(await screen.findByText("Your runs didn't load")).toBeInTheDocument();
+    expect(await screen.findByText("Your data didn't load")).toBeInTheDocument();
     expect(screen.queryByTestId('dashboard-body')).not.toBeInTheDocument();
 
     restoreRunsApi();

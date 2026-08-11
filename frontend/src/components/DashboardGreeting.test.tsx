@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { renderToString } from 'react-dom/server';
-import { saveProfile } from '@/lib/onboarding';
+import { seedProfile } from '@/test/runsApiMock';
 import DashboardGreeting from './DashboardGreeting';
 
 function profileNamed(firstName: string) {
@@ -9,7 +9,6 @@ function profileNamed(firstName: string) {
 
 describe('DashboardGreeting (RUN-16)', () => {
   beforeEach(() => {
-    window.localStorage.clear();
     jest.useFakeTimers();
   });
 
@@ -19,7 +18,7 @@ describe('DashboardGreeting (RUN-16)', () => {
 
   it('greets a morning visitor by first name (AC1)', () => {
     jest.setSystemTime(new Date(2026, 7, 3, 9, 0, 0));
-    saveProfile(profileNamed('Marko'));
+    seedProfile(profileNamed('Marko'));
 
     render(<DashboardGreeting />);
 
@@ -28,7 +27,7 @@ describe('DashboardGreeting (RUN-16)', () => {
 
   it('switches to the afternoon variant (AC2)', () => {
     jest.setSystemTime(new Date(2026, 7, 3, 14, 0, 0));
-    saveProfile(profileNamed('Marko'));
+    seedProfile(profileNamed('Marko'));
 
     render(<DashboardGreeting />);
 
@@ -37,14 +36,14 @@ describe('DashboardGreeting (RUN-16)', () => {
 
   it('switches to the evening variant (AC2)', () => {
     jest.setSystemTime(new Date(2026, 7, 3, 20, 0, 0));
-    saveProfile(profileNamed('Marko'));
+    seedProfile(profileNamed('Marko'));
 
     render(<DashboardGreeting />);
 
     expect(screen.getByText('Good evening, Marko')).toBeInTheDocument();
   });
 
-  it('greets without a name when no profile is stored yet', () => {
+  it('greets without a name when no profile exists yet', () => {
     jest.setSystemTime(new Date(2026, 7, 3, 9, 0, 0));
 
     render(<DashboardGreeting />);
@@ -54,15 +53,15 @@ describe('DashboardGreeting (RUN-16)', () => {
 
   it('uses the new first name on the next render (AC3)', () => {
     jest.setSystemTime(new Date(2026, 7, 3, 9, 0, 0));
-    saveProfile(profileNamed('Marko'));
+    seedProfile(profileNamed('Marko'));
 
     const { unmount } = render(<DashboardGreeting />);
     expect(screen.getByText('Good morning, Marko')).toBeInTheDocument();
 
     // "Renders again" per the AC: the next visit to the Dashboard mounts a
-    // fresh instance, which re-reads the stored profile.
+    // fresh instance, which re-reads the profile cache.
     unmount();
-    saveProfile(profileNamed('Ana'));
+    seedProfile(profileNamed('Ana'));
     render(<DashboardGreeting />);
 
     expect(screen.getByText('Good morning, Ana')).toBeInTheDocument();
@@ -70,9 +69,9 @@ describe('DashboardGreeting (RUN-16)', () => {
 
   it('renders nothing on the server, where clock and profile are unknown', () => {
     jest.setSystemTime(new Date(2026, 7, 3, 9, 0, 0));
-    saveProfile(profileNamed('Marko'));
+    seedProfile(profileNamed('Marko'));
 
-    // The pre-hydration markup must carry no clock- or storage-derived text,
+    // The pre-hydration markup must carry no clock- or store-derived text,
     // otherwise the client hydration pass could disagree with it.
     expect(renderToString(<DashboardGreeting />)).not.toMatch(/Good/);
   });

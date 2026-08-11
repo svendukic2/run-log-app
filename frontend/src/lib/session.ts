@@ -19,7 +19,7 @@
 // onboarding moves to the API and identity gets designed properly. Do not
 // copy this pattern anywhere a human-chosen password or shared account is
 // involved.
-import { getProfile } from './onboarding';
+import { getOnboardingDraft, readLegacyProfile } from './onboardingDraft';
 
 const SESSION_KEY = 'runlog.session';
 
@@ -171,15 +171,18 @@ function mintCredentials(): StoredSession {
   };
 }
 
-// Signup wants non-empty names (WEL-5 rules). The onboarding profile exists
-// by the time any runs screen renders (the routes gate on it), but the
-// fallback keeps this module honest about the ordering not being its
-// business.
+// Signup wants non-empty names (WEL-5 rules). They come from the leaf
+// onboardingDraft module (never from the profile STORE, which sits above
+// this module in the import graph): the wizard draft is where names live
+// at the common minting moment ("Finish setup"), and the not-yet-imported
+// v1 profile key covers legacy devices whose first server contact is the
+// runs import. The fallback covers a re-signup after a database reset with
+// clean local state - the profile PUT restores the real names right after.
 function signupNames(): { firstName: string; lastName: string } {
-  const profile = getProfile();
+  const names = getOnboardingDraft().profile ?? readLegacyProfile();
   return {
-    firstName: profile?.firstName.trim() || 'Runner',
-    lastName: profile?.lastName.trim() || 'Device',
+    firstName: names?.firstName.trim() || 'Runner',
+    lastName: names?.lastName.trim() || 'Device',
   };
 }
 

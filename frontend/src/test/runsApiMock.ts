@@ -1,12 +1,16 @@
-// The test double for the runs API (RUN-48). jest.setup.ts installs it
-// before every test, so component tests run against an in-memory backend
-// with the same contract as /api/runs, including the auth handshake: the
-// guarded endpoints demand a Bearer token this mock itself issued, so the
-// session layer is exercised (and can be expired) rather than waved
-// through. Tests seed synchronously through seedRuns(), which also primes
-// the store cache - assertions right after render() keep working exactly
-// as they did when the store was localStorage.
-import { __resetRunsStoreForTests, type Run } from '@/lib/runs';
+// The test double for the app API (runs since RUN-48; profile, goal and
+// week targets since RUN-50). jest.setup.ts installs it before every test,
+// so component tests run against an in-memory backend with the same
+// contract as /api/*, including the auth handshake: the guarded endpoints
+// demand a Bearer token this mock itself issued, so the session layer is
+// exercised (and can be expired) rather than waved through. Tests seed
+// synchronously through seedRuns()/seedProfile()/seedGoal(), which also
+// prime the store caches - assertions right after render() keep working
+// exactly as they did when the stores were localStorage.
+import { type ProfileRecord, type WeekTarget } from '@/lib/accountApi';
+import { __resetGoalStoreForTests, todayIso, type Goal } from '@/lib/goal';
+import { __resetProfileStoreForTests } from '@/lib/onboarding';
+import { __resetRunsStoreForTests, startOfWeek, type Run } from '@/lib/runs';
 import { __resetSessionForTests } from '@/lib/session';
 import { handleEventsRequest } from './eventsApiMock';
 
@@ -26,6 +30,18 @@ let authBroken = false;
 // When true, GET /api/runs never resolves (until its AbortSignal fires):
 // holds the store in 'loading'.
 let holdLoading = false;
+// The account resources (RUN-50). One implicit account: the mock does not
+// model multi-user isolation, only the contract shapes.
+let profileDb: ProfileRecord | null = null;
+let goalDb: Goal | null = null;
+let weekTargetsDb = new Map<string, number>();
+// Statuses to fail the account GETs with (makeProfileLoadFail and friends).
+let profileFailure: number | null = null;
+let goalFailure: number | null = null;
+// Statuses to fail the account PUTs with (failProfileApi / failWeekTargetApi):
+// the pessimistic-save error paths in Settings and on the plan card.
+let profilePutFailure: number | null = null;
+let weekTargetPutFailure: number | null = null;
 
 function nextId(): string {
   idCounter += 1;
@@ -47,6 +63,12 @@ function sorted(): Run[] {
   return [...db].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
 }
 
+// What a fresh week's target snapshots to: the same seed order as the real
+// server (backend snapshotKm).
+function seedKm(): number {
+  return profileDb?.defaultWeeklyGoalKm ?? goalDb?.km ?? 20;
+}
+
 function jsonResponse(status: number, body: unknown): Response {
   return {
     ok: status >= 200 && status < 300,
@@ -66,6 +88,12 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
   const method = (init.method ?? 'GET').toUpperCase();
 
   if (url === '/api/auth/login' || url === '/api/auth/signup') {
+    // CONTRACT (RUN-56, load-bearing for RUN-50): signup creates a User row
+    // and NOTHING else - deliberately no profileDb write here, because
+    // "onboarding complete" is derived from the profile's existence
+    // (onboarding.ts header). If the real signup ever starts creating
+    // profile rows, this mock must change WITH it or the frontend tests go
+    // green while production routes every fresh device to the dashboard.
     if (authBroken) {
       return Promise.resolve(
         jsonResponse(url.endsWith('signup') ? 409 : 401, { message: 'Invalid credentials' }),
@@ -90,6 +118,93 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
     }
     if (failure && failure.method === method) {
       return Promise.resolve(jsonResponse(failure.status, { message: 'Simulated failure' }));
+    }
+  }
+
+  // The account endpoints (RUN-49 contract, consumed since RUN-50). Guarded
+  // like the real thing.
+  if (url === '/api/profile' || url === '/api/goal' || url.startsWith('/api/week-targets')) {
+    if (!authorized(init)) {
+      return Promise.resolve(jsonResponse(401, { message: 'Missing bearer token' }));
+    }
+  }
+
+  if (url === '/api/profile' && method === 'GET') {
+    if (profileFailure) return Promise.resolve(jsonResponse(profileFailure, { message: 'Simulated failure' }));
+    return Promise.resolve(
+      profileDb
+        ? jsonResponse(200, profileDb)
+        : jsonResponse(404, { message: 'Profile not found' }),
+    );
+  }
+
+  if (url === '/api/profile' && method === 'PUT') {
+    if (profilePutFailure) {
+      return Promise.resolve(jsonResponse(profilePutFailure, { message: 'Simulated failure' }));
+    }
+    const record = JSON.parse(String(init.body)) as ProfileRecord;
+    // SET-6, as the real server does it: a changed default freezes the
+    // running week under the OLD seed first (first create excluded).
+    if (profileDb && profileDb.defaultWeeklyGoalKm !== record.defaultWeeklyGoalKm) {
+      const week = startOfWeek(todayIso());
+      if (!weekTargetsDb.has(week)) weekTargetsDb.set(week, seedKm());
+    }
+    profileDb = {
+      ...record,
+      firstName: record.firstName.trim(),
+      lastName: record.lastName.trim(),
+      email: record.email.trim(),
+    };
+    return Promise.resolve(jsonResponse(200, profileDb));
+  }
+
+  if (url === '/api/goal' && method === 'GET') {
+    if (goalFailure) return Promise.resolve(jsonResponse(goalFailure, { message: 'Simulated failure' }));
+    return Promise.resolve(
+      goalDb ? jsonResponse(200, goalDb) : jsonResponse(404, { message: 'Goal not found' }),
+    );
+  }
+
+  if (url === '/api/goal' && method === 'PUT') {
+    const body = JSON.parse(String(init.body)) as Goal;
+    if (!profileDb && goalDb && goalDb.km !== body.km) {
+      // Goal is the seed while no profile exists: same freeze rule.
+      const week = startOfWeek(todayIso());
+      if (!weekTargetsDb.has(week)) weekTargetsDb.set(week, seedKm());
+    }
+    goalDb = { km: body.km, startDate: body.startDate, endDate: body.endDate ?? null };
+    return Promise.resolve(jsonResponse(200, goalDb));
+  }
+
+  const weekTargetMatch = url.match(/^\/api\/week-targets\/(\d{4}-\d{2}-\d{2})$/);
+  if (weekTargetMatch) {
+    const weekStart = weekTargetMatch[1];
+    const currentWeek = startOfWeek(todayIso());
+    if (method === 'GET') {
+      if (goalFailure) return Promise.resolve(jsonResponse(goalFailure, { message: 'Simulated failure' }));
+      const existing = weekTargetsDb.get(weekStart);
+      if (existing !== undefined) {
+        return Promise.resolve(jsonResponse(200, { weekStart, targetKm: existing }));
+      }
+      // Creation only for the current week (the RUN-49 snapshot rule);
+      // everything else is an honest 404.
+      if (weekStart !== currentWeek) {
+        return Promise.resolve(jsonResponse(404, { message: 'No target for that week' }));
+      }
+      const targetKm = seedKm();
+      weekTargetsDb.set(weekStart, targetKm);
+      return Promise.resolve(jsonResponse(200, { weekStart, targetKm }));
+    }
+    if (method === 'PUT') {
+      if (weekTargetPutFailure) {
+        return Promise.resolve(jsonResponse(weekTargetPutFailure, { message: 'Simulated failure' }));
+      }
+      if (weekStart !== currentWeek) {
+        return Promise.resolve(jsonResponse(400, { message: 'weekStart must be the current week' }));
+      }
+      const { targetKm } = JSON.parse(String(init.body)) as { targetKm: number };
+      weekTargetsDb.set(weekStart, targetKm);
+      return Promise.resolve(jsonResponse(200, { weekStart, targetKm }));
     }
   }
 
@@ -169,8 +284,20 @@ export function installRunsApiMock(): void {
   rejectedNames = new Set();
   authBroken = false;
   holdLoading = false;
+  profileDb = null;
+  goalDb = null;
+  weekTargetsDb = new Map();
+  profileFailure = null;
+  goalFailure = null;
+  profilePutFailure = null;
+  weekTargetPutFailure = null;
   global.fetch = jest.fn(handle) as unknown as typeof fetch;
   __resetRunsStoreForTests([]);
+  // Every store starts 'ready' and empty, the state a fresh device wakes up
+  // in, so component tests render synchronously; seeding helpers below
+  // prime data the same way.
+  __resetProfileStoreForTests(null);
+  __resetGoalStoreForTests({ goal: null, weekTarget: null });
   // The in-memory session outlives the localStorage wipe and would leak
   // identities (with now-invalidated tokens) between tests.
   __resetSessionForTests();
@@ -246,4 +373,88 @@ export function rejectRunsNamed(routeName: string): void {
 // signup 409s, the "stored password no longer matches its account" case.
 export function breakRunsAuth(): void {
   authBroken = true;
+}
+
+/* Account resources (RUN-50) ------------------------------------------------ */
+
+// Seeds the profile in the mock backend AND primes the profile store, so
+// an onboarded account is on screen from the first render. The display
+// fields are enough; level and default fill with the onboarding defaults.
+export function seedProfile(
+  profile: Partial<ProfileRecord> & { firstName: string; lastName: string; email: string },
+): ProfileRecord {
+  profileDb = {
+    runningLevel: 'Beginner',
+    defaultWeeklyGoalKm: 20,
+    ...profile,
+  };
+  __resetProfileStoreForTests(profileDb);
+  return profileDb;
+}
+
+// Seeds the onboarding goal and primes the goal store. The current week's
+// target stays unmaterialized: useGoalTarget answers with the seed (which
+// equals goal km unless a profile default overrides it), exactly like a
+// fresh page load before the week's row exists.
+export function seedGoal(goal: Goal): Goal {
+  goalDb = goal;
+  __resetGoalStoreForTests({ goal, weekTarget: null });
+  return goal;
+}
+
+// Materializes the CURRENT week's target at the given km, in the backend
+// and the store cache - the state after a week was displayed or a coach
+// target applied.
+export function seedWeekTarget(targetKm: number): WeekTarget {
+  const weekTarget = { weekStart: startOfWeek(todayIso()), targetKm };
+  weekTargetsDb.set(weekTarget.weekStart, targetKm);
+  __resetGoalStoreForTests({ goal: goalDb, weekTarget });
+  return weekTarget;
+}
+
+// Re-arms the profile store's initial load against a failing GET: the
+// store lands in 'error' once a profile hook mounts (boundary tests).
+export function makeProfileLoadFail(status = 500): void {
+  plantTestSession();
+  profileFailure = status;
+  __resetProfileStoreForTests();
+}
+
+// Same for the goal store (its load also covers the week target GET).
+export function makeGoalLoadFail(status = 500): void {
+  plantTestSession();
+  goalFailure = status;
+  __resetGoalStoreForTests();
+}
+
+// Makes PUT /api/profile fail with the given status: the Settings save must
+// keep the failure on screen instead of pretending anything was stored
+// (failRunsApi's counterpart for the profile endpoint).
+export function failProfileApi(status = 500): void {
+  profilePutFailure = status;
+}
+
+// Makes PUT /api/week-targets/<week> fail: "Apply to weekly goal" resolves
+// false and the plan card owns the failure inline.
+export function failWeekTargetApi(status = 500): void {
+  weekTargetPutFailure = status;
+}
+
+// Clear the planted profile failures again (GET and PUT alike,
+// restoreRunsApi's sibling), so a test can watch a retry actually recover.
+export function restoreProfileApi(): void {
+  profileFailure = null;
+  profilePutFailure = null;
+}
+
+// Makes the goal-side GETs (/api/goal and /api/week-targets/:weekStart)
+// fail with the given status WITHOUT re-arming the store, unlike
+// makeGoalLoadFail: for testing failures that hit an already-ready store
+// (the week-rollover refresh).
+export function failGoalApi(status = 500): void {
+  goalFailure = status;
+}
+
+export function restoreGoalApi(): void {
+  goalFailure = null;
 }

@@ -1,13 +1,16 @@
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import RunsBoundary from '@/components/RunsBoundary';
+import AppDataBoundary from '@/components/AppDataBoundary';
 import { API_TIMEOUT_MS } from '@/lib/session';
 import {
   breakRunsAuth,
   expireRunsTokens,
   holdRunsLoading,
+  makeGoalLoadFail,
+  makeProfileLoadFail,
   makeRunsLoadFail,
   rejectRunsNamed,
+  restoreProfileApi,
   restoreRunsApi,
   seedLegacyRuns,
   seedRuns,
@@ -24,14 +27,20 @@ function firstRun() {
   };
 }
 
-describe('RunsBoundary (RUN-48)', () => {
-  it('renders its children once the store is ready', () => {
+// The URLs fetched from a given point on, so a test can tell which stores a
+// retry actually hit.
+function fetchedUrlsSince(callCount: number): string[] {
+  return (global.fetch as jest.Mock).mock.calls.slice(callCount).map(([url]) => String(url));
+}
+
+describe('AppDataBoundary (RUN-48, widened in RUN-50)', () => {
+  it('renders its children once every store is ready', () => {
     seedRuns([firstRun()]);
 
     render(
-      <RunsBoundary>
+      <AppDataBoundary>
         <p>screen content</p>
-      </RunsBoundary>,
+      </AppDataBoundary>,
     );
 
     expect(screen.getByText('screen content')).toBeInTheDocument();
@@ -43,9 +52,9 @@ describe('RunsBoundary (RUN-48)', () => {
       holdRunsLoading();
 
       render(
-        <RunsBoundary>
+        <AppDataBoundary>
           <p>screen content</p>
-        </RunsBoundary>,
+        </AppDataBoundary>,
       );
       // Let the load chain (session read, then the held GET) reach the
       // network before the clock moves: fake timers freeze time, not
@@ -63,7 +72,7 @@ describe('RunsBoundary (RUN-48)', () => {
       act(() => {
         jest.advanceTimersByTime(300);
       });
-      expect(screen.getByRole('status')).toHaveTextContent('Loading your runs…');
+      expect(screen.getByRole('status')).toHaveTextContent('Loading your data…');
 
       // A request that hangs is the failure the error state exists for:
       // the app-wide timeout aborts it and the retry card takes over,
@@ -72,7 +81,7 @@ describe('RunsBoundary (RUN-48)', () => {
         jest.advanceTimersByTime(API_TIMEOUT_MS);
       });
       expect(
-        screen.getByRole('heading', { name: "Your runs didn't load" }),
+        screen.getByRole('heading', { name: "Your data didn't load" }),
       ).toBeInTheDocument();
     } finally {
       jest.useRealTimers();
@@ -84,14 +93,14 @@ describe('RunsBoundary (RUN-48)', () => {
     makeRunsLoadFail();
 
     render(
-      <RunsBoundary>
+      <AppDataBoundary>
         <p>screen content</p>
-      </RunsBoundary>,
+      </AppDataBoundary>,
     );
 
     // The failure replaces the screen's content with a single honest card.
     expect(
-      await screen.findByRole('heading', { name: "Your runs didn't load" }),
+      await screen.findByRole('heading', { name: "Your data didn't load" }),
     ).toBeInTheDocument();
     expect(screen.queryByText('screen content')).toBeNull();
 
@@ -99,19 +108,84 @@ describe('RunsBoundary (RUN-48)', () => {
     await user.click(screen.getByRole('button', { name: 'Try again' }));
 
     expect(await screen.findByText('screen content')).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: "Your runs didn't load" })).toBeNull();
+    expect(screen.queryByRole('heading', { name: "Your data didn't load" })).toBeNull();
   });
 
   it('renders the specific failure, not one fixed sentence', async () => {
     makeRunsLoadFail(500);
 
     render(
-      <RunsBoundary>
+      <AppDataBoundary>
         <p>screen content</p>
-      </RunsBoundary>,
+      </AppDataBoundary>,
     );
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Loading runs failed (500).');
+  });
+
+  it('gates the screen when only the profile load fails', async () => {
+    // Runs and goal stay healthy: one failed store is enough to hold every
+    // derived screen behind the card, because half-loaded data would render
+    // half-true numbers.
+    makeProfileLoadFail(500);
+
+    render(
+      <AppDataBoundary>
+        <p>screen content</p>
+      </AppDataBoundary>,
+    );
+
+    expect(
+      await screen.findByRole('heading', { name: "Your data didn't load" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Loading your profile failed (500).');
+    expect(screen.queryByText('screen content')).toBeNull();
+  });
+
+  it('gates the screen when only the goal load fails', async () => {
+    makeGoalLoadFail(500);
+
+    render(
+      <AppDataBoundary>
+        <p>screen content</p>
+      </AppDataBoundary>,
+    );
+
+    expect(
+      await screen.findByRole('heading', { name: "Your data didn't load" }),
+    ).toBeInTheDocument();
+    // The goal load is two GETs (goal + current week's target); whichever
+    // rejects first names itself, both carry the status.
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      /Loading (your goal|this week's target) failed \(500\)\./,
+    );
+    expect(screen.queryByText('screen content')).toBeNull();
+  });
+
+  it('Try again after a profile-only failure reloads just the profile store', async () => {
+    const user = userEvent.setup();
+    makeProfileLoadFail();
+
+    render(
+      <AppDataBoundary>
+        <p>screen content</p>
+      </AppDataBoundary>,
+    );
+    expect(
+      await screen.findByRole('heading', { name: "Your data didn't load" }),
+    ).toBeInTheDocument();
+
+    restoreProfileApi();
+    const callsBefore = (global.fetch as jest.Mock).mock.calls.length;
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+
+    expect(await screen.findByText('screen content')).toBeInTheDocument();
+    // Only the failed store refetched: the ready runs and goal caches are
+    // still good, and re-reading them would be wasted requests.
+    const retried = fetchedUrlsSince(callsBefore);
+    expect(retried).toContain('/api/profile');
+    expect(retried).not.toContain('/api/runs');
+    expect(retried).not.toContain('/api/goal');
   });
 
   it('shows the terminal card with a way out, and no retry, when the identity is dead', async () => {
@@ -126,13 +200,13 @@ describe('RunsBoundary (RUN-48)', () => {
     breakRunsAuth();
 
     render(
-      <RunsBoundary>
+      <AppDataBoundary>
         <p>screen content</p>
-      </RunsBoundary>,
+      </AppDataBoundary>,
     );
 
     expect(
-      await screen.findByRole('heading', { name: "This device can't sign in to its runs" }),
+      await screen.findByRole('heading', { name: "This device can't sign in to its data" }),
     ).toBeInTheDocument();
     expect(screen.getByText(/Clearing this site's data starts a fresh log/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
@@ -147,9 +221,9 @@ describe('RunsBoundary (RUN-48)', () => {
     rejectRunsNamed('Poisoned');
 
     render(
-      <RunsBoundary>
+      <AppDataBoundary>
         <p>screen content</p>
-      </RunsBoundary>,
+      </AppDataBoundary>,
     );
 
     expect(await screen.findByText('screen content')).toBeInTheDocument();
