@@ -131,7 +131,8 @@ cd frontend && npm install && cp .env.example .env.local && cd ..
 
 The frontend's `.env.local` is optional (it falls back to localhost defaults). The
 backend's `.env` is **not optional anymore**: since RUN-46 the API connects to PostgreSQL
-at startup and refuses to boot without a `DATABASE_URL`. One-time database setup:
+at startup and refuses to boot without a `DATABASE_URL`, and since RUN-56 it also
+refuses to boot without a `JWT_SECRET` (auth tokens are signed with it). One-time setup:
 
 ```bash
 # 4. Database (needs a locally installed PostgreSQL, no Docker required)
@@ -139,6 +140,10 @@ at startup and refuses to boot without a `DATABASE_URL`. One-time database setup
 #      CREATE DATABASE runlog;
 #    Fill DATABASE_URL in backend/.env with your local credentials, then:
 cd backend && npx prisma migrate dev && cd ..
+
+# 5. JWT secret (min 32 chars; the template's placeholder is rejected at boot)
+#    Generate one and paste it into JWT_SECRET in backend/.env:
+node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
 ```
 
 `npx prisma migrate dev` applies the committed migrations from
@@ -242,8 +247,10 @@ into the JavaScript sent to the browser, so it is public forever. `BACKEND_URL` 
 such prefix because it is read on the server. Never put a secret behind
 `NEXT_PUBLIC_`.
 
-There is no config validation yet, so a missing variable fails when it is first used
-rather than at startup.
+The backend validates its environment at boot (`src/config/env.validation.ts`): a
+missing or placeholder `DATABASE_URL`/`JWT_SECRET` stops the start with a message that
+names the fix. The frontend has no such validation; a missing variable there falls back
+to its default or fails at first use.
 
 ## Git workflow
 
@@ -436,8 +443,11 @@ for the two supported setups and their trade-offs.
 
 Things this boilerplate deliberately does not decide for you:
 
-- **Auth.** Not present. NestJS guards are the place for it; see the `backend-nestjs`
-  rules.
+- **Auth.** Signup and login exist since RUN-56 (`POST /api/auth/signup`,
+  `POST /api/auth/login`, JWT in the response). What is still yours to build: the
+  guard that protects routes with those tokens, and attaching the v1 single-profile
+  data to accounts. NestJS guards are the place for the former; see the
+  `backend-nestjs` rules.
 - **Shared types between the apps.** Right now `HelloResponse` is declared in
   `backend/src/app.service.ts` and copied by hand into `frontend/src/app/page.tsx`.
   Changing the response shape means editing both. Generating types from an OpenAPI spec is

@@ -178,14 +178,16 @@ Steps 1 to 3 always apply, whichever path is taken.
    cd backend && cp .env.example .env
    ```
 
-   `.env` is read at startup by `ConfigModule.forRoot()` in `src/app.module.ts`, and values are consumed through `ConfigService` in `src/main.ts`. It is gitignored and must never be committed. The app also runs without it, on the defaults below.
+   `.env` is read at startup by `ConfigModule.forRoot()` in `src/app.module.ts`, and values are consumed through `ConfigService`. It is gitignored and must never be committed. The app **no longer runs without it**: `src/config/env.validation.ts` fails the boot on a missing `DATABASE_URL` (RUN-46) or `JWT_SECRET` (RUN-56).
 
-3. Read `backend/.env` and flag any variables that are missing or still set to placeholder values. The backend currently reads exactly two:
+3. Read `backend/.env` and flag any variables that are missing or still set to placeholder values. The backend currently reads four:
 
    | Variable       | Default if unset        | Purpose                             |
    | -------------- | ----------------------- | ----------------------------------- |
    | `PORT`         | `3000`                  | Port the API listens on             |
    | `FRONTEND_URL` | `http://localhost:4200` | CORS origin for client-side fetches |
+   | `DATABASE_URL` | **none - boot fails**   | PostgreSQL connection string (RUN-46); create the DB once, then `npx prisma migrate dev` |
+   | `JWT_SECRET`   | **none - boot fails**   | Signs auth tokens (RUN-56); min 32 chars, generate with `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"` |
 
    Anything set in the shell environment overrides `.env`.
 

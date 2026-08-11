@@ -50,6 +50,27 @@ diverge.
 
 ## Entities
 
+### User (one per account, RUN-56)
+
+The anchor entity of the v2 community phase, deliberately standalone: the single-row
+`Profile` below stays untouched until the phase B per-user-scoping tasks decide how v1
+data attaches to accounts. Community tasks (follow, notifications, events) hang off
+`User.id`, not `Profile`.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| email | string, UNIQUE | Stored trimmed + lowercased + NFC-normalized (one canonical spelling per account) |
+| passwordHash | string | bcrypt, cost 12; never leaves the auth service in any response or log (RUN-56 AC4) |
+| firstName | string | Non-empty, mirrors WEL-5 rules |
+| lastName | string | Non-empty, mirrors WEL-5 rules |
+| createdAt | timestamp | Audit field (the `updatedAt` convention above extends to `createdAt` here) |
+
+The API endpoints are `POST /api/auth/signup` and `POST /api/auth/login`, both
+returning `{ token, user }` with the JWT subject = user id. Passwords are capped at
+72 UTF-8 **bytes** (not characters) because bcrypt silently truncates beyond that.
+The privacy toggles (`profilePublic`, `showOnLeaderboard`, `showRoutes`) arrive
+additively in RUN-64.
+
 ### Profile (single record)
 
 | Field | Type | Notes |
@@ -136,6 +157,8 @@ No Docker needed; a locally installed PostgreSQL works fine. On a fresh clone:
 1. Create an empty database once: `CREATE DATABASE runlog;`
 2. Set `DATABASE_URL` in `backend/.env` (template in `backend/.env.example`):
    `DATABASE_URL="postgresql://postgres:<password>@localhost:5432/runlog"`
+   Since RUN-56 the boot also requires `JWT_SECRET` (min 32 chars); the template
+   carries a one-liner that generates it.
 3. `cd backend && npm install` - also generates the Prisma client into
    `backend/src/generated/prisma` (gitignored) via the `postinstall` script.
 4. `npx prisma migrate dev` - applies the committed migrations from

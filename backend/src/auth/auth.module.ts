@@ -16,19 +16,35 @@ import { AuthService } from './auth.service';
     // injected, not importable at decorator-evaluation time.
     JwtModule.registerAsync({
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        secret: config.get<string>('JWT_SECRET'),
-        // Seven days: long enough that the demo never logs anyone out
-        // mid-sprint-review, short enough that a leaked token expires.
-        // Refresh tokens are deliberately out of scope for RUN-56.
-        signOptions: { expiresIn: '7d' },
-      }),
+      useFactory: (config: ConfigService) => {
+        const secret = config.get<string>('JWT_SECRET');
+        if (!secret) {
+          // validateEnv already fails the boot for a missing variable; this
+          // guard is for the other way in (a testing module or future
+          // entrypoint wiring ConfigModule without validateEnv), where
+          // JwtModule would otherwise accept undefined silently and fail
+          // only at the first sign() as a 500. Same discipline as the
+          // DATABASE_URL guard in PrismaService.
+          throw new Error(
+            'JWT_SECRET is not set. Copy backend/.env.example to backend/.env and generate one as the template describes.',
+          );
+        }
+        return {
+          secret,
+          // Seven days: long enough that the demo never logs anyone out
+          // mid-sprint-review, short enough that a leaked token expires.
+          // Refresh tokens are deliberately out of scope for RUN-56.
+          signOptions: { expiresIn: '7d' },
+        };
+      },
     }),
   ],
   controllers: [AuthController],
   providers: [AuthService],
-  // Exported for the phase B guard task that will verify these tokens on
-  // protected routes; nothing imports it yet.
-  exports: [AuthService],
+  // AuthService for the phase B guard task; JwtModule alongside it so that
+  // guard can inject JwtService and VERIFY tokens against the same secret
+  // and options they were signed with, instead of pasting a second
+  // registerAsync into its own module and creating two sources of truth.
+  exports: [AuthService, JwtModule],
 })
 export class AuthModule {}

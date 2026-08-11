@@ -5,14 +5,18 @@ import {
   IsString,
   MaxLength,
   MinLength,
+  registerDecorator,
+  type ValidationOptions,
 } from 'class-validator';
 
-// AC1: minimum 8 characters. The maximum exists because bcrypt only hashes
-// the first 72 bytes of its input - a longer password would be silently
-// truncated, so two "different" long passwords could collide. Rejecting is
-// honest, truncating is not.
+// AC1: minimum 8 characters. The maximum is enforced in UTF-8 BYTES, not
+// characters, because bcrypt keys on the first 72 bytes of its input: a
+// code-point cap would let a 72-character password of 2-byte characters
+// (144 bytes) through, and bcrypt would silently hash only its first half -
+// the account would then also authenticate with the truncated prefix.
+// Rejecting is honest, truncating is not.
 export const PASSWORD_MIN_LENGTH = 8;
-export const PASSWORD_MAX_LENGTH = 72;
+export const PASSWORD_MAX_BYTES = 72;
 
 // Same rationale as ROUTE_NAME_MAX_LENGTH in the runs DTOs: not policing
 // real input, keeping a stray script from storing megabytes in TEXT columns.
@@ -20,14 +24,55 @@ export const NAME_MAX_LENGTH = 120;
 // RFC 5321's practical ceiling for a whole address.
 export const EMAIL_MAX_LENGTH = 254;
 
+// Byte-length cap for the bcrypt input (see PASSWORD_MAX_BYTES). Own
+// validator because class-validator's MaxLength counts code points.
+export function MaxByteLength(
+  maxBytes: number,
+  validationOptions?: ValidationOptions,
+) {
+  return function (object: object, propertyName: string) {
+    registerDecorator({
+      name: 'maxByteLength',
+      target: object.constructor,
+      propertyName,
+      options: validationOptions,
+      validator: {
+        validate(value: unknown): boolean {
+          return (
+            typeof value === 'string' &&
+            Buffer.byteLength(value, 'utf8') <= maxBytes
+          );
+        },
+      },
+    });
+  };
+}
+
 // Emails are compared case-insensitively everywhere in practice, and the
 // User.email column is UNIQUE, so the API stores one canonical spelling:
-// trimmed and lowercased at the DTO boundary. Signup and login share this
-// transform, which is what makes "Ana@Example.com" log into the account
-// created as "ana@example.com".
+// trimmed, lowercased and NFC-normalized at the DTO boundary. Signup and
+// login share this transform, which is what makes "Ana@Example.com" log
+// into the account created as "ana@example.com". NFC because the unique
+// index compares bytes: without it, the composed and decomposed spellings
+// of the same accented address would be two different accounts.
 export function NormalizeEmail() {
   return Transform(({ value }): unknown =>
-    typeof value === 'string' ? value.trim().toLowerCase() : value,
+    typeof value === 'string'
+      ? value.trim().toLowerCase().normalize('NFC')
+      : value,
+  );
+}
+
+// Passwords are deliberately NOT trimmed (a leading space is part of the
+// password the user chose), but they ARE NFC-normalized: bcrypt compares
+// bytes, and the same accented character arrives composed (NFC) from most
+// clients but decomposed (NFD) from e.g. macOS text stacks. Without one
+// canonical form, the password that was set from one device fails from
+// another with a generic 401 and no recovery path. (NIST SP 800-63B
+// recommends exactly this normalization before hashing.)
+export function NormalizePassword() {
+  return Transform(({ value }): unknown =>
+    typeof value === 'string' ? value.normalize('NFC') : value,
   );
 }
 
@@ -42,15 +87,13 @@ export class SignupDto {
   })
   email!: string;
 
-  // Deliberately NOT trimmed: a leading or trailing space is part of the
-  // password the user chose, and trimming here but nowhere else would lock
-  // them out.
+  @NormalizePassword()
   @IsString({ message: 'password must be a string' })
   @MinLength(PASSWORD_MIN_LENGTH, {
     message: `password must be at least ${PASSWORD_MIN_LENGTH} characters`,
   })
-  @MaxLength(PASSWORD_MAX_LENGTH, {
-    message: `password must be at most ${PASSWORD_MAX_LENGTH} characters`,
+  @MaxByteLength(PASSWORD_MAX_BYTES, {
+    message: `password must be at most ${PASSWORD_MAX_BYTES} bytes of UTF-8`,
   })
   password!: string;
 
