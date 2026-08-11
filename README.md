@@ -241,11 +241,14 @@ Neither app has a `typecheck` script. `npm run build` is the typecheck, because 
 
 | App      | Template                | Your local file       | Variables                                                            |
 | -------- | ----------------------- | --------------------- | -------------------------------------------------------------------- |
-| Backend  | `backend/.env.example`  | `backend/.env`        | `PORT` (3000), `FRONTEND_URL` (CORS origin, `http://localhost:4200`) |
+| Backend  | `backend/.env.example`  | `backend/.env`        | `PORT` (3000), `FRONTEND_URL` (CORS origin, `http://localhost:4200`), `DATABASE_URL` (**required**), `JWT_SECRET` (**required**, min 32 chars), `ROUTING_API_KEY` + `ROUTING_BASE_URL` (optional) |
 | Frontend | `frontend/.env.example` | `frontend/.env.local` | `BACKEND_URL` (`http://localhost:3000`)                              |
 
 Note the filename difference: Nest reads `.env`, Next.js reads `.env.local`. Both are
 gitignored and must never be committed. Only the `.env.example` templates are.
+
+The same names are used by the deployed environments, where they live in the host's env
+config instead of a file - see [Deployment](#deployment).
 
 **One rule worth memorising:** in Next.js, a variable prefixed `NEXT_PUBLIC_` is inlined
 into the JavaScript sent to the browser, so it is public forever. `BACKEND_URL` has no
@@ -399,6 +402,157 @@ The Node version comes from `.nvmrc`, so bump it there and CI follows.
 A repo-wide `prettier --check` step exists but is commented out: 55 files predate the
 Prettier config and it would fail on a fresh clone. To turn it on, run
 `npx prettier --write .` once, commit that, then uncomment the step.
+
+## Deployment
+
+Two hosts, because each is the cheapest reliable fit for its half:
+
+| Service            | Host                       | Config lives in                                     |
+| ------------------ | -------------------------- | --------------------------------------------------- |
+| Backend (NestJS)   | Render, free web service    | [`render.yaml`](render.yaml) (committed)             |
+| Postgres           | Render, free managed database | [`render.yaml`](render.yaml) (committed)           |
+| Frontend (Next.js) | Vercel, free (Hobby)        | Vercel project settings (no repo file needed)        |
+
+### Why these
+
+Of the three hosts the ticket weighed, **Render** is the only one that still has a real
+free tier: Railway ended its free plan (a one-off trial credit, then $5/month Hobby) and
+Fly retired free allowances in October 2024. Render gives a free web service plus a free
+managed Postgres, needs exactly one repo file, and configures migrations and env vars
+declaratively.
+
+The frontend stays on **Vercel** because this repo was already connected to it before this
+ticket, Next.js needs no configuration there, and - the part that matters for a demo -
+Vercel's free tier does not sleep. Putting the frontend on Render's free tier too would
+have made both halves cold-start.
+
+Two free-tier catches to know before you rely on this:
+
+- **Free web services sleep after 15 minutes idle** and take roughly a minute to wake, and
+  this is worse than a slow first load. The frontend aborts any API call after 8 seconds
+  (`API_TIMEOUT_MS` in `frontend/src/lib/session.ts`), which is far less than a cold start
+  needs, so the first person to arrive after a quiet spell does not wait - they get a failed
+  sign-in or a retry card. Retrying once the backend is awake works, and everyone after them
+  is unaffected. **Before demoing, open the backend's own URL first** and let it wake:
+
+  ```bash
+  curl https://runlog-backend.onrender.com/api/hello   # first call may take ~1 minute
+  ```
+
+  Raising `API_TIMEOUT_MS` is the wrong fix (it would make every real failure hang for a
+  minute too); a paid instance that never sleeps is the real one.
+- **A free Render Postgres expires 30 days after creation**, then sits in a 14-day grace
+  period before the data is deleted. Render emails a warning first. Two ways out, both
+  fine: recreate the database and re-run the migrations (a demo's data is disposable), or
+  point `DATABASE_URL` at a free [Neon](https://neon.com) database, which does not expire -
+  it is only an env var, so nothing in the repo changes. Add `?sslmode=require` if you do.
+
+### How a deploy is triggered
+
+Both hosts watch **`master`**, so merging to `master` deploys. Feature branches merge into
+`develop` first; `develop` to `master` is the release.
+
+Render, on every deploy, in this order:
+
+1. `npm ci --include=dev && npm run build` in `backend/` (this also runs `prisma generate`
+   via `postinstall`).
+2. `npx prisma migrate deploy && npm run start:prod` - migrations apply **before** the new
+   server accepts traffic, which is the property AC2 asks for. `migrate deploy` applies the
+   committed migrations verbatim and is a no-op when none are pending.
+
+Migrations are in the start command rather than a pre-deploy step because Render's
+pre-deploy command is a paid feature. To run them by hand instead, from `backend/` with
+`DATABASE_URL` pointing at the deployed database:
+
+```bash
+npx prisma migrate deploy
+```
+
+That works from a laptop as long as you use the database's **external** URL with
+`?sslmode=require`; the internal URL only resolves from inside Render.
+
+### First-time setup
+
+Render, once: **Dashboard > New > Blueprint**, point it at this repo. `render.yaml` creates
+the service and the database and prompts for the three values it deliberately does not
+contain (`JWT_SECRET`, `FRONTEND_URL`, `ROUTING_API_KEY`).
+
+Vercel, once: import the repo, set **Root Directory** to `frontend`, add `BACKEND_URL`.
+Setting the root directory is what keeps the host out of the repo root - it must never
+install the root `package.json`, whose `prepare: husky` script has no business running on a
+build server. `render.yaml` does the same thing with `rootDir: backend`.
+
+### Environment variables per service
+
+Set these in the host, never in the repo (AC3). **Secret** means treat it like a password.
+
+Render, `runlog-backend`:
+
+| Variable          | Secret | Value                                                              |
+| ----------------- | ------ | ------------------------------------------------------------------ |
+| `DATABASE_URL`    | yes    | wired automatically from `runlog-db` (internal URL, no `sslmode`)   |
+| `JWT_SECRET`      | yes    | fresh random string, min 32 chars; generator below                  |
+| `FRONTEND_URL`    | no     | the Vercel origin, no trailing slash, e.g. `https://<app>.vercel.app` (CORS allow-list; see the note below) |
+| `ROUTING_API_KEY` | yes    | openrouteservice key; optional (see below)                          |
+| `NODE_VERSION`    | no     | `24`, already set in `render.yaml`                                  |
+| `PORT`            | -      | injected by Render; do not set it                                   |
+
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+```
+
+Vercel, frontend:
+
+| Variable      | Secret | Value                                                           |
+| ------------- | ------ | --------------------------------------------------------------- |
+| `BACKEND_URL` | no     | the Render backend origin, e.g. `https://runlog-backend.onrender.com` |
+
+`BACKEND_URL` must **not** get a `NEXT_PUBLIC_` prefix. `next.config.ts` rewrites `/api/*`
+to it server-side, which is why the browser only ever talks to its own origin and no CORS
+is involved. A `NEXT_PUBLIC_` prefix would bake the backend URL into every browser bundle
+permanently.
+
+It is also read **at build time**: Next evaluates `next.config.ts` during `next build` and
+bakes the rewrite into its routing manifest. Changing `BACKEND_URL` in the Vercel dashboard
+therefore does nothing until you **redeploy**. Expect to be caught by this once.
+
+`FRONTEND_URL` is the mirror of that setting and behaves differently from what you might
+assume: because all of the app's browser traffic is same-origin through the rewrite above,
+CORS is never exercised in the deployed path. A wrong `FRONTEND_URL` will **not** break the
+app and clicking around will never surface it. It is the allow-list for a genuinely
+cross-origin caller. Set it correctly regardless, so it is not a trap for whoever adds one.
+
+The two variables point at each other, so the first deploy is a two-step: deploy both, fill
+in each host's variable with the other's real URL, then **redeploy the frontend** (per the
+build-time note above) and restart the backend.
+
+`ROUTING_API_KEY` is optional (RUN-53). Without it the app works and only
+`POST /api/routes/plan` answers 503 `ROUTING_NOT_CONFIGURED`, which the Add run modal shows
+while still letting you save the run by hand. Set it before demoing route maps.
+
+### When a deploy fails
+
+The backend validates its environment at boot and **fails loudly on purpose**
+(`backend/src/config/env.validation.ts`), listing every problem at once. So a bad env var
+shows up as a clear startup error in the logs rather than a broken request later. The
+messages you are most likely to meet:
+
+| Log says                                              | Fix                                                                  |
+| ----------------------------------------------------- | -------------------------------------------------------------------- |
+| `DATABASE_URL is not set`                             | the service is not linked to the database                            |
+| `DATABASE_URL must start with postgresql://`          | a host or password was pasted instead of the whole URL               |
+| `still contains a "<...>" placeholder`                 | the template text was pasted unedited                                |
+| `JWT_SECRET must be at least 32 characters`            | generate a longer one                                                |
+| `nest: not found` during build                         | the build command lost `--include=dev` (Render sets `NODE_ENV=production`, which makes npm skip devDependencies, and the Nest CLI is one) |
+| SSL handshake / `sslmode` error                        | an external database URL without `?sslmode=require`                  |
+| health check fails, service restarts                   | `healthCheckPath` must be `/api/hello`; `/` is a 404 behind the global `api` prefix |
+
+### Logs
+
+- **Render**: service > **Logs** for build and runtime output, streaming live. `render logs`
+  in their CLI does the same. The database has its own Logs tab.
+- **Vercel**: project > **Deployments** > a deployment for its build log; the **Logs** tab
+  for server-side runtime output (which is where a failing `/api/*` rewrite surfaces).
 
 ## Working with Claude Code
 
