@@ -57,7 +57,10 @@ describe('UsersService.findPublicProfile', () => {
     ['a private profile to a visitor', false, VISITOR, false, false],
     ['a private profile to its owner', false, OWNER, true, true],
   ])('serves %s', async (_case, profilePublic, viewer, visible, routes) => {
-    const { prisma, service } = makeService({ profilePublic, showRoutes: false });
+    const { prisma, service } = makeService({
+      profilePublic,
+      showRoutes: false,
+    });
 
     const profile = await service.findPublicProfile(viewer, OWNER);
 
@@ -65,7 +68,9 @@ describe('UsersService.findPublicProfile', () => {
     expect(profile.showRoutes).toBe(routes);
     // The load-bearing assertion: gated means ABSENT, not hidden. Nothing a
     // client could open devtools on, and no query that produced it either.
-    expect(profile.runs).toEqual(visible ? [expect.objectContaining({ id: 'run-1' })] : null);
+    expect(profile.runs).toEqual(
+      visible ? [expect.objectContaining({ id: 'run-1' })] : null,
+    );
     expect(prisma.run.findMany).toHaveBeenCalledTimes(visible ? 1 : 0);
     // The header renders on every one of these (AC2 needs it on the private
     // one too), so the identity and the counts are never gated.

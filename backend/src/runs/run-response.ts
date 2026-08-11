@@ -55,7 +55,4 @@ export function toRunResponse(row: RunRow): RunResponse {
 // tiebreak: arbitrary but deterministic across requests. Shared with the
 // public profile read so both lists arrive in the same order, and mirrored
 // on the client by compareRunsNewestFirst in frontend/src/lib/runs.ts.
-export const runsNewestFirstOrder = [
-  { date: 'desc' },
-  { id: 'desc' },
-] as const;
+export const runsNewestFirstOrder = [{ date: 'desc' }, { id: 'desc' }] as const;
