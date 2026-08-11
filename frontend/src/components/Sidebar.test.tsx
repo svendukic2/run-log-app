@@ -35,11 +35,13 @@ describe('Sidebar', () => {
 
     expect(screen.getByText('MENU')).toBeInTheDocument();
     expect(screen.getByText('ASSISTANT')).toBeInTheDocument();
+    expect(screen.getByText('COMMUNITY')).toBeInTheDocument();
     expect(screen.getByText('ACCOUNT')).toBeInTheDocument();
 
     expect(screen.getByRole('link', { name: /dashboard/i })).toHaveAttribute('href', '/dashboard');
     expect(screen.getByRole('link', { name: /runs/i })).toHaveAttribute('href', '/runs');
     expect(screen.getByRole('link', { name: /ai coach/i })).toHaveAttribute('href', '/coach');
+    expect(screen.getByRole('link', { name: /events/i })).toHaveAttribute('href', '/events');
     expect(screen.getByRole('link', { name: /settings/i })).toHaveAttribute('href', '/settings');
   });
 
@@ -61,6 +63,7 @@ describe('Sidebar', () => {
     ['/dashboard', 'Dashboard'],
     ['/runs', 'Runs'],
     ['/coach', 'AI Coach'],
+    ['/events', 'Events'],
     ['/settings', 'Settings'],
   ])('marks %s as active for the %s item (AC4)', (pathname, label) => {
     mockUsePathname.mockReturnValue(pathname);

@@ -228,8 +228,11 @@ day, filterable with `?state=`), `GET /api/events/:id`, `POST`/`DELETE
 /api/events/:id/join`, and owner-only `PATCH`/`DELETE /api/events/:id` (a
 non-owner gets 404, never 403 - same rule as every scoped entity). Items carry
 `{ id, name, description, startDate, endDate, targetKm, state, participantCount,
-joined, owner: { id, firstName, lastName }, createdAt }`; `joined` is the
-caller's own participation, so the list alone renders Join/Leave buttons. A join
+joined, mine, owner: { id, firstName, lastName }, createdAt }`; `joined` is the
+caller's own participation and `mine` their ownership (RUN-68), so the list alone
+renders Join/Leave buttons and knows which cards must not offer Leave - the
+device-session frontend does not track its own user id, so the API answers the
+ownership question instead of making the client compare ids. A join
 notifies the owner (`event-joined`, see Notification above) in the same
 transaction; the owner joining their own event and repeat joins never notify.
 

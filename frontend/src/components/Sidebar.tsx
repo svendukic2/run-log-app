@@ -40,6 +40,20 @@ function CoachIcon() {
   );
 }
 
+function EventsIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path
+        d="M4 18V2M4 2H16.5L13.5 6L16.5 10H4"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function SettingsIcon() {
   return (
     <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -81,6 +95,13 @@ const NAV_SECTIONS: NavSection[] = [
   {
     label: 'ASSISTANT',
     items: [{ label: 'AI Coach', href: ROUTES.coach, icon: <CoachIcon /> }],
+  },
+  {
+    // The COMMUNITY section formally belongs to RUN-62 (People), which adds
+    // Leaderboard and People here; only Events lands now (RUN-68) so the
+    // sidebar never links to routes that do not exist yet.
+    label: 'COMMUNITY',
+    items: [{ label: 'Events', href: ROUTES.events, icon: <EventsIcon /> }],
   },
   {
     label: 'ACCOUNT',
