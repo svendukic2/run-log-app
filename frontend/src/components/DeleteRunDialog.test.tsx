@@ -1,7 +1,8 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import DeleteRunDialog from './DeleteRunDialog';
-import { getRuns, type Run } from '@/lib/runs';
+import { deleteRun, getRuns, type Run } from '@/lib/runs';
+import { failRunsApi, seedRuns } from '@/test/runsApiMock';
 
 const RUN: Run = {
   id: 'run-1',
@@ -22,8 +23,9 @@ function renderDialog(onClose = jest.fn(), onDeleted = jest.fn()) {
 
 describe('Delete run dialog (RUN-30)', () => {
   beforeEach(() => {
-    window.localStorage.clear();
-    window.localStorage.setItem('runlog.runs', JSON.stringify([RUN, OTHER]));
+    // jest.setup gives every test a fresh, empty mock backend; seed the two
+    // runs the assertions below are written against (backend and cache both).
+    seedRuns([RUN, OTHER]);
   });
 
   it('asks "Delete this run?", quotes the run and says it is permanent (AC1, DEL-1)', () => {
@@ -50,9 +52,10 @@ describe('Delete run dialog (RUN-30)', () => {
     await user.click(screen.getByRole('button', { name: 'Delete run' }));
 
     // Only the confirmed run is gone; closing is the opener's move via
-    // onDeleted, never the plain-dismissal onClose.
+    // onDeleted, never the plain-dismissal onClose. The delete round-trips to
+    // the API since RUN-48, so the handover arrives once the write lands.
+    await waitFor(() => expect(onDeleted).toHaveBeenCalledTimes(1));
     expect(getRuns()).toEqual([OTHER]);
-    expect(onDeleted).toHaveBeenCalledTimes(1);
     expect(onClose).not.toHaveBeenCalled();
   });
 
@@ -91,14 +94,32 @@ describe('Delete run dialog (RUN-30)', () => {
 
   it('still hands over to onDeleted when the run was already gone', async () => {
     const user = userEvent.setup();
-    // Deleted in another tab: the store no longer holds the quoted run.
-    window.localStorage.setItem('runlog.runs', JSON.stringify([OTHER]));
+    // Deleted in another tab: neither the backend nor the cache holds the
+    // quoted run anymore by the time the dialog confirms.
+    await deleteRun(RUN.id);
     const { onDeleted } = renderDialog();
 
     await user.click(screen.getByRole('button', { name: 'Delete run' }));
 
     // The outcome the user asked for holds either way.
+    await waitFor(() => expect(onDeleted).toHaveBeenCalledTimes(1));
     expect(getRuns()).toEqual([OTHER]);
-    expect(onDeleted).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the dialog open with the failure inline and never calls onDeleted (RUN-48)', async () => {
+    const user = userEvent.setup();
+    failRunsApi('DELETE');
+    const { onClose, onDeleted } = renderDialog();
+
+    await user.click(screen.getByRole('button', { name: 'Delete run' }));
+
+    // The run still exists, so pretending it is gone would be worse than
+    // admitting the failure: the dialog stays up and announces it.
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Deleting the run failed (500).');
+    expect(screen.getByRole('alertdialog', { name: 'Delete this run?' })).toBeInTheDocument();
+    expect(getRuns()).toEqual([RUN, OTHER]);
+    expect(onDeleted).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

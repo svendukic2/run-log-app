@@ -1,11 +1,12 @@
 import { act, render, screen, within } from '@testing-library/react';
 import { renderToString } from 'react-dom/server';
-import { addRun, getRuns, updateRun, type Run } from '@/lib/runs';
+import { addRun, deleteRun, getRuns, updateRun, type Run } from '@/lib/runs';
+import { seedRuns } from '@/test/runsApiMock';
 import RecordCards from './RecordCards';
 import PersonalRecordsCard from './PersonalRecordsCard';
 
-function seedRun(overrides: Partial<Omit<Run, 'id'>> = {}): Run {
-  return addRun({
+function runDraft(overrides: Partial<Omit<Run, 'id'>> = {}): Omit<Run, 'id'> {
+  return {
     routeName: 'Morning loop',
     // 12 km in exactly an hour: pace 5:00 /km, so 5K 25:00 and 10K 50:00.
     distanceKm: 12,
@@ -14,21 +15,15 @@ function seedRun(overrides: Partial<Omit<Run, 'id'>> = {}): Run {
     effort: 'Medium',
     note: '',
     ...overrides,
-  });
+  };
 }
 
-// The delete flow itself is RUN-30; until it exists, deleting is emptying the
-// store and announcing the change the way the store's writers do.
-function clearRunsThroughStore() {
-  window.localStorage.setItem('runlog.runs', JSON.stringify([]));
-  window.dispatchEvent(new Event('runlog:runs-changed'));
+// Before render only: seeds the backend and primes the store cache.
+function seedRun(overrides: Partial<Omit<Run, 'id'>> = {}): Run {
+  return seedRuns([runDraft(overrides)])[0];
 }
 
 describe('Personal records card (RUN-22)', () => {
-  beforeEach(() => {
-    window.localStorage.clear();
-  });
-
   it('shows the designed empty copy before any run exists (AC1)', () => {
     render(<PersonalRecordsCard />);
 
@@ -61,19 +56,21 @@ describe('Personal records card (RUN-22)', () => {
     expect(within(card).queryByText('Longest streak')).toBeNull();
   });
 
-  it('recomputes when a run is added (AC3)', () => {
+  it('recomputes when a run is added (AC3)', async () => {
     seedRun();
     render(<PersonalRecordsCard />);
     expect(screen.getByText('12.0 km')).toBeInTheDocument();
 
-    act(() => {
+    await act(async () => {
       // A longer but slower run: takes Longest run, leaves Best pace alone.
-      seedRun({
-        routeName: 'Long trail',
-        distanceKm: 18,
-        durationSeconds: 6480,
-        date: '2026-07-15',
-      });
+      await addRun(
+        runDraft({
+          routeName: 'Long trail',
+          distanceKm: 18,
+          durationSeconds: 6480,
+          date: '2026-07-15',
+        }),
+      );
     });
 
     expect(screen.getByText('18.0 km')).toBeInTheDocument();
@@ -81,14 +78,14 @@ describe('Personal records card (RUN-22)', () => {
     expect(screen.getByText('5:00 /km')).toBeInTheDocument();
   });
 
-  it('recomputes when a run is edited (AC3)', () => {
+  it('recomputes when a run is edited (AC3)', async () => {
     const run = seedRun();
     render(<PersonalRecordsCard />);
     expect(screen.getByText('12.0 km')).toBeInTheDocument();
 
-    act(() => {
+    await act(async () => {
       const { id, ...draft } = run;
-      updateRun(id, { ...draft, distanceKm: 9 });
+      await updateRun(id, { ...draft, distanceKm: 9 });
     });
 
     expect(screen.getByText('9.0 km')).toBeInTheDocument();
@@ -97,13 +94,13 @@ describe('Personal records card (RUN-22)', () => {
     expect(screen.queryByText('Fastest 10K')).toBeNull();
   });
 
-  it('returns to the empty copy when the last run is deleted (AC3)', () => {
-    seedRun();
+  it('returns to the empty copy when the last run is deleted (AC3)', async () => {
+    const run = seedRun();
     render(<PersonalRecordsCard />);
     expect(screen.getByText('Longest run')).toBeInTheDocument();
 
-    act(() => {
-      clearRunsThroughStore();
+    await act(async () => {
+      await deleteRun(run.id);
     });
 
     expect(screen.queryByText('Longest run')).toBeNull();

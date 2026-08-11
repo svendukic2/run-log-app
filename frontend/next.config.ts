@@ -9,6 +9,21 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: __dirname,
   },
+
+  // Browser calls to /api/* are proxied server-side to the NestJS backend
+  // (RUN-48). This keeps BACKEND_URL a server-only variable (no NEXT_PUBLIC_
+  // leak into the bundle), avoids CORS entirely, and gives the client one
+  // origin to talk to. Next tries the app's own routes first (rewrites are
+  // "afterFiles"), so a future frontend route handler under /api still wins
+  // over the proxy.
+  async rewrites() {
+    return [
+      {
+        source: '/api/:path*',
+        destination: `${process.env.BACKEND_URL ?? 'http://localhost:3000'}/api/:path*`,
+      },
+    ];
+  },
 };
 
 export default nextConfig;

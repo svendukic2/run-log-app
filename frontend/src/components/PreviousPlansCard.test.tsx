@@ -1,18 +1,22 @@
 import { render, screen, within } from '@testing-library/react';
 import { renderToString } from 'react-dom/server';
-import { addRun, type Run } from '@/lib/runs';
+import { type Run } from '@/lib/runs';
+import { seedRuns } from '@/test/runsApiMock';
 import PreviousPlansCard from './PreviousPlansCard';
 
+// Before render only: seeds the backend and primes the store cache.
 function seedRun(overrides: Partial<Omit<Run, 'id'>> = {}): Run {
-  return addRun({
-    routeName: 'Morning loop',
-    distanceKm: 10,
-    durationSeconds: 3000,
-    date: '2026-07-28',
-    effort: 'Medium',
-    note: '',
-    ...overrides,
-  });
+  return seedRuns([
+    {
+      routeName: 'Morning loop',
+      distanceKm: 10,
+      durationSeconds: 3000,
+      date: '2026-07-28',
+      effort: 'Medium',
+      note: '',
+      ...overrides,
+    },
+  ])[0];
 }
 
 describe('Previous plans card (RUN-34)', () => {

@@ -2,19 +2,23 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderToString } from 'react-dom/server';
 import { saveGoal } from '@/lib/goal';
-import { addRun, todayIso, type Run } from '@/lib/runs';
+import { todayIso, type Run } from '@/lib/runs';
+import { seedRuns } from '@/test/runsApiMock';
 import CoachTeaserCard from './CoachTeaserCard';
 
+// Before render only: seeds the backend and primes the store cache.
 function seedRun(overrides: Partial<Omit<Run, 'id'>> = {}): Run {
-  return addRun({
-    routeName: 'Morning loop',
-    distanceKm: 8,
-    durationSeconds: 2400,
-    date: todayIso(),
-    effort: 'Medium',
-    note: '',
-    ...overrides,
-  });
+  return seedRuns([
+    {
+      routeName: 'Morning loop',
+      distanceKm: 8,
+      durationSeconds: 2400,
+      date: todayIso(),
+      effort: 'Medium',
+      note: '',
+      ...overrides,
+    },
+  ])[0];
 }
 
 function seedGoal(km: number) {
@@ -70,8 +74,9 @@ describe('AI Coach teaser card (RUN-21)', () => {
   it('renders an empty server shell before hydration', () => {
     seedRun();
 
-    // The card's state lives in localStorage, which the server cannot see, so
-    // the server ships nothing rather than flashing the empty copy.
+    // The card's state lives in the client-side runs cache, which the server
+    // cannot see, so the server ships nothing rather than flashing the empty
+    // copy.
     expect(renderToString(<CoachTeaserCard />)).toBe('');
   });
 

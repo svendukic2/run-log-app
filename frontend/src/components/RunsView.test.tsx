@@ -2,6 +2,7 @@ import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import RunsView from './RunsView';
 import { addRun, type Run } from '@/lib/runs';
+import { seedRuns } from '@/test/runsApiMock';
 
 // Row clicks navigate imperatively; the route-name links do not need the rest
 // of next/navigation in a jsdom test.
@@ -40,10 +41,6 @@ const RUNS: Run[] = [
   },
 ];
 
-function storeRuns(runs: Run[]) {
-  window.localStorage.setItem('runlog.runs', JSON.stringify(runs));
-}
-
 // The route column holds the only links in the table, so their order is the
 // row order.
 function tableRouteOrder(): Array<string | null> {
@@ -60,7 +57,7 @@ describe('Runs view (RUN-24)', () => {
   });
 
   it('shows both tabs, the total count badge and the controls (AC2, AC7)', () => {
-    storeRuns(RUNS);
+    seedRuns(RUNS);
     render(<RunsView />);
 
     const allRuns = screen.getByRole('tab', { name: /all runs/i });
@@ -73,7 +70,7 @@ describe('Runs view (RUN-24)', () => {
   });
 
   it('keeps the table unchanged when Filter is pressed (AC7, A19)', async () => {
-    storeRuns(RUNS);
+    seedRuns(RUNS);
     const user = userEvent.setup();
     render(<RunsView />);
 
@@ -84,7 +81,7 @@ describe('Runs view (RUN-24)', () => {
   });
 
   it('renders every column, the effort chips and a kebab per row (AC3)', () => {
-    storeRuns(RUNS);
+    seedRuns(RUNS);
     render(<RunsView />);
 
     for (const column of ['Route', 'Date', 'Distance', 'Duration', 'Pace', 'Effort']) {
@@ -100,7 +97,7 @@ describe('Runs view (RUN-24)', () => {
   });
 
   it('orders newest first by default and reverses on "Oldest first" (AC4)', async () => {
-    storeRuns(RUNS);
+    seedRuns(RUNS);
     const user = userEvent.setup();
     render(<RunsView />);
 
@@ -114,7 +111,7 @@ describe('Runs view (RUN-24)', () => {
   });
 
   it('shows hour-long durations as h:mm:ss (AC5)', () => {
-    storeRuns(RUNS);
+    seedRuns(RUNS);
     render(<RunsView />);
 
     const table = screen.getByRole('table');
@@ -123,7 +120,7 @@ describe('Runs view (RUN-24)', () => {
   });
 
   it('opens run detail from the row but not from the kebab (AC6)', async () => {
-    storeRuns(RUNS);
+    seedRuns(RUNS);
     const user = userEvent.setup();
     render(<RunsView />);
 
@@ -146,7 +143,7 @@ describe('Runs view (RUN-24)', () => {
   });
 
   it('opens the Edit run modal from the row menu without navigating (RUN-29)', async () => {
-    storeRuns(RUNS);
+    seedRuns(RUNS);
     const user = userEvent.setup();
     render(<RunsView />);
 
@@ -164,7 +161,7 @@ describe('Runs view (RUN-24)', () => {
   });
 
   it('swaps the table for the records panel and back (AC2)', async () => {
-    storeRuns(RUNS);
+    seedRuns(RUNS);
     const user = userEvent.setup();
     render(<RunsView />);
 
@@ -185,7 +182,7 @@ describe('Runs view (RUN-24)', () => {
   });
 
   it('moves between the tabs with the arrow keys', async () => {
-    storeRuns(RUNS);
+    seedRuns(RUNS);
     const user = userEvent.setup();
     render(<RunsView />);
 
@@ -202,7 +199,7 @@ describe('Runs view (RUN-24)', () => {
   });
 
   it('renders the same rows as cards for narrow screens (responsive addendum)', () => {
-    storeRuns(RUNS);
+    seedRuns(RUNS);
     render(<RunsView />);
 
     const cards = screen.getByTestId('runs-cards');
@@ -223,7 +220,7 @@ describe('Records tab (RUN-26)', () => {
   });
 
   it('derives the record cards from the stored runs (AC1)', async () => {
-    storeRuns(RUNS);
+    seedRuns(RUNS);
     const user = userEvent.setup();
     render(<RunsView />);
 
@@ -239,7 +236,7 @@ describe('Records tab (RUN-26)', () => {
   });
 
   it('recomputes the records when a run is saved (AC2)', async () => {
-    storeRuns(RUNS);
+    seedRuns(RUNS);
     const user = userEvent.setup();
     render(<RunsView />);
 
@@ -249,8 +246,8 @@ describe('Records tab (RUN-26)', () => {
       within(screen.getByTestId('record-cards')).getAllByText('Long run · Jun 24'),
     ).toHaveLength(2);
 
-    act(() => {
-      addRun({
+    await act(async () => {
+      await addRun({
         routeName: 'Half marathon',
         distanceKm: 21.1,
         durationSeconds: 6600,
@@ -305,14 +302,14 @@ describe('Runs empty state (RUN-25)', () => {
     expect(screen.getByRole('dialog', { name: 'Add run' })).toHaveAttribute('aria-modal', 'true');
   });
 
-  it('swaps the empty state for the table once the first run is saved (AC4)', () => {
+  it('swaps the empty state for the table once the first run is saved (AC4)', async () => {
     render(<RunsView />);
     expect(screen.getByRole('heading', { name: 'No runs logged yet' })).toBeInTheDocument();
 
     // Saving through the modal ends in this addRun call; the form on top of
     // it is covered by the modal's own tests.
-    act(() => {
-      addRun({
+    await act(async () => {
+      await addRun({
         routeName: 'Morning loop',
         distanceKm: 8.2,
         durationSeconds: 2535,

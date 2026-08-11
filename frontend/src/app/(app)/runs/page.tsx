@@ -1,5 +1,6 @@
 import AddRunButton from '@/components/AddRunButton';
 import PageHeader from '@/components/PageHeader';
+import RunsBoundary from '@/components/RunsBoundary';
 import RunsView from '@/components/RunsView';
 
 // 07 · Runs. The topbar matches the Dashboard's, down to the Add run action
@@ -12,9 +13,13 @@ export default function RunsPage() {
     <>
       <PageHeader overline="Your activity" title="Runs" action={<AddRunButton />} />
 
-      <div className="px-5 pb-6 sm:px-8 lg:px-[40px] lg:pb-[32px]">
-        <RunsView />
-      </div>
+      {/* One screen-level gate for the store (RUN-48): the table, the empty
+          state and the record cards all wait for the same load. */}
+      <RunsBoundary>
+        <div className="px-5 pb-6 sm:px-8 lg:px-[40px] lg:pb-[32px]">
+          <RunsView />
+        </div>
+      </RunsBoundary>
     </>
   );
 }

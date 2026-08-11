@@ -1,7 +1,8 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderToString } from 'react-dom/server';
-import { addRun, getRuns, type Run } from '@/lib/runs';
+import { getRuns, type Run } from '@/lib/runs';
+import { seedRuns } from '@/test/runsApiMock';
 import RunDetailView from './RunDetailView';
 
 const push = jest.fn();
@@ -10,15 +11,18 @@ jest.mock('next/navigation', () => ({
 }));
 
 function seedRun(overrides: Partial<Omit<Run, 'id'>> = {}): Run {
-  return addRun({
-    routeName: 'Morning loop',
-    distanceKm: 8.2,
-    durationSeconds: 2535,
-    date: '2026-07-07',
-    effort: 'Medium',
-    note: '',
-    ...overrides,
-  });
+  const [run] = seedRuns([
+    {
+      routeName: 'Morning loop',
+      distanceKm: 8.2,
+      durationSeconds: 2535,
+      date: '2026-07-07',
+      effort: 'Medium',
+      note: '',
+      ...overrides,
+    },
+  ]);
+  return run;
 }
 
 describe('Run detail (RUN-27)', () => {
@@ -98,7 +102,6 @@ describe('Run detail (RUN-27)', () => {
     expect(note).toHaveClass('whitespace-pre-line');
     unmount();
 
-    window.localStorage.clear();
     const withoutNote = seedRun();
     render(<RunDetailView runId={withoutNote.id} />);
     expect(screen.queryByRole('region', { name: 'Note' })).toBeNull();
@@ -154,8 +157,9 @@ describe('Run detail (RUN-27)', () => {
     await user.type(routeName, 'Corrected loop');
     await user.click(screen.getByRole('button', { name: /save changes/i }));
 
-    // The modal is gone and the detail re-read the store.
-    expect(screen.queryByRole('dialog')).toBeNull();
+    // The save round-trips to the API; the modal closes once it lands and
+    // the detail re-read the store.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(screen.getByRole('heading', { level: 1, name: 'Corrected loop' })).toBeInTheDocument();
     // Focus lands back on the button that opened the modal.
     expect(screen.getByRole('button', { name: 'Edit' })).toHaveFocus();
@@ -197,9 +201,10 @@ describe('Run detail (RUN-27)', () => {
     await user.click(screen.getByRole('button', { name: 'Delete' }));
     await user.click(screen.getByRole('button', { name: 'Delete run' }));
 
-    // The run is gone and the page it lived on hands over to the list.
+    // The delete round-trips to the API; once it lands the run is gone and
+    // the page it lived on hands over to the list.
+    await waitFor(() => expect(push).toHaveBeenCalledWith('/runs'));
     expect(getRuns()).toEqual([]);
-    expect(push).toHaveBeenCalledWith('/runs');
     // No "Run not found" flash while the navigation is in flight: the view
     // goes blank instead.
     expect(screen.queryByText('Run not found')).toBeNull();
@@ -232,8 +237,9 @@ describe('Run detail (RUN-27)', () => {
   it('renders an empty server shell before hydration', () => {
     const run = seedRun();
 
-    // localStorage is invisible to the server, so the contract is that the
-    // server ships nothing at all and the page appears after hydration.
+    // The client-side runs cache is invisible to the server, so the contract
+    // is that the server ships nothing at all and the page appears after
+    // hydration.
     expect(renderToString(<RunDetailView runId={run.id} />)).toBe('');
   });
 });

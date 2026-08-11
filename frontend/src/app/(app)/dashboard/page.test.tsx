@@ -1,5 +1,6 @@
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { holdRunsLoading, makeRunsLoadFail, restoreRunsApi, seedRuns } from '@/test/runsApiMock';
 import DashboardPage from './page';
 
 describe('Dashboard header (RUN-15)', () => {
@@ -36,20 +37,17 @@ describe('Dashboard header (RUN-15)', () => {
     unmount();
 
     // Filled state (05): still there, now pointing at the coach page.
-    window.localStorage.setItem(
-      'runlog.runs',
-      JSON.stringify([
-        {
-          id: 'a',
-          routeName: 'Morning loop',
-          distanceKm: 8.2,
-          durationSeconds: 2535,
-          date: '2026-07-14',
-          effort: 'Medium',
-          note: '',
-        },
-      ]),
-    );
+    seedRuns([
+      {
+        id: 'a',
+        routeName: 'Morning loop',
+        distanceKm: 8.2,
+        durationSeconds: 2535,
+        date: '2026-07-14',
+        effort: 'Medium',
+        note: '',
+      },
+    ]);
     render(<DashboardPage />);
     expect(
       within(screen.getByRole('region', { name: 'AI Coach' })).getByRole('link', {
@@ -70,20 +68,17 @@ describe('Dashboard header (RUN-15)', () => {
     unmount();
 
     // Filled state (05): rows derived from the stored runs.
-    window.localStorage.setItem(
-      'runlog.runs',
-      JSON.stringify([
-        {
-          id: 'a',
-          routeName: 'Morning loop',
-          distanceKm: 8.2,
-          durationSeconds: 2535,
-          date: '2026-07-14',
-          effort: 'Medium',
-          note: '',
-        },
-      ]),
-    );
+    seedRuns([
+      {
+        id: 'a',
+        routeName: 'Morning loop',
+        distanceKm: 8.2,
+        durationSeconds: 2535,
+        date: '2026-07-14',
+        effort: 'Medium',
+        note: '',
+      },
+    ]);
     render(<DashboardPage />);
     const card = screen.getByRole('region', { name: 'Personal records' });
     expect(within(card).getByText('Longest run')).toBeInTheDocument();
@@ -99,5 +94,32 @@ describe('Dashboard header (RUN-15)', () => {
     expect(within(body).queryByRole('heading', { name: 'Dashboard' })).toBeNull();
     expect(within(body).queryByRole('button', { name: /add run/i })).toBeNull();
     expect(body).not.toContainElement(screen.getByTestId('page-header'));
+  });
+});
+
+describe('runs loading (RUN-48)', () => {
+  it('renders the header but no body while the runs load is in flight', () => {
+    holdRunsLoading();
+    render(<DashboardPage />);
+
+    // The whole state-dependent body sits behind RunsBoundary, so neither
+    // the empty-state prompt nor the filled cards can flash while loading.
+    expect(screen.queryByTestId('dashboard-body')).not.toBeInTheDocument();
+    expect(screen.queryByText('Log your first run')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Dashboard' })).toBeInTheDocument();
+  });
+
+  it('shows the error card when the load fails, and Try again recovers', async () => {
+    const user = userEvent.setup();
+    makeRunsLoadFail();
+    render(<DashboardPage />);
+
+    expect(await screen.findByText("Your runs didn't load")).toBeInTheDocument();
+    expect(screen.queryByTestId('dashboard-body')).not.toBeInTheDocument();
+
+    restoreRunsApi();
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+
+    expect(await screen.findByTestId('dashboard-body')).toBeInTheDocument();
   });
 });

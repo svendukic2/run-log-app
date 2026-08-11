@@ -12,17 +12,63 @@ this document explains the conventions both follow.
 
 ## Where data lives today
 
-The design commits to local, on-device data ("No password needed - your runs stay on this
-device", WEL-4), so the current implementation is **localStorage only**. There is no
-database and no backend persistence yet. The owning modules are:
+Mid-migration, deliberately in two halves. Runs moved to PostgreSQL behind the API
+(RUN-48); the onboarding-era entities are still localStorage until RUN-50:
 
-| Entity | Type lives in | localStorage key | Introduced by |
+| Entity | Type lives in | Persisted in | Introduced by |
 | --- | --- | --- | --- |
-| Profile | `frontend/src/lib/onboarding.ts` | `runlog.profile` | RUN-8 |
+| Run | `frontend/src/lib/runs.ts` | PostgreSQL via `/api/runs` (RUN-48) | RUN-23 |
+| Device session | `frontend/src/lib/session.ts` | `runlog.session` (localStorage) | RUN-48 |
+| Profile | `frontend/src/lib/onboarding.ts` | `runlog.profile` (localStorage) | RUN-8 |
 | Onboarding flag | `frontend/src/lib/onboarding.ts` | `runlog.onboardingComplete` | RUN-8 |
-| Goal | `frontend/src/lib/goal.ts` | `runlog.goal` | RUN-10 |
-| Run | `frontend/src/lib/runs.ts` | `runlog.runs` | RUN-23 |
-| CoachPlan | not built yet | `runlog.coachPlans` (reserved) | RUN-32 (planned) |
+| Goal | `frontend/src/lib/goal.ts` | `runlog.goal` (localStorage) | RUN-10 |
+| Default goal | `frontend/src/lib/goal.ts` | `runlog.defaultGoal` (localStorage) | RUN-38 |
+| Applied goal | `frontend/src/lib/goal.ts` | `runlog.appliedGoal` (localStorage) | RUN-33 |
+| Plan stamp | `frontend/src/lib/plan.ts` | `runlog.plan` (localStorage) | RUN-32 |
+
+## The frontend API pattern (decided in RUN-48, reuse everywhere)
+
+RUN-48 decided the app-wide async pattern once; the profile/goal migration (RUN-50) and
+every v2 screen reuse it rather than inventing another:
+
+- **Same-origin calls, proxied.** The browser calls `/api/*` on the frontend's own
+  origin; `next.config.ts` rewrites that to the backend server-side. `BACKEND_URL`
+  stays a server-only variable and CORS never enters the picture.
+- **The device is the account, minted lazily.** The design draws no login ("No password
+  needed - your runs stay on this device", WEL-4) while the API requires a Bearer token
+  (RUN-56/57). `frontend/src/lib/session.ts` reconciles the two: a synthetic per-device
+  identity (`runner-<random>@device.runlog` + random secret, stored in `runlog.session`)
+  is created only when something real needs the server - never on a page view, so
+  crawlers and incognito visits create no accounts. A device with no session and no v1
+  data reads as an empty log without any network. The stored secret is a deliberate,
+  documented trade-off (see the header of `session.ts`); it dies with RUN-50. The
+  in-memory session is the source of truth and localStorage only persists it, so
+  blocked storage degrades durability, never identity. `apiFetch()` attaches the token,
+  times out hung requests (8s), and retries once on 401 with a silent re-login.
+- **One-time v1 import.** Data still under the old `runlog.runs` key is imported into
+  the device account on first load (oldest first, resumable after transient failures),
+  then the key is deleted. Rows the stricter API rejects (RUN-47 rules the v1 forms
+  never enforced) are dropped and counted, never allowed to wedge the app; the user
+  sees a dismissible notice with the count.
+- **Reads: cache + screen-level gate.** Stores keep an in-memory cache behind
+  `useSyncExternalStore`; hooks stay synchronous (`useRuns(): Run[]`). Each screen
+  renders through one `RunsBoundary`: blank for the first 250 ms (no spinner flash on
+  the fast local API), then an honest spinner, then either content or one error card.
+  Retryable failures (network, timeout, 5xx) get "Try again"; terminal ones (the device
+  identity cannot authenticate) explain the way out instead. `useRuns()` throws in
+  development when read while loading outside a boundary, so a forgotten gate cannot
+  ship a false empty state. v1 designs no loading or error states; this is the
+  design-review note for that gap.
+- **Writes: pessimistic, awaited.** Mutations return promises; forms disable their
+  submit while saving and keep themselves open with an inline `role="alert"` line on
+  failure. No optimistic UI: a run the user believes is saved must actually be saved.
+  A mutation landing while the store is not 'ready' triggers a real reload instead of
+  merging into an unknown state.
+- **Cross-tab liveness is gone with the `storage` event** (runs only): another tab's
+  writes appear on the next full load. Accepted; BroadcastChannel can restore it later.
+- **Pure helpers live apart from state**: types, formatters and selectors are in
+  `frontend/src/lib/runMath.ts` (stateless, safe anywhere); the store in `runs.ts`
+  re-exports them, so components import from `./runs` as always.
 
 `backend/prisma/schema.prisma` is the **agreed future shape** of the same data for a
 PostgreSQL database. It is inert until someone installs Prisma and runs a migration (see
@@ -257,5 +303,4 @@ on first run, and refuses to start against any database whose name does not end 
 `_test`, because the tests delete rows between cases. See `backend/test/test-database.ts`.
 
 The frontend keeps the same types and swaps localStorage calls for API calls; nothing in
-the components changes shape. That swap is scheduled as RUN-48 (runs) and RUN-50
-(profile/goal).
+the components changes shape. RUN-48 made that swap for runs; RUN-50 does profile/goal.

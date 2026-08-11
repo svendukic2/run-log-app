@@ -94,11 +94,25 @@ consequence: `GET http://localhost:3000/` returns 404, which is normal, not a br
 server. The e2e test re-applies the same prefix manually to match production, so if you
 change the prefix you must change it in both places.
 
-**Frontend to backend data flow.** The home page (`frontend/src/app/page.tsx`) is an
-**async Server Component**. It fetches the backend at request time on the server with
-`cache: 'no-store'`, which means no CORS is involved and there is no client-side loading
-state for that call. CORS is enabled on the backend anyway (`main.ts`), for the case of
-genuinely client-side fetches, allowing origin `FRONTEND_URL`.
+**Frontend to backend data flow, two paths.** The home page (`frontend/src/app/page.tsx`)
+is an **async Server Component**: it fetches the backend at request time on the server
+with `cache: 'no-store'`, no CORS involved. App data (runs, since RUN-48) goes the other
+way: **client-side calls to same-origin `/api/*`**, which `next.config.ts` rewrites to
+the backend server-side, so `BACKEND_URL` never reaches the browser bundle and CORS
+still never enters the picture. Those calls carry a Bearer token minted silently by
+`frontend/src/lib/session.ts` (the device-account bridge between the no-login design and
+the authenticated API; see `docs/data-model.md`, "The frontend API pattern"). CORS stays
+enabled on the backend (`main.ts`, origin `FRONTEND_URL`) for any genuinely cross-origin
+fetch.
+
+**The runs store is an API-backed cache (RUN-48), and its pattern is the app-wide
+default.** `frontend/src/lib/runs.ts` keeps an in-memory cache behind
+`useSyncExternalStore`; `useRuns()` stays synchronous, every screen deriving from runs
+renders through one `RunsBoundary` (nothing while loading, one retry card on error), and
+mutations are awaited with inline `role="alert"` failure lines in the forms. Follow this
+pattern (not a new one) when migrating the remaining localStorage stores or adding v2
+screens. In Jest, `jest.setup.ts` installs an in-memory `/api/runs` fake before every
+test and `seedRuns()` from `src/test/runsApiMock.ts` replaces localStorage seeding.
 
 **Configuration goes through ConfigService.** `ConfigModule.forRoot({ isGlobal: true })`
 is registered in `backend/src/app.module.ts`, so it reads `backend/.env` at startup and

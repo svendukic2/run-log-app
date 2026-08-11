@@ -59,6 +59,11 @@ export default function RunModal({ run, onClose }: RunModalProps) {
     run ? runToForm(run) : emptyRunForm(),
   );
   const [errors, setErrors] = useState<RunFormErrors>({});
+  // The save round-trips to the API since RUN-48: `saving` disables the
+  // buttons against a double submit, `saveError` is the inline line the
+  // app-wide error pattern prescribes (modal stays open, nothing saved).
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const routeNameRef = useRef<HTMLInputElement>(null);
 
   const setValue = <Field extends keyof RunFormValues>(field: Field, value: RunFormValues[Field]) =>
@@ -85,8 +90,9 @@ export default function RunModal({ run, onClose }: RunModalProps) {
     };
   }, [onClose]);
 
-  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (saving) return;
 
     // Editing applies the same rules as adding (EDT-3: ADD-5 to ADD-8).
     const nextErrors = validateRunForm(values);
@@ -101,14 +107,29 @@ export default function RunModal({ run, onClose }: RunModalProps) {
     }
 
     // Pace is derived from what was entered, never asked for (ADD-4). Saving
-    // an edit announces the change, so list, detail, dashboard and records
-    // all refresh (EDT-2).
-    if (run) {
-      updateRun(run.id, toRunDraft(values));
-    } else {
-      addRun(toRunDraft(values));
+    // goes through the API (RUN-48) and updates the cache, so list, detail,
+    // dashboard and records all refresh (EDT-2). An edit of a run deleted
+    // elsewhere resolves null: the run is gone either way, so the modal
+    // closes and the screens refresh from the cache.
+    setSaving(true);
+    setSaveError(null);
+    try {
+      if (run) {
+        await updateRun(run.id, toRunDraft(values));
+      } else {
+        await addRun(toRunDraft(values));
+      }
+      onClose();
+    } catch (error) {
+      // The failure keeps the modal open with everything typed intact:
+      // closing would silently discard a run the user believes is saved.
+      setSaving(false);
+      setSaveError(
+        error instanceof Error && error.message
+          ? error.message
+          : "Saving failed. Check that you're online and try again.",
+      );
     }
-    onClose();
   };
 
   return (
@@ -203,23 +224,34 @@ export default function RunModal({ run, onClose }: RunModalProps) {
 
           {/* Full-width and stacked on a phone, which puts the primary action
               closest to the thumb without reordering it away from the design. */}
-          <div className="flex shrink-0 flex-col gap-3 px-5 py-4 sm:flex-row sm:justify-end sm:gap-[12px] sm:px-[28px] sm:py-[18px]">
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex w-full items-center justify-center rounded-[14px] border border-line-strong bg-white px-[28px] py-[16px] text-[16px] font-semibold text-text-primary hover:bg-muted sm:w-auto"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="flex w-full items-center justify-center gap-[9px] rounded-[14px] bg-accent px-[28px] py-[16px] text-[16px] font-semibold text-white hover:bg-accent-pressed sm:w-auto"
-            >
-              {run ? 'Save changes' : 'Save run'}
-              <span aria-hidden="true" className="text-[17px]">
-                →
-              </span>
-            </button>
+          <div className="flex shrink-0 flex-col gap-3 px-5 py-4 sm:px-[28px] sm:py-[18px]">
+            {/* The API-failure line (RUN-48). role=alert so the failure is
+                announced from behind the modal's focus; rendered only with
+                content so an empty live region never mounts. */}
+            {saveError && (
+              <p role="alert" className="text-[13px] leading-[1.5] text-accent-pressed">
+                {saveError}
+              </p>
+            )}
+            <div className="flex flex-col gap-3 sm:flex-row sm:justify-end sm:gap-[12px]">
+              <button
+                type="button"
+                onClick={onClose}
+                className="flex w-full items-center justify-center rounded-[14px] border border-line-strong bg-white px-[28px] py-[16px] text-[16px] font-semibold text-text-primary hover:bg-muted sm:w-auto"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={saving}
+                className="flex w-full items-center justify-center gap-[9px] rounded-[14px] bg-accent px-[28px] py-[16px] text-[16px] font-semibold text-white hover:bg-accent-pressed disabled:cursor-default disabled:opacity-60 sm:w-auto"
+              >
+                {saving ? 'Saving…' : run ? 'Save changes' : 'Save run'}
+                <span aria-hidden="true" className="text-[17px]">
+                  →
+                </span>
+              </button>
+            </div>
           </div>
         </form>
       </div>

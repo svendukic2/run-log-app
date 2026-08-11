@@ -1,8 +1,9 @@
-import { act, render, screen, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderToString } from 'react-dom/server';
 import { stampPlanGenerated } from '@/lib/plan';
 import { addRun } from '@/lib/runs';
+import { seedRuns } from '@/test/runsApiMock';
 import CoachView, { PLAN_GENERATION_MS } from '@/components/CoachView';
 import CoachPage from './page';
 
@@ -85,27 +86,33 @@ describe('AI Coach page (RUN-31)', () => {
     await user.type(screen.getByLabelText('Duration'), '42:15');
     await user.click(screen.getByRole('button', { name: /save run/i }));
 
-    expect(screen.queryByRole('region', { name: HERO_NAME })).toBeNull();
+    // The save round-trips through /api/runs (RUN-48), so the swap lands
+    // asynchronously after the click.
+    await waitFor(() => {
+      expect(screen.queryByRole('region', { name: HERO_NAME })).toBeNull();
+    });
     // The first plan generates right away (RUN-32, A16)...
     const planTitle = screen.getByText("This week's plan");
     // ...and the hero (with its button) unmounted, so focus lands on the
     // content that replaced it rather than falling onto body.
-    expect(document.activeElement?.contains(planTitle)).toBe(true);
+    await waitFor(() => {
+      expect(document.activeElement?.contains(planTitle)).toBe(true);
+    });
   });
 
-  it('drops the hero once a run exists in the store', () => {
+  it('drops the hero once a run exists in the store', async () => {
     render(<CoachPage />);
     expect(screen.getByRole('region', { name: HERO_NAME })).toBeInTheDocument();
 
-    act(() => {
-      addRun(firstRun());
+    await act(async () => {
+      await addRun(firstRun());
     });
 
     expect(screen.queryByRole('region', { name: HERO_NAME })).toBeNull();
   });
 
   it('shows the insight cards and previous plans alongside the plan (RUN-34)', () => {
-    addRun(firstRun());
+    seedRuns([firstRun()]);
 
     render(<CoachPage />);
 
@@ -117,7 +124,7 @@ describe('AI Coach page (RUN-31)', () => {
   });
 
   it('renders a neutral server shell, never the hero, pre-hydration', () => {
-    addRun(firstRun());
+    seedRuns([firstRun()]);
 
     // The view ships nothing from the server; the page shell still carries
     // its static header.
@@ -140,7 +147,7 @@ describe('AI Coach page (RUN-31)', () => {
 
     it('switches to the generating card with the designed copy (AC1)', async () => {
       const user = setup();
-      addRun(firstRun());
+      seedRuns([firstRun()]);
       render(<CoachPage />);
 
       await user.click(screen.getByRole('button', { name: 'Regenerate' }));
@@ -166,7 +173,7 @@ describe('AI Coach page (RUN-31)', () => {
 
     it('dims the insight cards and previous plans while generating (AC2)', async () => {
       const user = setup();
-      addRun(firstRun());
+      seedRuns([firstRun()]);
       render(<CoachPage />);
       expect(document.querySelector('.opacity-40')).toBeNull();
 
@@ -183,7 +190,7 @@ describe('AI Coach page (RUN-31)', () => {
 
     it('replaces the skeletons with the fresh plan when generation completes (AC3)', async () => {
       const user = setup();
-      addRun(firstRun());
+      seedRuns([firstRun()]);
       render(<CoachPage />);
 
       await user.click(screen.getByRole('button', { name: 'Regenerate' }));
@@ -202,7 +209,7 @@ describe('AI Coach page (RUN-31)', () => {
     it('keeps the previous plan when the stamp write fails (AC4, A22)', async () => {
       const user = setup();
       stampPlanGenerated(Date.now() - 2 * 3_600_000);
-      addRun(firstRun());
+      seedRuns([firstRun()]);
       render(<CoachPage />);
       expect(screen.getByText(/updated 2h ago/)).toBeInTheDocument();
 
@@ -226,7 +233,7 @@ describe('AI Coach page (RUN-31)', () => {
 
     it('moves focus to the plan slot when Regenerate unmounts under it', async () => {
       const user = setup();
-      addRun(firstRun());
+      seedRuns([firstRun()]);
       render(<CoachPage />);
 
       await user.click(screen.getByRole('button', { name: 'Regenerate' }));
@@ -239,7 +246,7 @@ describe('AI Coach page (RUN-31)', () => {
 
     it('returns focus to Regenerate when generation completes (AC3)', async () => {
       const user = setup();
-      addRun(firstRun());
+      seedRuns([firstRun()]);
       render(<CoachPage />);
 
       await user.click(screen.getByRole('button', { name: 'Regenerate' }));
@@ -252,7 +259,7 @@ describe('AI Coach page (RUN-31)', () => {
 
     it('never steals focus back from a user who tabbed away mid-generation', async () => {
       const user = setup();
-      addRun(firstRun());
+      seedRuns([firstRun()]);
       render(<CoachPage />);
 
       await user.click(screen.getByRole('button', { name: 'Regenerate' }));
@@ -269,7 +276,7 @@ describe('AI Coach page (RUN-31)', () => {
 
     it('clears a pending generation when the page unmounts', async () => {
       const user = setup();
-      addRun(firstRun());
+      seedRuns([firstRun()]);
       const { unmount } = render(<CoachPage />);
 
       await user.click(screen.getByRole('button', { name: 'Regenerate' }));

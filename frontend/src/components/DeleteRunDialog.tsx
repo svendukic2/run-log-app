@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { deleteRun, type Run } from '@/lib/runs';
 
 function TrashIcon() {
@@ -42,6 +42,11 @@ interface DeleteRunDialogProps {
 // actions one-handed on a phone (responsive addendum, agreed in-project).
 export default function DeleteRunDialog({ run, onClose, onDeleted }: DeleteRunDialogProps) {
   const cancelRef = useRef<HTMLButtonElement>(null);
+  // The delete round-trips to the API since RUN-48: `deleting` guards the
+  // destructive button against a double press, `deleteError` is the inline
+  // failure line (dialog stays open, the run still exists).
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
     // Focus lands on Cancel: the safe answer to a destructive question, so
@@ -63,12 +68,26 @@ export default function DeleteRunDialog({ run, onClose, onDeleted }: DeleteRunDi
     };
   }, [onClose]);
 
-  const handleDelete = () => {
-    // A run already gone (deleted in another tab) is not an error: the
-    // outcome the user asked for holds either way, so both paths continue to
-    // onDeleted and the screens refresh from whatever the store now says.
-    deleteRun(run.id);
-    onDeleted();
+  const handleDelete = async () => {
+    if (deleting) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      // A run already gone (deleted elsewhere) is not an error: the outcome
+      // the user asked for holds either way, so both resolutions continue to
+      // onDeleted and the screens refresh from whatever the cache now says.
+      await deleteRun(run.id);
+      onDeleted();
+    } catch (error) {
+      // A failed API call is different: the run still exists, so pretending
+      // it is gone would be worse than admitting the failure.
+      setDeleting(false);
+      setDeleteError(
+        error instanceof Error && error.message
+          ? error.message
+          : "Deleting failed. Check that you're online and try again.",
+      );
+    }
   };
 
   return (
@@ -107,6 +126,13 @@ export default function DeleteRunDialog({ run, onClose, onDeleted }: DeleteRunDi
           </p>
         </div>
 
+        {/* The API-failure line (RUN-48); role=alert so it is announced. */}
+        {deleteError && (
+          <p role="alert" className="text-[13px] leading-[1.5] text-accent-pressed">
+            {deleteError}
+          </p>
+        )}
+
         {/* Full-width and stacked on a phone, like RunModal's footer; two-up
             from `sm`, Cancel leading as the design draws it. */}
         <div className="flex flex-col gap-3 sm:flex-row sm:gap-[12px]">
@@ -121,9 +147,10 @@ export default function DeleteRunDialog({ run, onClose, onDeleted }: DeleteRunDi
           <button
             type="button"
             onClick={handleDelete}
-            className="flex w-full items-center justify-center rounded-[12px] bg-accent px-[24px] py-[13px] text-[15px] font-semibold text-white hover:bg-accent-pressed sm:flex-1"
+            disabled={deleting}
+            className="flex w-full items-center justify-center rounded-[12px] bg-accent px-[24px] py-[13px] text-[15px] font-semibold text-white hover:bg-accent-pressed disabled:cursor-default disabled:opacity-60 sm:flex-1"
           >
-            Delete run
+            {deleting ? 'Deleting…' : 'Delete run'}
           </button>
         </div>
       </div>

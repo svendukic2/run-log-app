@@ -1,7 +1,8 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import RunRowMenu from './RunRowMenu';
 import { getRuns, type Run } from '@/lib/runs';
+import { seedRuns } from '@/test/runsApiMock';
 
 const RUN: Run = {
   id: 'run-1',
@@ -13,10 +14,6 @@ const RUN: Run = {
   note: 'Felt easy',
 };
 
-function storeRun(run: Run) {
-  window.localStorage.setItem('runlog.runs', JSON.stringify([run]));
-}
-
 const kebab = () => screen.getByRole('button', { name: 'Open menu for Morning loop' });
 
 async function openMenu(user: ReturnType<typeof userEvent.setup>) {
@@ -27,7 +24,7 @@ async function openMenu(user: ReturnType<typeof userEvent.setup>) {
 describe('Run row menu (RUN-29)', () => {
   beforeEach(() => {
     window.localStorage.clear();
-    storeRun(RUN);
+    seedRuns([RUN]);
     // jsdom has no layout, so the viewport the placement maths reads is
     // pinned to a sane size; the kebab's rect stays at zeros, which lands in
     // the plenty-of-room-below branch.
@@ -113,7 +110,8 @@ describe('Run row menu (RUN-29)', () => {
     await user.click(screen.getByRole('menuitem', { name: 'Delete' }));
     await user.click(screen.getByRole('button', { name: 'Delete run' }));
 
-    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    // The delete round-trips to the API; the dialog closes once it lands.
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
     expect(getRuns()).toEqual([]);
   });
 

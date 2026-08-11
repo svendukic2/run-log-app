@@ -11,11 +11,12 @@ import {
 } from '@/lib/goal';
 import { getPlanGeneratedAt, stampPlanGenerated } from '@/lib/plan';
 import { addRun, todayIso, type Run } from '@/lib/runs';
+import { seedRuns } from '@/test/runsApiMock';
 import CurrentPlanCard from './CurrentPlanCard';
 import WeeklyGoalCard from './WeeklyGoalCard';
 
-function seedRun(overrides: Partial<Omit<Run, 'id'>> = {}): Run {
-  return addRun({
+function runDraft(overrides: Partial<Omit<Run, 'id'>> = {}): Omit<Run, 'id'> {
+  return {
     routeName: 'Morning loop',
     distanceKm: 10,
     durationSeconds: 3000,
@@ -23,6 +24,18 @@ function seedRun(overrides: Partial<Omit<Run, 'id'>> = {}): Run {
     effort: 'Medium',
     note: '',
     ...overrides,
+  };
+}
+
+// Before render only: seeds the backend and primes the store cache.
+function seedRun(overrides: Partial<Omit<Run, 'id'>> = {}): Run {
+  return seedRuns([runDraft(overrides)])[0];
+}
+
+// After render: goes through the real async store so mounted components see it.
+async function logRun(overrides: Partial<Omit<Run, 'id'>> = {}): Promise<void> {
+  await act(async () => {
+    await addRun(runDraft(overrides));
   });
 }
 
@@ -120,15 +133,13 @@ describe('Current plan card (RUN-32)', () => {
     expect(within(card).getByText('1 tempo')).toBeInTheDocument();
   });
 
-  it('follows the runs store: a new run moves the plan (no stale snapshot)', () => {
+  it('follows the runs store: a new run moves the plan (no stale snapshot)', async () => {
     jest.useFakeTimers().setSystemTime(new Date(2026, 7, 5, 9, 0));
     seedRun({ date: '2026-07-28' });
     render(<CurrentPlanCard />);
     expect(screen.getByText('Aim for 11 km this week')).toBeInTheDocument();
 
-    act(() => {
-      seedRun({ date: '2026-07-30', routeName: 'River trail' });
-    });
+    await logRun({ date: '2026-07-30', routeName: 'River trail' });
 
     expect(screen.getByText('Aim for 22 km this week')).toBeInTheDocument();
   });
@@ -177,9 +188,7 @@ describe('Current plan card (RUN-32)', () => {
 
       // A second last-week run doubles the reference distance: new suggestion,
       // and the old confirmation must not describe the old goal.
-      act(() => {
-        seedRun({ date: '2026-07-30', routeName: 'River trail' });
-      });
+      await logRun({ date: '2026-07-30', routeName: 'River trail' });
       expect(screen.getByText('Aim for 22 km this week')).toBeInTheDocument();
 
       await user.click(screen.getByRole('button', { name: /apply to weekly goal/i }));
@@ -257,7 +266,7 @@ describe('Current plan card (RUN-32)', () => {
   it('renders an empty server shell before hydration', () => {
     seedRun();
 
-    // Runs live in localStorage; the server ships nothing.
+    // Runs hydrate on the client; the server ships nothing.
     expect(renderToString(<CurrentPlanCard />)).toBe('');
   });
 });
