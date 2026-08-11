@@ -13,7 +13,8 @@ this document explains the conventions both follow.
 ## Where data lives today
 
 Mid-migration, deliberately in two halves. Runs moved to PostgreSQL behind the API
-(RUN-48); the onboarding-era entities are still localStorage until RUN-50:
+(RUN-48); the onboarding-era entities are still localStorage until RUN-50. Their API
+endpoints already exist server-side (RUN-49), so RUN-50 is a frontend-only swap:
 
 | Entity | Type lives in | Persisted in | Introduced by |
 | --- | --- | --- | --- |
@@ -165,6 +166,20 @@ envelope carries `{ total, page, pageSize, counts: { followers, following } }`.
 `runningLevel` and `defaultWeeklyGoalKm` are not in `onboarding.ts` yet; RUN-11 and
 RUN-38 add them to this same interface rather than creating new stores.
 
+The API is `GET`/`PUT /api/profile` (RUN-49): one resource per account, no id in the
+routes or the response - the owner is the token. GET answers 404 until the first PUT,
+which is the signal RUN-50 derives the onboarding gate from (a profile exists exactly
+when onboarding finished). PUT is a full replace: every field required, so the row can
+never end up half-written and re-sending a payload is a no-op. `runningLevel` is
+capitalized in the API and the database whatever casing the v1 store used.
+
+**SET-6 is server-enforced**: changing `defaultWeeklyGoalKm` on an existing profile
+first materializes every Monday a client could honestly call "the current week"
+(at most two, at a week boundary) under the OLD goal state, so the running week's
+snapshot is frozen before the new default lands. The first PUT ever (onboarding
+finishing) skips the freeze: nothing is changing yet, and RUN-50 may save the
+profile before the goal.
+
 ### Goal (one per user since RUN-57) + WeekTarget (one per user per week)
 
 This resolves the one question the spec leaves open. SET-6 says the default target is
@@ -182,8 +197,31 @@ reproduce that history, so the target is **snapshotted per week**:
   rows never change retroactively.
 - Hit/Missed for a past week = `totalsForWeek(runs, weekStart).distanceKm >= targetKm`.
 
-WeekTarget does not exist in code yet; it lands with RUN-17 (weekly goal card) or RUN-33
-(apply action), whichever needs it first.
+The API (RUN-49):
+
+- `GET`/`PUT /api/goal` - the onboarding goal, one per account, 404 until the first
+  PUT. Full replace; `endDate` omitted and `endDate: null` both mean "No end date".
+  Replacing the goal never rewrites existing WeekTarget rows; while the account has
+  no profile (so `goal.km` is the active seed), changing `km` first freezes the
+  running week under the old value, the same SET-6 rule the profile default follows.
+- `GET /api/week-targets/:weekStart` - get-or-create, where creation is allowed only
+  for the current week: reading the week you are in is what materializes it, seeded
+  from `profile.defaultWeeklyGoalKm`, else `goal.km`, else the 20 km fallback - the
+  same resolution order as the frontend's `resolveGoalTarget`. A past week that was
+  never materialized while live answers 404 ("no target was recorded"), never a row
+  seeded from today's state - that would fabricate Hit/Missed history. A future week
+  404s too: it snapshots when it arrives, under whatever default is in force then.
+  `weekStart` must be a real Monday (400 otherwise, naming the correct one).
+- `PUT /api/week-targets/:weekStart { targetKm }` - "Apply to weekly goal", allowed
+  only for the current week. The server cannot know the client's timezone, so
+  "current" means the Mondays of the local calendar day at the two real-world offset
+  extremes (UTC-12 and UTC+14): one Monday most of the week, two only while the week
+  boundary crosses the globe (Sunday 10:00 UTC to Monday 12:00 UTC). Past weeks are
+  immutable history; future weeks are refused. `targetKm` accepts 0 (the slider does)
+  and deliberately exceeds the 60 km slider cap - the coach can suggest more - up to
+  a 1000 km sanity ceiling.
+- `GET /api/week-targets` - every materialized week, newest first, for the Hit/Missed
+  history.
 
 ### Run
 

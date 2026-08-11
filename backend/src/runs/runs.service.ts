@@ -4,6 +4,7 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { toDbDate, toIsoDate } from '../common/dates';
 import { isPrismaError } from '../prisma/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
 import type { Run as RunRow } from '../generated/prisma/client';
@@ -28,18 +29,6 @@ export interface RunResponse {
   date: string;
   effort: Effort;
   note: string;
-}
-
-// The DATE column round-trips through JS as a Date pinned to UTC midnight,
-// so slicing the ISO string is exact in both directions. Never build these
-// with `new Date(isoString)` maths in local time: west of Greenwich that
-// lands on the previous day.
-function toDbDate(isoDate: string): Date {
-  return new Date(`${isoDate}T00:00:00.000Z`);
-}
-
-function toIsoDate(dbDate: Date): string {
-  return dbDate.toISOString().slice(0, 10);
 }
 
 // The column is plain TEXT until RUN-73 adds a real enum, so a row edited

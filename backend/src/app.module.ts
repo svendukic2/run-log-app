@@ -7,8 +7,11 @@ import { AuthModule } from './auth/auth.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { validateEnv } from './config/env.validation';
 import { FollowModule } from './follow/follow.module';
+import { GoalModule } from './goal/goal.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { ProfileModule } from './profile/profile.module';
 import { RunsModule } from './runs/runs.module';
+import { WeekTargetsModule } from './week-targets/week-targets.module';
 
 @Module({
   imports: [
@@ -25,6 +28,9 @@ import { RunsModule } from './runs/runs.module';
     RunsModule,
     AuthModule,
     FollowModule,
+    ProfileModule,
+    GoalModule,
+    WeekTargetsModule,
   ],
   controllers: [AppController],
   providers: [
