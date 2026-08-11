@@ -1,5 +1,6 @@
 import { NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RunsService } from './runs.service';
 
@@ -24,7 +25,7 @@ function row(overrides: Partial<Record<string, unknown>> = {}) {
 
 describe('RunsService', () => {
   let service: RunsService;
-  const prisma: { run: Record<string, jest.Mock> } = {
+  const prisma: { run: Record<string, jest.Mock>; $transaction: jest.Mock } = {
     run: {
       findMany: jest.fn(),
       findFirst: jest.fn(),
@@ -32,6 +33,13 @@ describe('RunsService', () => {
       update: jest.fn(),
       deleteMany: jest.fn(),
     },
+    // The interactive-transaction mock hands the callback the same mock
+    // client, so tests assert on prisma.run.create as before; a thrown
+    // error escapes exactly like a real aborted transaction.
+    $transaction: jest.fn(),
+  };
+  const notifications = {
+    fanOutRunLogged: jest.fn(),
   };
 
   // What Prisma throws when a mutation's unique where matches nothing. The
@@ -42,8 +50,15 @@ describe('RunsService', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    prisma.$transaction.mockImplementation(
+      (callback: (tx: unknown) => Promise<unknown>) => callback(prisma),
+    );
     const moduleRef = await Test.createTestingModule({
-      providers: [RunsService, { provide: PrismaService, useValue: prisma }],
+      providers: [
+        RunsService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: NotificationsService, useValue: notifications },
+      ],
     }).compile();
     service = moduleRef.get(RunsService);
   });
@@ -127,6 +142,14 @@ describe('RunsService', () => {
       }),
     });
     expect(created.date).toBe('2026-08-03');
+    // The fan-out rides the same transaction client with the stored run's
+    // headline stats (RUN-65 AC2).
+    expect(notifications.fanOutRunLogged).toHaveBeenCalledWith(
+      prisma,
+      USER_ID,
+
+      expect.objectContaining({ id: 'run-2', date: '2026-08-03' }),
+    );
   });
 
   it('defaults effort to Medium and note to empty when omitted (ADD-8)', async () => {

@@ -5,6 +5,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { toDbDate, toIsoDate } from '../common/dates';
+import { NotificationsService } from '../notifications/notifications.service';
 import { isPrismaError } from '../prisma/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
 import type { Run as RunRow } from '../generated/prisma/client';
@@ -53,7 +54,10 @@ function toEffort(rowId: string, value: string): Effort {
 // {id, userId} atomically; delete uses deleteMany for the same shape.
 @Injectable()
 export class RunsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   private toResponse(row: RunRow): RunResponse {
     return {
@@ -89,20 +93,34 @@ export class RunsService {
 
   async create(userId: string, dto: CreateRunDto): Promise<RunResponse> {
     try {
-      const row = await this.prisma.run.create({
-        data: {
-          userId,
-          routeName: dto.routeName,
-          distanceKm: dto.distanceKm,
-          durationSeconds: dto.durationSeconds,
-          date: toDbDate(dto.date),
-          // The Add run modal preselects Medium (ADD-8) and treats the note
-          // as optional-empty (data-model: optional text is ''), so the API
-          // does the same for payloads that omit them. Omit means absent:
-          // explicit nulls were already rejected by the DTO.
-          effort: dto.effort ?? DEFAULT_EFFORT,
-          note: dto.note ?? '',
-        },
+      // Run and fan-out commit together (RUN-65 AC2): every follower gets
+      // exactly one 'followed-ran' per run that actually exists, and a
+      // failed request the user retries cannot double-notify because the
+      // first attempt's run never committed either.
+      const row = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.run.create({
+          data: {
+            userId,
+            routeName: dto.routeName,
+            distanceKm: dto.distanceKm,
+            durationSeconds: dto.durationSeconds,
+            date: toDbDate(dto.date),
+            // The Add run modal preselects Medium (ADD-8) and treats the note
+            // as optional-empty (data-model: optional text is ''), so the API
+            // does the same for payloads that omit them. Omit means absent:
+            // explicit nulls were already rejected by the DTO.
+            effort: dto.effort ?? DEFAULT_EFFORT,
+            note: dto.note ?? '',
+          },
+        });
+        await this.notifications.fanOutRunLogged(tx, userId, {
+          id: created.id,
+          routeName: created.routeName,
+          distanceKm: created.distanceKm,
+          durationSeconds: created.durationSeconds,
+          date: toIsoDate(created.date),
+        });
+        return created;
       });
       return this.toResponse(row);
     } catch (error) {
