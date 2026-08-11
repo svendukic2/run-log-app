@@ -4,12 +4,7 @@ import { useState } from 'react';
 import { ACCENT_PILL_CLASSES } from '@/components/accentPill';
 import TextField from '@/components/TextField';
 import { clampGoal, GOAL_DEFAULT_KM, GOAL_MAX_KM, GOAL_MIN_KM } from '@/lib/goal';
-import {
-  profileInitials,
-  saveProfileSettings,
-  useProfile,
-  type Profile,
-} from '@/lib/onboarding';
+import { profileInitials, saveProfileSettings, useProfile, type Profile } from '@/lib/onboarding';
 import { validateProfileForm, type ProfileFormErrors } from '@/lib/profileValidation';
 import { ApiError } from '@/lib/session';
 import { useHydrated } from '@/lib/useHydrated';

@@ -12,6 +12,7 @@ import {
   type EventFormField,
   type EventFormValues,
 } from '@/lib/events';
+import { mutationErrorMessage } from '@/lib/session';
 
 function CloseIcon() {
   return (
@@ -24,7 +25,9 @@ function CloseIcon() {
 export const EVENT_MODAL_TITLE_ID = 'event-modal-title';
 
 // Field ids double as the anchor for "focus the first thing that failed",
-// in the order the form reads (the RunModal construction).
+// declared in the order the form reads. The focus order is derived from
+// the same declaration (string-key insertion order is guaranteed), so a
+// new field cannot be added to one and forgotten in the other.
 const FIELD_IDS: Record<EventFormField, string> = {
   name: 'event-name',
   description: 'event-description',
@@ -32,7 +35,7 @@ const FIELD_IDS: Record<EventFormField, string> = {
   endDate: 'event-end-date',
   targetKm: 'event-target-km',
 };
-const FIELD_ORDER: EventFormField[] = ['name', 'description', 'startDate', 'endDate', 'targetKm'];
+const FIELD_ORDER = Object.keys(FIELD_IDS) as EventFormField[];
 
 interface EventModalProps {
   onClose: () => void;
@@ -56,22 +59,28 @@ export default function EventModal({ onClose }: EventModalProps) {
     value: EventFormValues[Field],
   ) => setValues((current) => ({ ...current, [field]: value }));
 
+  // Dismissal is refused while a save is in flight (review fix): closing
+  // mid-save would unmount the modal, a late failure's inline error would
+  // land on an unmounted component, and the user would walk away believing
+  // an event exists that was never created. Every dismissal path - Escape
+  // here, the scrim, Cancel and the X below - shares the gate.
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !saving) onClose();
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [onClose, saving]);
+
   useEffect(() => {
     nameRef.current?.focus();
 
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', closeOnEscape);
-
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-
     return () => {
-      document.removeEventListener('keydown', closeOnEscape);
       document.body.style.overflow = previousOverflow;
     };
-  }, [onClose]);
+  }, []);
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -97,11 +106,7 @@ export default function EventModal({ onClose }: EventModalProps) {
       // The failure keeps the modal open with everything typed intact:
       // closing would silently discard an event the user believes exists.
       setSaving(false);
-      setSaveError(
-        cause instanceof Error && cause.message
-          ? cause.message
-          : "Saving failed. Check that you're online and try again.",
-      );
+      setSaveError(mutationErrorMessage(cause));
     }
   };
 
@@ -110,7 +115,7 @@ export default function EventModal({ onClose }: EventModalProps) {
       <div
         aria-hidden="true"
         data-testid="event-modal-backdrop"
-        onClick={onClose}
+        onClick={saving ? undefined : onClose}
         className="fixed inset-0 bg-ink/60"
       />
 
@@ -130,8 +135,9 @@ export default function EventModal({ onClose }: EventModalProps) {
           <button
             type="button"
             onClick={onClose}
+            disabled={saving}
             aria-label="Close"
-            className="flex size-[34px] shrink-0 items-center justify-center rounded-[10px] text-secondary hover:bg-muted hover:text-ink"
+            className="flex size-[34px] shrink-0 items-center justify-center rounded-[10px] text-secondary hover:bg-muted hover:text-ink disabled:cursor-default disabled:opacity-60"
           >
             <CloseIcon />
           </button>
@@ -201,7 +207,8 @@ export default function EventModal({ onClose }: EventModalProps) {
               <button
                 type="button"
                 onClick={onClose}
-                className="flex w-full items-center justify-center rounded-[14px] border border-line-strong bg-white px-[28px] py-[16px] text-[16px] font-semibold text-text-primary hover:bg-muted sm:w-auto"
+                disabled={saving}
+                className="flex w-full items-center justify-center rounded-[14px] border border-line-strong bg-white px-[28px] py-[16px] text-[16px] font-semibold text-text-primary hover:bg-muted disabled:cursor-default disabled:opacity-60 sm:w-auto"
               >
                 Cancel
               </button>

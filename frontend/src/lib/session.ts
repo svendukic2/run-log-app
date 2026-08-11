@@ -43,6 +43,16 @@ const TIMEOUT_MESSAGE = 'The server took too long to respond. Try again in a mom
 export const WRONG_CREDENTIALS_MESSAGE = 'Wrong email or password.';
 export const SESSION_EXPIRED_MESSAGE = 'Your session has expired. Sign in again.';
 
+// The one inline-error fallback for awaited mutations (the app-wide error
+// pattern): a named error explains itself, anything else gets this line.
+// Shared here next to ApiError so the user-facing copy exists once instead
+// of drifting across every form and card that catches.
+export function mutationErrorMessage(cause: unknown): string {
+  return cause instanceof Error && cause.message
+    ? cause.message
+    : "Saving failed. Check that you're online and try again.";
+}
+
 // The in-memory session is the source of truth for this page load;
 // localStorage is only its persistence. With blocked or full storage
 // (Safari private mode) the memory copy alone cannot survive the full-load

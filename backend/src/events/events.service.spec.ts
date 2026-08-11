@@ -7,7 +7,11 @@ import { Test } from '@nestjs/testing';
 import { addDaysIso, toDbDate, utcTodayIso } from '../common/dates';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { deriveEventState, EventsService } from './events.service';
+import {
+  deriveEventState,
+  EventsService,
+  rankByDistance,
+} from './events.service';
 
 // Freeze "today" for the whole suite: the fixture days below are computed
 // once at module load, but the service calls utcTodayIso() per request, so
@@ -79,11 +83,29 @@ describe('deriveEventState', () => {
   });
 });
 
+describe('rankByDistance (RUN-69 AC2)', () => {
+  it('shares a place between tied distances and skips the places they took', () => {
+    const ranks = rankByDistance([
+      { id: 'a', totalKm: 30, showOnLeaderboard: true },
+      { id: 'b', totalKm: 42, showOnLeaderboard: true },
+      { id: 'c', totalKm: 42, showOnLeaderboard: true },
+      { id: 'hidden', totalKm: 99, showOnLeaderboard: false },
+    ]);
+
+    expect([...ranks]).toEqual([
+      ['b', 1],
+      ['c', 1],
+      ['a', 3],
+    ]);
+  });
+});
+
 describe('EventsService', () => {
   let service: EventsService;
   const prisma: {
     event: Record<string, jest.Mock>;
     eventParticipant: Record<string, jest.Mock>;
+    run: Record<string, jest.Mock>;
     user: Record<string, jest.Mock>;
     $transaction: jest.Mock;
   } = {
@@ -99,6 +121,10 @@ describe('EventsService', () => {
     eventParticipant: {
       create: jest.fn(),
       deleteMany: jest.fn(),
+      findMany: jest.fn(),
+    },
+    run: {
+      groupBy: jest.fn(),
     },
     user: {
       findUnique: jest.fn(),
@@ -271,16 +297,117 @@ describe('EventsService', () => {
     });
   });
 
-  describe('join', () => {
-    it('creates the participant and notifies the owner in one transaction (AC2, AC4)', async () => {
+  describe('listParticipants (RUN-69)', () => {
+    // Three runners: two opted in (one of them the caller), one opted out.
+    function participant(id: string, showOnLeaderboard: boolean, day = 1) {
+      return {
+        createdAt: new Date(`2026-08-0${day}T09:00:00.000Z`),
+        user: { id, firstName: id, lastName: 'Tester', showOnLeaderboard },
+      };
+    }
+
+    function aggregate(userId: string, km: number, runs: number) {
+      return { userId, _sum: { distanceKm: km }, _count: { _all: runs } };
+    }
+
+    it('ranks the opted-in participants and withholds the opted-out runner’s numbers (AC2, AC3)', async () => {
       prisma.event.findUnique.mockResolvedValue({
-        ownerId: OWNER_ID,
-        name: 'Summer 100k',
+        startDate: toDbDate(YESTERDAY),
+        endDate: toDbDate(TOMORROW),
       });
+      prisma.eventParticipant.findMany.mockResolvedValue([
+        participant(USER_ID, true, 1),
+        participant('user-hidden', false, 2),
+        participant('user-ana', true, 3),
+      ]);
+      prisma.run.groupBy.mockResolvedValue([
+        aggregate(USER_ID, 12.5, 2),
+        // The hidden runner leads on distance and still must not rank,
+        // which is also what proves the ranks are not simply array order.
+        aggregate('user-hidden', 40, 5),
+        aggregate('user-ana', 20.25, 3),
+      ]);
+
+      const { items, total } = await service.listParticipants(
+        USER_ID,
+        'event-1',
+      );
+
+      expect(total).toBe(3);
+      // Join order is the list order (AC1); the ranks are global.
+      expect(items.map((row) => [row.id, row.rank])).toEqual([
+        [USER_ID, 2],
+        ['user-hidden', null],
+        ['user-ana', 1],
+      ]);
+      expect(items[0]).toMatchObject({ me: true, totalKm: 12.5, runCount: 2 });
+      // Opted out: no place and no numbers at all.
+      expect(items[1]).toMatchObject({
+        me: false,
+        totalKm: null,
+        runCount: null,
+      });
+
+      // The aggregation is one GROUP BY over these participants, bounded by
+      // the event's own inclusive window (AC6's contract; the e2e suite
+      // proves the boundary days against a real database).
+      expect(prisma.run.groupBy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          by: ['userId'],
+          where: {
+            userId: { in: [USER_ID, 'user-hidden', 'user-ana'] },
+            date: { gte: toDbDate(YESTERDAY), lte: toDbDate(TOMORROW) },
+          },
+        }),
+      );
+    });
+
+    it('gives a participant with no runs in the window a place with zero km', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        startDate: toDbDate(TODAY),
+        endDate: toDbDate(TOMORROW),
+      });
+      prisma.eventParticipant.findMany.mockResolvedValue([
+        participant(USER_ID, true),
+      ]);
+      prisma.run.groupBy.mockResolvedValue([]);
+
+      const { items } = await service.listParticipants(USER_ID, 'event-1');
+
+      expect(items[0]).toMatchObject({ rank: 1, totalKm: 0, runCount: 0 });
+    });
+
+    it('404s an unknown event without touching the aggregation', async () => {
+      prisma.event.findUnique.mockResolvedValue(null);
+
+      await expect(service.listParticipants(USER_ID, 'nope')).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(prisma.run.groupBy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('join', () => {
+    // The membership read inside the transaction (select ownerId/name) and
+    // the answering findOne (full include) share the findUnique mock, so
+    // the happy paths chain a lean row, then the full one.
+    function mockJoinReads(ownerId: string) {
+      prisma.event.findUnique
+        .mockResolvedValueOnce({ ownerId, name: 'Summer 100k' })
+        .mockResolvedValue(
+          eventRow({ ownerId, participants: [{ id: 'part-1' }] }),
+        );
+    }
+
+    it('creates the participant, notifies the owner and answers the updated event (AC2, AC4)', async () => {
+      mockJoinReads(OWNER_ID);
       prisma.eventParticipant.create.mockResolvedValue({});
 
-      await expect(service.join(USER_ID, 'event-1')).resolves.toEqual({
+      await expect(service.join(USER_ID, 'event-1')).resolves.toMatchObject({
+        id: 'event-1',
         joined: true,
+        mine: false,
+        participantCount: 3,
       });
 
       expect(prisma.eventParticipant.create).toHaveBeenCalledWith({
@@ -295,13 +422,10 @@ describe('EventsService', () => {
     });
 
     it('treats a repeat join as an idempotent no-op that never re-notifies (AC2)', async () => {
-      prisma.event.findUnique.mockResolvedValue({
-        ownerId: OWNER_ID,
-        name: 'Summer 100k',
-      });
+      mockJoinReads(OWNER_ID);
       prisma.eventParticipant.create.mockRejectedValue(prismaError('P2002'));
 
-      await expect(service.join(USER_ID, 'event-1')).resolves.toEqual({
+      await expect(service.join(USER_ID, 'event-1')).resolves.toMatchObject({
         joined: true,
       });
       // The unique violation aborts the transaction before the notification
@@ -310,10 +434,7 @@ describe('EventsService', () => {
     });
 
     it('does not notify the owner about their own join (their P2002 aside, ownership short-circuits)', async () => {
-      prisma.event.findUnique.mockResolvedValue({
-        ownerId: USER_ID,
-        name: 'Summer 100k',
-      });
+      mockJoinReads(USER_ID);
       prisma.eventParticipant.create.mockResolvedValue({});
 
       await service.join(USER_ID, 'event-1');
@@ -371,11 +492,16 @@ describe('EventsService', () => {
   });
 
   describe('leave', () => {
-    it('removes the participant row idempotently (AC2)', async () => {
-      prisma.event.findUnique.mockResolvedValue({ ownerId: OWNER_ID });
+    it('removes the participant row idempotently and answers the updated event (AC2)', async () => {
+      prisma.event.findUnique
+        .mockResolvedValueOnce({ ownerId: OWNER_ID })
+        .mockResolvedValue(eventRow());
       prisma.eventParticipant.deleteMany.mockResolvedValue({ count: 1 });
 
-      await expect(service.leave(USER_ID, 'event-1')).resolves.toBeUndefined();
+      await expect(service.leave(USER_ID, 'event-1')).resolves.toMatchObject({
+        id: 'event-1',
+        joined: false,
+      });
 
       expect(prisma.eventParticipant.deleteMany).toHaveBeenCalledWith({
         where: { eventId: 'event-1', userId: USER_ID },
@@ -391,11 +517,13 @@ describe('EventsService', () => {
       expect(prisma.eventParticipant.deleteMany).not.toHaveBeenCalled();
     });
 
-    it('succeeds silently on an event that does not exist (nothing to leave)', async () => {
+    it('404s an event that does not exist (review fix: was a silent 204, but the response now carries the updated event and there is none)', async () => {
       prisma.event.findUnique.mockResolvedValue(null);
-      prisma.eventParticipant.deleteMany.mockResolvedValue({ count: 0 });
 
-      await expect(service.leave(USER_ID, 'nope')).resolves.toBeUndefined();
+      await expect(service.leave(USER_ID, 'nope')).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(prisma.eventParticipant.deleteMany).not.toHaveBeenCalled();
     });
   });
 

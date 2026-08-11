@@ -119,6 +119,12 @@ server-side), not stored. In Jest, `jest.setup.ts` installs an in-memory `/api/*
 before every test; `seedRuns()`/`seedProfile()`/`seedGoal()` from
 `src/test/runsApiMock.ts` replace localStorage seeding.
 
+One deliberate variation exists: `frontend/src/lib/eventParticipants.ts`
+(RUN-69) holds **per-event** data, not app-wide data, so its cache is a single
+slot for whichever event is open rather than a map, and its loading/error states
+live in the cards themselves instead of a screen-level boundary. Copy that shape
+for the next per-entity store, and the app-wide one for everything else.
+
 **Configuration goes through ConfigService.** `ConfigModule.forRoot({ isGlobal: true })`
 is registered in `backend/src/app.module.ts`, so it reads `backend/.env` at startup and
 `ConfigService` is injectable everywhere without re-importing the module. Read values

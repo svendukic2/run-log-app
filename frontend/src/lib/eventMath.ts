@@ -6,11 +6,11 @@
 // everything here); this module exists so server-side code CAN import the
 // pure parts safely if it ever needs them.
 
-import { formatDate, fromIsoDate, todayIso } from './runMath';
+import { formatDate, formatDateShort, todayIso } from './runMath';
 
 // The shared formatters event screens lean on, so components importing
 // from './events' need no second lib import for a number or a day.
-export { formatKm, todayIso } from './runMath';
+export { formatDate, formatKm, todayIso } from './runMath';
 
 // Display order on the Events page: Active first (AC1), the future next,
 // the past last. The backend's EVENT_STATES lists the same three values in
@@ -100,6 +100,16 @@ export function compareEventsChronological(a: CommunityEvent, b: CommunityEvent)
   return a.startDate.localeCompare(b.startDate) || a.id.localeCompare(b.id);
 }
 
+// Collapses duplicate ids, last occurrence winning (the later page saw the
+// row later). The paginated walk needs this: offset pages are not one
+// snapshot, so a row created mid-walk can shift another row across a page
+// boundary and deliver it twice - which would reach React as a duplicate
+// key.
+export function dedupeEventsById(events: CommunityEvent[]): CommunityEvent[] {
+  const byId = new Map(events.map((event) => [event.id, event]));
+  return [...byId.values()];
+}
+
 // The page's grouping (AC1): every event lands in exactly one bucket, each
 // bucket keeping the API's chronological order.
 export function groupEventsByState(events: CommunityEvent[]): Record<EventState, CommunityEvent[]> {
@@ -112,28 +122,96 @@ export function groupEventsByState(events: CommunityEvent[]): Record<EventState,
   return groups;
 }
 
-const WINDOW_DAY_FORMATTER = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-});
-
 // The card's date window: "Aug 11 - Aug 18, 2026" (en dash in the UI), a
 // one-day event collapses to its single date, and a window across a year
-// boundary spells out both years. No timeZone on the formatters is
-// deliberate: fromIsoDate builds local-midnight dates, so formatting in the
-// local zone can never shift the day (the formatDateShort reasoning).
+// boundary spells out both years. The yearless side is runMath's
+// formatDateShort, so run screens and event windows cannot drift to
+// different date renderings.
 export function formatEventWindow(startDate: string, endDate: string): string {
   if (startDate === endDate) return formatDate(startDate);
   if (startDate.slice(0, 4) !== endDate.slice(0, 4)) {
     return `${formatDate(startDate)} – ${formatDate(endDate)}`;
   }
-  return `${WINDOW_DAY_FORMATTER.format(fromIsoDate(startDate))} – ${formatDate(endDate)}`;
+  return `${formatDateShort(startDate)} – ${formatDate(endDate)}`;
 }
 
 // "1 runner" / "3 runners": the card's participant caption. The owner is a
 // participant from creation (AC1 of RUN-67), so the count is never 0.
 export function formatParticipantCount(count: number): string {
   return `${count} ${count === 1 ? 'runner' : 'runners'}`;
+}
+
+/* Participants and the event leaderboard (RUN-69) ---------------------------- */
+
+// One member of one event, as GET /api/events/:id/participants serves it
+// (EventParticipantResponse in the backend, hand-mirrored like every
+// response shape). `id` is the USER's id, which is what the row links to.
+//
+// The three nullables move together and mean one thing: this runner is off
+// leaderboards (RUN-64's showOnLeaderboard, honoured here per AC3). The
+// server withholds the numbers rather than flagging them, so a null rank is
+// the only signal the client gets - and the only one it needs.
+export interface EventParticipant {
+  id: string;
+  firstName: string;
+  lastName: string;
+  joinedAt: string;
+  me: boolean;
+  rank: number | null;
+  totalKm: number | null;
+  runCount: number | null;
+}
+
+export function isEventParticipant(value: unknown): value is EventParticipant {
+  const row = value as EventParticipant;
+  const rankedTogether =
+    row?.rank === null
+      ? row.totalKm === null && row.runCount === null
+      : typeof row?.rank === 'number' &&
+        typeof row.totalKm === 'number' &&
+        typeof row.runCount === 'number';
+  return (
+    typeof row?.id === 'string' &&
+    typeof row.firstName === 'string' &&
+    typeof row.lastName === 'string' &&
+    typeof row.joinedAt === 'string' &&
+    typeof row.me === 'boolean' &&
+    rankedTogether
+  );
+}
+
+// A ranked row: the same participant, with the nullables narrowed away, so
+// the leaderboard component never re-checks what the filter already proved.
+export type RankedParticipant = EventParticipant & {
+  rank: number;
+  totalKm: number;
+  runCount: number;
+};
+
+// AC2's board out of AC1's list: everyone the server ranked, in rank order.
+// Ties share a rank server-side, so the name tiebreak here only decides
+// which of two equal runners is drawn first - never who placed higher.
+export function leaderboardOf(participants: EventParticipant[]): RankedParticipant[] {
+  return participants
+    .filter((row): row is RankedParticipant => row.rank !== null)
+    .sort(
+      (a, b) =>
+        a.rank - b.rank ||
+        `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`),
+    );
+}
+
+// "AT" for Ana Tester: the avatar stand-in every community row wears until
+// real avatars exist. Falls back to the first character of whichever name is
+// present, and to "?" when neither is.
+export function initialsOf(firstName: string, lastName: string): string {
+  const initials = `${firstName.trim().charAt(0)}${lastName.trim().charAt(0)}`;
+  return initials.toUpperCase() || '?';
+}
+
+// "1 run" / "4 runs": the leaderboard's secondary column.
+export function formatRunCount(count: number): string {
+  return `${count} ${count === 1 ? 'run' : 'runs'}`;
 }
 
 /* Form values ---------------------------------------------------------------- */

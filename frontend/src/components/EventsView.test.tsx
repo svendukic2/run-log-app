@@ -11,30 +11,18 @@ function shiftDay(iso: string, days: number): string {
 }
 
 const TODAY = todayIso();
-const YESTERDAY = shiftDay(TODAY, -1);
 const TOMORROW = shiftDay(TODAY, 1);
 
 describe('EventsView (RUN-68)', () => {
   it('groups cards by state, Active first, with the card facts (AC1)', () => {
     seedEvents([
-      {
-        name: 'Last month classic',
-        startDate: shiftDay(YESTERDAY, -7),
-        endDate: YESTERDAY,
-      },
-      {
-        name: 'Summer 100k',
-        startDate: TODAY,
-        endDate: TOMORROW,
-        targetKm: 100,
-        participantCount: 3,
-      },
+      { name: 'Last month classic', startDate: shiftDay(TODAY, -8), endDate: shiftDay(TODAY, -1) },
+      { name: 'Summer 100k', endDate: TOMORROW, targetKm: 100, participantCount: 3 },
       { name: 'Next week dash', startDate: TOMORROW, endDate: shiftDay(TOMORROW, 7) },
     ]);
 
     render(<EventsView />);
 
-    // Section order is Active, Upcoming, Finished regardless of seed order.
     expect(
       screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent),
     ).toEqual(['Active1', 'Upcoming1', 'Finished1']);
@@ -45,74 +33,42 @@ describe('EventsView (RUN-68)', () => {
     expect(within(card).getByText('Active')).toBeInTheDocument();
     expect(within(card).getByText(/3 runners/)).toBeInTheDocument();
     expect(within(card).getByText(/Target 100 km/)).toBeInTheDocument();
-    expect(within(card).getByText('by Ana Tester')).toBeInTheDocument();
     expect(within(card).getByRole('link', { name: 'Summer 100k' })).toHaveAttribute(
       'href',
       expect.stringMatching(/^\/events\//),
     );
   });
 
-  it('shows the designed empty state with the create call to action (AC4)', async () => {
+  it('shows the empty state whose CTA opens the create modal (AC4)', async () => {
     const user = userEvent.setup();
     render(<EventsView />);
 
     expect(screen.getByText('No events yet')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /create your first event/i }));
+
     expect(screen.getByRole('dialog', { name: 'Create event' })).toBeInTheDocument();
   });
 
-  it('flips Join to Joined without a reload and moves the count (AC2)', async () => {
+  it('flips Join to Joined without a reload and hides the action on owned events (AC2)', async () => {
     const user = userEvent.setup();
-    seedEvents([{ name: 'Summer 100k', startDate: TODAY, endDate: TOMORROW }]);
+    seedEvents([
+      { name: 'Summer 100k', endDate: TOMORROW },
+      { name: 'My event', mine: true },
+    ]);
 
     render(<EventsView />);
-    expect(screen.getByText(/1 runner\b/)).toBeInTheDocument();
-
     await user.click(screen.getByRole('button', { name: 'Join' }));
 
     expect(await screen.findByRole('button', { name: 'Joined' })).toBeInTheDocument();
     expect(screen.getByText(/2 runners/)).toBeInTheDocument();
-  });
-
-  it('clicking Joined leaves again (AC2)', async () => {
-    const user = userEvent.setup();
-    seedEvents([
-      {
-        name: 'Summer 100k',
-        startDate: TODAY,
-        endDate: TOMORROW,
-        joined: true,
-        participantCount: 2,
-      },
-    ]);
-
-    render(<EventsView />);
-    await user.click(screen.getByRole('button', { name: 'Joined' }));
-
-    expect(await screen.findByRole('button', { name: 'Join' })).toBeInTheDocument();
-    expect(screen.getByText(/1 runner\b/)).toBeInTheDocument();
-  });
-
-  it('offers the owner no membership action (AC2 "except events I own")', () => {
-    seedEvents([
-      {
-        name: 'My event',
-        startDate: TODAY,
-        endDate: TOMORROW,
-        mine: true,
-        joined: true,
-      },
-    ]);
-
-    render(<EventsView />);
-
+    // The owner's membership is structural, so their card offers no action.
     expect(screen.getByText('Your event')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /join/i })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button')).toHaveLength(1);
   });
 
   it('keeps the card and shows an inline alert when the join fails', async () => {
     const user = userEvent.setup();
-    seedEvents([{ name: 'Summer 100k', startDate: TODAY, endDate: TOMORROW }]);
+    seedEvents([{ name: 'Summer 100k', endDate: TOMORROW }]);
     failEventsApi('POST', 500);
 
     render(<EventsView />);

@@ -1,15 +1,12 @@
 'use client';
 
-import { useState } from 'react';
 import Link from 'next/link';
+import EventStateChips from '@/components/EventStateChips';
+import JoinEventButton from '@/components/JoinEventButton';
 import {
-  EVENT_STATE_CHIP,
-  EVENT_STATE_LABEL,
   formatEventWindow,
   formatKm,
   formatParticipantCount,
-  joinEvent,
-  leaveEvent,
   type CommunityEvent,
 } from '@/lib/events';
 import { ROUTES } from '@/lib/routes';
@@ -20,58 +17,18 @@ interface EventCardProps {
 
 // One event on the Events page (RUN-68): state chip, name, date window,
 // owner, participant count, target when set, and the Join/Joined action
-// (AC1). The whole card is a link to the event detail (AC5) via a
-// stretched-link overlay, so the card stays one tab stop for its
-// navigation while the button keeps its own; the button sits above the
-// overlay (z-index), which is what keeps a Join click from also
-// navigating.
+// (AC1, shared with the detail header since RUN-69). The whole card is a
+// link to the event detail (AC5) via a stretched-link overlay, so the card
+// stays one tab stop for its navigation while the button keeps its own;
+// the button sits above the overlay (z-index), which is what keeps a Join
+// click from also navigating.
 export default function EventCard({ event }: EventCardProps) {
-  // The membership round-trips to the API (AC2): `busy` guards the double
-  // click, `error` is the inline role="alert" line the app-wide pattern
-  // prescribes.
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const toggleMembership = async () => {
-    if (busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      if (event.joined) {
-        await leaveEvent(event.id);
-      } else {
-        await joinEvent(event.id);
-      }
-      // The store refresh re-renders this card with the flipped flag and
-      // the server's participant count; nothing to set here.
-      setBusy(false);
-    } catch (cause) {
-      setBusy(false);
-      setError(
-        cause instanceof Error && cause.message
-          ? cause.message
-          : "Saving failed. Check that you're online and try again.",
-      );
-    }
-  };
-
   return (
     <article
       data-testid="event-card"
       className="relative flex flex-col gap-[10px] rounded-[18px] border border-line bg-white p-[22px] transition-shadow hover:shadow-[0_10px_30px_0_rgba(0,0,0,0.07)]"
     >
-      <div className="flex items-center gap-2">
-        <span
-          className={`rounded-full px-[10px] py-[3px] text-[11.5px] font-semibold ${EVENT_STATE_CHIP[event.state]}`}
-        >
-          {EVENT_STATE_LABEL[event.state]}
-        </span>
-        {event.mine && (
-          <span className="rounded-full bg-accent-soft px-[10px] py-[3px] text-[11.5px] font-semibold text-accent-pressed">
-            Your event
-          </span>
-        )}
-      </div>
+      <EventStateChips event={event} />
 
       <div className="flex min-w-0 flex-col gap-[3px]">
         <h3 className="truncate font-display text-[17px] font-bold tracking-[-0.34px] text-text-primary">
@@ -100,30 +57,14 @@ export default function EventCard({ event }: EventCardProps) {
           )}
         </p>
 
-        {/* The owner participates structurally (they cannot leave), so
-            their card offers no membership action; the chip above already
-            says why. */}
-        {!event.mine && (
-          <button
-            type="button"
-            onClick={toggleMembership}
-            disabled={busy}
-            className={`relative z-10 shrink-0 rounded-full px-[18px] py-[8px] text-[13px] font-semibold disabled:cursor-default disabled:opacity-60 ${
-              event.joined
-                ? 'border border-line-strong bg-white text-text-primary hover:bg-muted'
-                : 'bg-accent text-white hover:bg-accent-pressed'
-            }`}
-          >
-            {busy ? 'Saving…' : event.joined ? 'Joined' : 'Join'}
-          </button>
-        )}
+        {/* Renders nothing on the owner's own card; the chip above already
+            says why (a deleted event unmounts the card instead - the row
+            leaves the cache, which is the whole story). */}
+        <JoinEventButton
+          event={event}
+          className="flex shrink-0 flex-col items-end gap-[2px] text-right"
+        />
       </div>
-
-      {error && (
-        <p role="alert" className="text-[12.5px] leading-[1.5] text-accent-pressed">
-          {error}
-        </p>
-      )}
     </article>
   );
 }

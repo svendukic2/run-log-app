@@ -52,11 +52,80 @@ export interface EventListResponse {
   pageSize: number;
 }
 
-// What POST /events/:id/join answers: the state the call guaranteed, exactly
-// like FollowStateResponse - idempotency makes "did this request insert the
-// row" meaningless to the caller.
-export interface EventJoinStateResponse {
-  joined: boolean;
+// One participant of one event, carrying both things RUN-69's detail page
+// renders: the membership itself (the participant list, AC1) and that
+// runner's standing inside the event window (the leaderboard, AC2). They
+// travel together because they are the same set of people counted two
+// ways - splitting them into two endpoints would double the round trips to
+// answer one screen, and the ranks have to be global anyway.
+//
+// The three nullable fields are one decision, not three: `rank` is null
+// exactly when the runner is off leaderboards (AC3), and their distance and
+// run count go with it. Withholding the numbers rather than sending them
+// with a "do not display" flag is what makes the opt-out real - a client
+// cannot render what it never received - and it also keeps the API from
+// naming another user's privacy setting back at the caller.
+export interface EventParticipantResponse {
+  id: string;
+  firstName: string;
+  lastName: string;
+  joinedAt: string;
+  me: boolean;
+  rank: number | null;
+  totalKm: number | null;
+  runCount: number | null;
+}
+
+// Deliberately not paginated, unlike every other list in this API: a
+// leaderboard is only correct as a whole. Offset pages would rank within a
+// page (or force the client to walk every page before it can render a
+// single row), and the set is bounded by one event's membership rather than
+// by the whole database. `total` therefore equals items.length today; it is
+// here so a future page window can be added without changing the envelope's
+// shape.
+export interface EventParticipantListResponse {
+  items: EventParticipantResponse[];
+  total: number;
+}
+
+// Join and leave answer the full updated EventResponse rather than a
+// follow-style state stub (review fix): the card that clicked needs the
+// flipped flag AND the fresh participant count, and answering both here
+// replaces a second authenticated round-trip (a GET that could fail AFTER
+// the membership already changed, leaving the UI contradicting the server)
+// with one cheap read inside the same request.
+
+// RUN-69 AC2's ranking, pure so it can be tested without a database. Only
+// opted-in runners are ranked (AC3), and the ranking is the competition
+// kind: equal distances share a place and the next distinct distance skips
+// the places they consumed (1, 1, 3). The id tiebreak only fixes the sort's
+// order among tied rows - they get the same rank either way - so the output
+// is deterministic rather than dependent on the sort's stability.
+export function rankByDistance(
+  rows: Array<{ id: string; totalKm: number; showOnLeaderboard: boolean }>,
+): Map<string, number> {
+  const contenders = rows
+    .filter((row) => row.showOnLeaderboard)
+    .sort((a, b) => b.totalKm - a.totalKm || a.id.localeCompare(b.id));
+
+  const ranks = new Map<string, number>();
+  let previousKm: number | null = null;
+  let previousRank = 0;
+  contenders.forEach((row, index) => {
+    const rank = row.totalKm === previousKm ? previousRank : index + 1;
+    ranks.set(row.id, rank);
+    previousKm = row.totalKm;
+    previousRank = rank;
+  });
+  return ranks;
+}
+
+// Distances are Floats, so summing them accumulates binary-fraction noise
+// (0.1 + 0.2 = 0.30000000000000004). Rounding to the same two decimals the
+// UI renders keeps a leaderboard from ordering two genuinely equal totals -
+// and from printing one of them as 30.000000000000004 km.
+function roundKm(km: number): number {
+  return Math.round(km * 100) / 100;
 }
 
 // AC3's lifecycle, on inclusive dates: the event is active on its start and
@@ -183,13 +252,102 @@ export class EventsService {
     return this.toResponse(row, utcTodayIso(), userId);
   }
 
-  // AC2 + AC4: ensures the caller participates. Idempotent by way of the
-  // unique (eventId, userId) pair: the repeat POST hits P2002 and reports
-  // the same final state - aborting the transaction BEFORE the notification
-  // write, so the owner is notified exactly once per genuine join. The owner
-  // "joining" their own event lands on the same P2002 (they participate
-  // since creation) and notifies nobody.
-  async join(userId: string, eventId: string): Promise<EventJoinStateResponse> {
+  // RUN-69 AC1 + AC2: everyone who joined this event, each with their
+  // standing inside the event's own date window. Readable by any signed-in
+  // user, like the event itself.
+  //
+  // Three reads, exactly one of them the aggregation the ticket asks for
+  // (AC6): the event (for the window, and the 404 on an unknown id), its
+  // participants, and one GROUP BY over the runs of those participants
+  // inside the window. Prisma's groupBy compiles to that single SQL
+  // aggregation, which is why there is no raw query here: the same one
+  // statement, but type-checked and injection-free.
+  //
+  // Both dates are inclusive, so the window is a closed interval and a run
+  // logged on the first or the last day counts (the same rule the event's
+  // own state derivation uses). The DATE column stores midnight UTC, so
+  // gte/lte on the day boundaries needs no time-of-day slack.
+  async listParticipants(
+    userId: string,
+    eventId: string,
+  ): Promise<EventParticipantListResponse> {
+    const event = await this.prisma.event.findUnique({
+      where: { id: eventId },
+      select: { startDate: true, endDate: true },
+    });
+    if (!event) throw new NotFoundException(`Event ${eventId} not found`);
+
+    const participants = await this.prisma.eventParticipant.findMany({
+      where: { eventId },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: {
+        createdAt: true,
+        user: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            showOnLeaderboard: true,
+          },
+        },
+      },
+    });
+    if (participants.length === 0) return { items: [], total: 0 };
+
+    // The aggregation, narrowed to the participants themselves: a global
+    // GROUP BY over every run in the window would scan strangers' rows to
+    // throw them away.
+    const totals = await this.prisma.run.groupBy({
+      by: ['userId'],
+      where: {
+        userId: { in: participants.map((row) => row.user.id) },
+        date: { gte: event.startDate, lte: event.endDate },
+      },
+      _sum: { distanceKm: true },
+      _count: { _all: true },
+    });
+    const byUser = new Map(totals.map((row) => [row.userId, row]));
+
+    // Ranked across every participant, not within some page or the
+    // opted-in subset's own arrival order: a rank means "your place among
+    // everyone competing here".
+    const ranks = rankByDistance(
+      participants.map((row) => ({
+        id: row.user.id,
+        showOnLeaderboard: row.user.showOnLeaderboard,
+        totalKm: roundKm(byUser.get(row.user.id)?._sum.distanceKm ?? 0),
+      })),
+    );
+
+    const items = participants.map((row) => {
+      const rank = ranks.get(row.user.id) ?? null;
+      const aggregate = byUser.get(row.user.id);
+      return {
+        id: row.user.id,
+        firstName: row.user.firstName,
+        lastName: row.user.lastName,
+        joinedAt: row.createdAt.toISOString(),
+        me: row.user.id === userId,
+        // Opted out: no place, and none of the numbers that would let a
+        // client reconstruct one (AC3).
+        rank,
+        totalKm:
+          rank === null ? null : roundKm(aggregate?._sum.distanceKm ?? 0),
+        runCount: rank === null ? null : (aggregate?._count._all ?? 0),
+      };
+    });
+
+    return { items, total: items.length };
+  }
+
+  // AC2 + AC4: ensures the caller participates, then answers the updated
+  // event. Idempotent by way of the unique (eventId, userId) pair: the
+  // repeat POST hits P2002 and reports the same final state - aborting the
+  // transaction BEFORE the notification write, so the owner is notified
+  // exactly once per genuine join. The owner "joining" their own event
+  // lands on the same P2002 (they participate since creation) and notifies
+  // nobody.
+  async join(userId: string, eventId: string): Promise<EventResponse> {
     try {
       await this.prisma.$transaction(async (tx) => {
         // Read inside the transaction: the row's FK check on the insert
@@ -216,34 +374,40 @@ export class EventsService {
       });
     } catch (error) {
       if (isPrismaError(error, 'P2002')) {
-        // Already in: the state the caller asked for already holds.
-        return { joined: true };
-      }
-      if (isPrismaError(error, 'P2003')) {
+        // Already in: the state the caller asked for already holds; fall
+        // through to answering the current event.
+      } else if (isPrismaError(error, 'P2003')) {
         throw await this.mapJoinForeignKeyError(error, userId, eventId);
+      } else {
+        throw error;
       }
-      throw error;
     }
-    return { joined: true };
+    // One extra read in the same request. The window between the insert and
+    // this read is real but benign: a deletion in it turns the answer into
+    // the same 404 the caller would get a moment later anyway.
+    return this.findOne(userId, eventId);
   }
 
   // AC2: ensures the caller does not participate, except the owner, whose
   // membership is structural (AC1 made them the first participant) - leaving
   // would orphan the event's own creator, so that is a 400, not a no-op.
-  // Everything else is idempotent like unfollow: leaving an event you never
-  // joined, already left, or that never existed all land in the requested
-  // state and succeed silently.
-  async leave(userId: string, eventId: string): Promise<void> {
+  // Leaving an event never joined or already left is idempotent and answers
+  // the same updated event; an unknown event is a 404 (review fix: this was
+  // a silent 204, but with the response carrying the updated event there is
+  // nothing truthful to answer for a row that does not exist).
+  async leave(userId: string, eventId: string): Promise<EventResponse> {
     const event = await this.prisma.event.findUnique({
       where: { id: eventId },
       select: { ownerId: true },
     });
-    if (event?.ownerId === userId) {
+    if (!event) throw new NotFoundException(`Event ${eventId} not found`);
+    if (event.ownerId === userId) {
       throw new BadRequestException('The owner cannot leave their own event');
     }
     await this.prisma.eventParticipant.deleteMany({
       where: { eventId, userId },
     });
+    return this.findOne(userId, eventId);
   }
 
   // AC5: owner-scoped update. The read and the write both fold ownerId into

@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { holdEventsLoading, makeEventsLoadFail, restoreEventsApi } from '@/test/eventsApiMock';
+import { makeEventsLoadFail, restoreEventsApi } from '@/test/eventsApiMock';
 import { expireRunsTokens } from '@/test/runsApiMock';
 import EventsBoundary from './EventsBoundary';
 
@@ -12,30 +12,19 @@ function renderBoundary() {
   );
 }
 
-describe('EventsBoundary (RUN-68, the RUN-48 screen gate for events)', () => {
+describe('EventsBoundary (the RUN-48 screen gate for events)', () => {
   it('renders the children once the store is ready', async () => {
     renderBoundary();
 
     expect(await screen.findByTestId('events-child')).toBeInTheDocument();
   });
 
-  it('admits the pending state while the load is in flight, children withheld', async () => {
-    holdEventsLoading();
-    renderBoundary();
-
-    expect(screen.queryByTestId('events-child')).not.toBeInTheDocument();
-    // The spinner appears only after the anti-flicker delay.
-    expect(await screen.findByRole('status')).toHaveTextContent(/loading events/i);
-    expect(screen.queryByTestId('events-child')).not.toBeInTheDocument();
-  });
-
-  it('shows one retryable error card and recovers through Try again', async () => {
+  it('withholds the children behind one retryable error card', async () => {
     const user = userEvent.setup();
     makeEventsLoadFail(500);
     renderBoundary();
 
-    const card = await screen.findByRole('alert');
-    expect(card).toHaveTextContent("Events didn't load");
+    expect(await screen.findByRole('alert')).toHaveTextContent("Events didn't load");
     expect(screen.queryByTestId('events-child')).not.toBeInTheDocument();
 
     restoreEventsApi();

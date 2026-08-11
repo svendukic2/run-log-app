@@ -12,6 +12,7 @@ import { __resetGoalStoreForTests, todayIso, type Goal } from '@/lib/goal';
 import { __resetProfileStoreForTests } from '@/lib/onboarding';
 import { __resetRunsStoreForTests, startOfWeek, type Run } from '@/lib/runs';
 import { __resetSessionForTests, __setHardNavigateForTests, hasStoredSession } from '@/lib/session';
+import { jsonResponse } from './apiMockShared';
 import { handleEventsRequest } from './eventsApiMock';
 
 let db: Run[] = [];
@@ -69,14 +70,8 @@ function seedKm(): number {
   return profileDb?.defaultWeeklyGoalKm ?? goalDb?.km ?? 20;
 }
 
-function jsonResponse(status: number, body: unknown): Response {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    json: () => Promise.resolve(body),
-  } as Response;
-}
-
+// jsonResponse now lives in apiMockShared (imported above), so the events
+// mock mints identical fake Responses instead of keeping a second copy.
 function authorized(init: RequestInit): boolean {
   const header = (init.headers as Record<string, string> | undefined)?.Authorization ?? '';
   const token = header.replace(/^Bearer /, '');
@@ -130,7 +125,8 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
   }
 
   if (url === '/api/profile' && method === 'GET') {
-    if (profileFailure) return Promise.resolve(jsonResponse(profileFailure, { message: 'Simulated failure' }));
+    if (profileFailure)
+      return Promise.resolve(jsonResponse(profileFailure, { message: 'Simulated failure' }));
     return Promise.resolve(
       profileDb
         ? jsonResponse(200, profileDb)
@@ -159,7 +155,8 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
   }
 
   if (url === '/api/goal' && method === 'GET') {
-    if (goalFailure) return Promise.resolve(jsonResponse(goalFailure, { message: 'Simulated failure' }));
+    if (goalFailure)
+      return Promise.resolve(jsonResponse(goalFailure, { message: 'Simulated failure' }));
     return Promise.resolve(
       goalDb ? jsonResponse(200, goalDb) : jsonResponse(404, { message: 'Goal not found' }),
     );
@@ -181,7 +178,8 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
     const weekStart = weekTargetMatch[1];
     const currentWeek = startOfWeek(todayIso());
     if (method === 'GET') {
-      if (goalFailure) return Promise.resolve(jsonResponse(goalFailure, { message: 'Simulated failure' }));
+      if (goalFailure)
+        return Promise.resolve(jsonResponse(goalFailure, { message: 'Simulated failure' }));
       const existing = weekTargetsDb.get(weekStart);
       if (existing !== undefined) {
         return Promise.resolve(jsonResponse(200, { weekStart, targetKm: existing }));
@@ -197,10 +195,14 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
     }
     if (method === 'PUT') {
       if (weekTargetPutFailure) {
-        return Promise.resolve(jsonResponse(weekTargetPutFailure, { message: 'Simulated failure' }));
+        return Promise.resolve(
+          jsonResponse(weekTargetPutFailure, { message: 'Simulated failure' }),
+        );
       }
       if (weekStart !== currentWeek) {
-        return Promise.resolve(jsonResponse(400, { message: 'weekStart must be the current week' }));
+        return Promise.resolve(
+          jsonResponse(400, { message: 'weekStart must be the current week' }),
+        );
       }
       const { targetKm } = JSON.parse(String(init.body)) as { targetKm: number };
       weekTargetsDb.set(weekStart, targetKm);
