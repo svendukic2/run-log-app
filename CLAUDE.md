@@ -26,6 +26,7 @@ workspaces, turbo, or nx setup. The root `package.json` owns only repo-wide dev 
 ```text
 backend/          NestJS 11 API, port 3000, its own package.json + node_modules
 frontend/         Next.js 16 + React 19, port 4200, its own package.json + node_modules
+e2e/              Playwright acceptance tests, its own package.json (see e2e/README.md)
 .claude/          Skills, agents and permissions for Claude Code (see below)
 .github/workflows/ci.yml
 .husky/           pre-commit and commit-msg hooks
@@ -227,12 +228,16 @@ the backend has its own `backend/.prettierrc`.
 
 ## CI
 
-`.github/workflows/ci.yml` runs three jobs in parallel on every PR and on pushes to
+`.github/workflows/ci.yml` runs four jobs in parallel on every PR and on pushes to
 `main`:
 
 - **backend**: Postgres 18 service container, `prisma migrate deploy`, then lint, build,
   unit tests, e2e (the e2e suite connects to that database at startup)
 - **frontend**: lint, unit tests, build
+- **e2e**: its own Postgres 18 service container, then the Playwright suite (`e2e/`)
+  against the real stack - Playwright's webServer boots the backend and frontend itself.
+  Test isolation is per device account, not per database wipe; the strategy is
+  documented in `e2e/README.md`
 - **conventions**: commitlint over the PR's commit range
 
 A repo-wide `prettier --check` step exists but is **intentionally commented out**: 55
