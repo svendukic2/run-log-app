@@ -1,3 +1,4 @@
+import { Transform } from 'class-transformer';
 import { IsIn } from 'class-validator';
 import { PaginationQueryDto } from '../../common/pagination-query.dto';
 import { ValidateIfPresent } from '../../common/validation';
@@ -10,7 +11,12 @@ export type EventState = (typeof EVENT_STATES)[number];
 
 // GET /api/events: the shared page window plus an optional state filter.
 export class EventListQueryDto extends PaginationQueryDto {
+  // An empty-but-present param (?state=) means "not set", exactly like the
+  // inherited page/pageSize (see toOptionalNumber there): a client building
+  // the URL from an unselected filter must get the unfiltered list, not a
+  // 400 from '' reaching @IsIn.
   @ValidateIfPresent()
+  @Transform(({ value }): unknown => (value === '' ? undefined : value))
   @IsIn(EVENT_STATES, {
     message: `state must be one of: ${EVENT_STATES.join(', ')}`,
   })

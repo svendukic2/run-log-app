@@ -26,10 +26,13 @@ describe('Events API (e2e)', () => {
   let eventId: string;
 
   // Days relative to the real today: state derivation runs against the
-  // server's UTC today, so fixed dates would rot.
-  const today = utcTodayIso();
-  const yesterday = addDaysIso(today, -1);
-  const tomorrow = addDaysIso(today, 1);
+  // server's UTC today, so fixed dates would rot. Assigned in beforeAll
+  // (not at module load) to shrink the window in which a run straddling
+  // UTC midnight could disagree with the server about what "today" is;
+  // every state assertion also lives in the same test as its creates.
+  let today: string;
+  let yesterday: string;
+  let tomorrow: string;
 
   function createEvent(user: TestUser, body: Record<string, unknown>) {
     return request(app.getHttpServer())
@@ -46,6 +49,9 @@ describe('Events API (e2e)', () => {
   }
 
   beforeAll(async () => {
+    today = utcTodayIso();
+    yesterday = addDaysIso(today, -1);
+    tomorrow = addDaysIso(today, 1);
     ({ app, prisma } = await createE2eApp());
     // Users cascade to events, participants and notifications, so this
     // clears everything.
@@ -160,6 +166,11 @@ describe('Events API (e2e)', () => {
       .body as EventListResponse;
     expect(active.total).toBe(1);
     expect(active.items[0].name).toBe('Summer 100k');
+
+    // Empty-but-present state means "not set", exactly like ?page=.
+    const unfiltered = (await listEvents(bruno, '?state='))
+      .body as EventListResponse;
+    expect(unfiltered.total).toBe(3);
 
     await request(app.getHttpServer())
       .get('/api/events?state=someday')
