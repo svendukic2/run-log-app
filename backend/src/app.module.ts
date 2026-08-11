@@ -12,6 +12,7 @@ import { GoalModule } from './goal/goal.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ProfileModule } from './profile/profile.module';
+import { RoutesModule } from './routes/routes.module';
 import { RunsModule } from './runs/runs.module';
 import { WeekTargetsModule } from './week-targets/week-targets.module';
 
@@ -35,6 +36,10 @@ import { WeekTargetsModule } from './week-targets/week-targets.module';
     GoalModule,
     WeekTargetsModule,
     NotificationsModule,
+    // Stateless outbound proxy, not a database feature (RUN-53). Listed here
+    // like the rest so its one endpoint picks up the global prefix, pipe and
+    // guard below without opting in.
+    RoutesModule,
   ],
   controllers: [AppController],
   providers: [
