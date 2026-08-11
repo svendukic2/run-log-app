@@ -21,6 +21,7 @@ onboarding-era entities). What remains in localStorage is device-scoped by natur
 | Profile (incl. level + default goal) | `frontend/src/lib/onboarding.ts` | PostgreSQL via `/api/profile` (RUN-50) | RUN-8 |
 | Goal | `frontend/src/lib/goal.ts` | PostgreSQL via `/api/goal` (RUN-50) | RUN-10 |
 | Week targets | `frontend/src/lib/goal.ts` | PostgreSQL via `/api/week-targets` (RUN-50) | RUN-17/33 |
+| Privacy settings | `frontend/src/lib/privacy.ts` | PostgreSQL via `/api/privacy` (RUN-64) | RUN-64 |
 | Session (JWT + email) | `frontend/src/lib/session.ts` | `runlog.session` (localStorage) | RUN-48, reshaped by RUN-58 |
 | Onboarding wizard draft | `frontend/src/lib/onboarding.ts` | `runlog.onboardingDraft` (localStorage) | RUN-50 |
 | Plan stamp | `frontend/src/lib/plan.ts` | `runlog.plan` (localStorage) | RUN-32 |
@@ -36,8 +37,8 @@ account exists until "Finish setup", so an abandoned wizard costs nothing server
 ## The frontend API pattern (decided in RUN-48, reuse everywhere)
 
 RUN-48 decided the app-wide async pattern once; the profile/goal stores follow it since
-RUN-50 (three stores now: runs, profile, goal + week target) and every v2 screen reuses
-it rather than inventing another:
+RUN-50 and the privacy store since RUN-64 (four stores now: runs, profile, goal + week
+target, privacy) and every v2 screen reuses it rather than inventing another:
 
 - **Same-origin calls, proxied.** The browser calls `/api/*` on the frontend's own
   origin; `next.config.ts` rewrites that to the backend server-side. `BACKEND_URL`
@@ -63,9 +64,10 @@ it rather than inventing another:
   import into.
 - **Reads: cache + screen-level gate.** Stores keep an in-memory cache behind
   `useSyncExternalStore`; hooks stay synchronous (`useRuns(): Run[]`,
-  `useProfile(): ProfileRecord | null`, `useGoalTarget(iso): number`). Each screen
+  `useProfile(): ProfileRecord | null`, `useGoalTarget(iso): number`,
+  `usePrivacy(): PrivacySettings`). Each screen
   renders through one `AppDataBoundary` (RunsBoundary until RUN-50), which gates all
-  three stores: blank for the first 250 ms (no spinner flash on the fast local API),
+  four stores: blank for the first 250 ms (no spinner flash on the fast local API),
   then an honest spinner, then either content or one error card. Retryable failures
   (network, timeout, 5xx) get "Try again" that reloads only the failed stores;
   terminal ones (an expired session, which also signs the user out) explain the way
@@ -125,18 +127,33 @@ data attaches to accounts. Community tasks (follow, notifications, events) hang 
 | passwordHash | string | bcrypt, cost 12; never leaves the auth service in any response or log (RUN-56 AC4) |
 | firstName | string | Non-empty, mirrors WEL-5 rules |
 | lastName | string | Non-empty, mirrors WEL-5 rules |
+| profilePublic | boolean, default false | Opt-in: other runners may open this account's public profile (RUN-64; the page itself is RUN-63) |
 | showOnLeaderboard | boolean, default false | Opt-in to every leaderboard, global and per event. Pulled forward from RUN-64 by RUN-69, which cannot honour its own AC3 without it |
+| showRoutes | boolean, default false | Opt-in: route maps are shown to whoever can see the profile (RUN-64; route maps themselves are RUN-72) |
 | createdAt | timestamp | Audit field (the `updatedAt` convention above extends to `createdAt` here) |
 
 The API endpoints are `POST /api/auth/signup` and `POST /api/auth/login`, both
 returning `{ token, user }` with the JWT subject = user id. Passwords are capped at
 72 UTF-8 **bytes** (not characters) because bcrypt silently truncates beyond that.
-Of the three privacy toggles, `showOnLeaderboard` landed early with RUN-69 (the
-event leaderboard has to honour it to exist); `profilePublic` and `showRoutes`
-arrive additively in RUN-64, which also ships the Settings card that flips all
-three. Until then every account carries the decided default - **false, opt-in** -
-so leaderboards render their "nobody is on leaderboards yet" state rather than
-looking broken, and RUN-71's seeder opts its demo users in explicitly.
+**Privacy settings (RUN-64).** The three toggles are `GET`/`PUT /api/privacy`: one
+resource per account, no id in the contract, body exactly
+`{ profilePublic, showOnLeaderboard, showRoutes }`. The PUT is a full replace like
+the profile and goal ones, every field required and strictly boolean - no truthy
+coercion, because the one direction that must never happen by accident is a
+setting switching ON. `showOnLeaderboard` landed early with RUN-69 (the event
+leaderboard has to honour it to exist); `profilePublic` and `showRoutes` arrived
+additively with RUN-64, which also shipped the Settings privacy card that flips all
+three and issues its PUT alongside the profile's, from the same Save changes
+button.
+
+All three carry the decided default - **false, private, opt-in** - and the
+migration adds them at that default too, so no existing account is ever published
+by a deploy. Consequence worth knowing: leaderboards keep rendering their "nobody
+is on leaderboards yet" state until runners opt in, and RUN-71's seeder opts its
+demo users in explicitly. The gating rules live in `backend/src/common/privacy.ts`
+(`appearsOnLeaderboard`, shared by the event leaderboard and RUN-70's global one);
+`profilePublic` and `showRoutes` are stored and served but have no gate yet, because
+their reader - RUN-63's public profile page - does not exist.
 
 **Ownership (RUN-57).** Every other entity in this document carries a required
 `userId` foreign key (cascade on user delete), with one structural exception:

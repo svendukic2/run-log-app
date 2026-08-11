@@ -35,6 +35,14 @@ function profilePutBodies(): Array<Profile & { defaultWeeklyGoalKm: number }> {
     .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
 }
 
+// The same, for the privacy resource (RUN-64): its toggles ride the same
+// Save button but persist through their own endpoint.
+function privacyPutBodies(): Array<Record<string, boolean>> {
+  return (global.fetch as jest.Mock).mock.calls
+    .filter(([url, init]) => url === '/api/privacy' && (init as RequestInit)?.method === 'PUT')
+    .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
+}
+
 // Clicks Save changes and lets the PUT settle: the save is async since
 // RUN-50, so assertions wait for the promise chain, not just the click.
 async function save(user: ReturnType<typeof userEvent.setup>) {
@@ -378,5 +386,50 @@ describe('Settings save changes persistence (RUN-39)', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Email is required');
     expect(profilePutBodies()).toHaveLength(1);
     expect(getProfileRecord()).toMatchObject({ ...STORED, defaultWeeklyGoalKm: 21 });
+  });
+});
+
+describe('Settings privacy card (RUN-64)', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    seedProfile(STORED);
+  });
+
+  function toggle(name: string) {
+    return within(screen.getByRole('region', { name: 'Privacy' })).getByRole('switch', { name });
+  }
+
+  it('shows the three toggles off, with helper copy, for a fresh account (AC1, AC3)', () => {
+    render(<SettingsView />);
+
+    // All three private by default: nothing is shared until the owner says
+    // so, and each switch explains what turning it on exposes.
+    for (const name of ['Public profile', 'Show me on leaderboards', 'Show my route maps']) {
+      expect(toggle(name)).toHaveAttribute('aria-checked', 'false');
+      expect(toggle(name)).toHaveAccessibleDescription();
+    }
+  });
+
+  it('persists a flipped toggle on Save and leaves untouched settings alone (AC2)', async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(<SettingsView />);
+
+    await user.click(toggle('Show me on leaderboards'));
+    await save(user);
+
+    // One PUT carrying all three values, the two untouched ones unchanged.
+    expect(privacyPutBodies()).toEqual([
+      { profilePublic: false, showOnLeaderboard: true, showRoutes: false },
+    ]);
+
+    // A fresh mount seeds from the store, so this is what a reload shows.
+    unmount();
+    render(<SettingsView />);
+    expect(toggle('Show me on leaderboards')).toHaveAttribute('aria-checked', 'true');
+
+    // Saving again without touching a toggle writes nothing: editing a name
+    // must not rewrite settings the user never opened.
+    await save(user);
+    expect(privacyPutBodies()).toHaveLength(1);
   });
 });

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useHydrated } from '@/lib/useHydrated';
 import { reloadGoal, useGoalStoreError, useGoalStoreStatus } from '@/lib/goal';
 import { reloadProfile, useProfileError, useProfileStatus } from '@/lib/onboarding';
+import { reloadPrivacy, usePrivacyError, usePrivacyStatus } from '@/lib/privacy';
 import {
   clearRunsNotice,
   reloadRuns,
@@ -45,9 +46,13 @@ function LoadingNotice({ immediate }: { immediate: boolean }) {
 }
 
 // The screen-level gate of the app-wide async pattern (RUN-48, widened in
-// RUN-50): every page that derives its UI from the API-backed stores (runs,
-// profile, goal) renders through this boundary, so loading and error
-// handling is decided once instead of per card. Mounting it is also what
+// RUN-50 and again in RUN-64): every page that derives its UI from the
+// API-backed stores (runs, profile, goal, privacy) renders through this
+// boundary, so loading and error handling is decided once instead of per
+// card. Privacy joined them rather than loading inside the Settings card
+// because the card seeds a draft from it synchronously, exactly like the
+// profile fields next to it, and a card-local load would put a second
+// spinner inside a screen this boundary already gates. Mounting it is also what
 // triggers each store's lazy initial load.
 //
 // Loading renders nothing for the first quarter second (extending the
@@ -64,18 +69,20 @@ export default function AppDataBoundary({ children }: { children: React.ReactNod
   const runsStatus = useRunsStatus();
   const profileStatus = useProfileStatus();
   const goalStatus = useGoalStoreStatus();
+  const privacyStatus = usePrivacyStatus();
   const runsError = useRunsError();
   const profileError = useProfileError();
   const goalError = useGoalStoreError();
+  const privacyError = usePrivacyError();
   const notice = useRunsNotice();
   const [retried, setRetried] = useState(false);
 
-  const statuses = [runsStatus, profileStatus, goalStatus];
+  const statuses = [runsStatus, profileStatus, goalStatus, privacyStatus];
   // One card, one message - but a TERMINAL error always outranks a
   // transient one: showing "Try again" because the runs load happened to
   // fail first, while the profile is terminally unable to authenticate,
   // would loop the user through retries that can never end well.
-  const errors = [runsError, profileError, goalError].filter(
+  const errors = [runsError, profileError, goalError, privacyError].filter(
     (candidate): candidate is NonNullable<typeof candidate> => candidate !== null,
   );
   const error = errors.find((candidate) => candidate.terminal) ?? errors[0] ?? null;
@@ -119,6 +126,7 @@ export default function AppDataBoundary({ children }: { children: React.ReactNod
               if (runsStatus === 'error') reloadRuns();
               if (profileStatus === 'error') reloadProfile();
               if (goalStatus === 'error') reloadGoal();
+              if (privacyStatus === 'error') reloadPrivacy();
             }}
             className="mt-[6px] flex items-center justify-center rounded-[12px] bg-accent px-[22px] py-[11px] text-[14px] font-semibold text-white hover:bg-accent-pressed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           >

@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { toDbDate, toIsoDate, utcTodayIso } from '../common/dates';
 import { resolvePagination } from '../common/pagination-query.dto';
+import { appearsOnLeaderboard } from '../common/privacy';
 import { NotificationsService } from '../notifications/notifications.service';
 import { isPrismaError, prismaConstraint } from '../prisma/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
@@ -105,7 +106,9 @@ export function rankByDistance(
   rows: Array<{ id: string; totalKm: number; showOnLeaderboard: boolean }>,
 ): Map<string, number> {
   const contenders = rows
-    .filter((row) => row.showOnLeaderboard)
+    // The opt-in gate itself lives in common/privacy.ts since RUN-64, so
+    // this leaderboard and the global one read the same rule.
+    .filter((row) => appearsOnLeaderboard(row))
     .sort((a, b) => b.totalKm - a.totalKm || a.id.localeCompare(b.id));
 
   const ranks = new Map<string, number>();
