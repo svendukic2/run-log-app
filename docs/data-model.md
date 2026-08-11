@@ -175,6 +175,11 @@ joined at read time. A later unfollow, account deletion or run delete therefore
 cannot break rendering a notification that already landed. The cost is accepted
 staleness: a renamed actor keeps their old name in old notifications.
 
+One anti-spam bound on `new-follower`: while the recipient still has an
+**unread** notification from the same actor, a fresh follow edge writes nothing,
+so a follow/unfollow loop cannot grow the bell by more than one row per actor.
+Reading the notification re-arms it, keeping a genuine later re-follow visible.
+
 Fan-out is batched per run: one query for the follower ids, then `createMany` in
 bounded chunks - never a query or insert per follower.
 

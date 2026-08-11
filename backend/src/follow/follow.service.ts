@@ -5,6 +5,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import {
+  newestFirstOrder,
   PaginationQueryDto,
   resolvePagination,
 } from '../common/pagination-query.dto';
@@ -209,18 +210,15 @@ export class FollowService {
     };
   }
 
-  // One page of the users on the other end of my edges, newest edge first.
-  // The id tiebreak makes the order deterministic within one snapshot of
-  // the data; offset pages can still shift when edges are created or
-  // removed between two requests (cursor pagination is the upgrade if that
-  // ever matters to the frontend).
+  // One page of the users on the other end of my edges, newest edge first
+  // (newestFirstOrder holds the determinism reasoning).
   private async pageOfEdges(
     userId: string,
     direction: ListDirection,
     skip: number,
     take: number,
   ): Promise<Array<{ id: string; firstName: string; lastName: string }>> {
-    const orderBy = [{ createdAt: 'desc' as const }, { id: 'desc' as const }];
+    const orderBy = newestFirstOrder();
     const select = { id: true, firstName: true, lastName: true };
 
     // The two branches must stay exact mirrors: same order, same select,

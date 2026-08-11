@@ -26,6 +26,7 @@ describe('NotificationsService', () => {
     notification: Record<string, jest.Mock>;
     follow: Record<string, jest.Mock>;
     user: Record<string, jest.Mock>;
+    $transaction: jest.Mock;
   } = {
     notification: {
       create: jest.fn(),
@@ -41,10 +42,16 @@ describe('NotificationsService', () => {
     user: {
       findUniqueOrThrow: jest.fn(),
     },
+    // list() uses the batch (array) transaction form for snapshot
+    // consistency; the mock resolves the already-created promises together.
+    $transaction: jest.fn(),
   };
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    prisma.$transaction.mockImplementation((ops: Promise<unknown>[]) =>
+      Promise.all(ops),
+    );
     const moduleRef = await Test.createTestingModule({
       providers: [
         NotificationsService,
@@ -56,6 +63,7 @@ describe('NotificationsService', () => {
 
   describe('recordNewFollower', () => {
     it('writes one self-contained new-follower notification for the followee (AC1, AC4)', async () => {
+      prisma.notification.findFirst.mockResolvedValue(null);
       prisma.user.findUniqueOrThrow.mockResolvedValue({
         firstName: 'Ana',
         lastName: 'Tester',
@@ -81,6 +89,30 @@ describe('NotificationsService', () => {
           },
         },
       });
+    });
+
+    it('writes nothing while an unread new-follower from the same actor is pending (spam bound)', async () => {
+      prisma.notification.findFirst.mockResolvedValue({ id: 'notif-1' });
+
+      await service.recordNewFollower(
+        prisma as never,
+        'user-followee',
+        'user-ana',
+      );
+
+      // The pending-unread check matches on the payload's followerId, so
+      // only THIS actor's unread row suppresses the write.
+      expect(prisma.notification.findFirst).toHaveBeenCalledWith({
+        where: {
+          userId: 'user-followee',
+          type: 'new-follower',
+          readAt: null,
+          payload: { path: ['followerId'], equals: 'user-ana' },
+        },
+        select: { id: true },
+      });
+      expect(prisma.user.findUniqueOrThrow).not.toHaveBeenCalled();
+      expect(prisma.notification.create).not.toHaveBeenCalled();
     });
   });
 
