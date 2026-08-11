@@ -23,6 +23,106 @@ export const EFFORT_CHIP: Record<Effort, string> = {
 // Medium is preselected in the Add run modal (ADD-2, AC1).
 export const DEFAULT_EFFORT: Effort = 'Medium';
 
+/* Routes (RUN-54) ---------------------------------------------------------- */
+
+// One point the runner tapped on the map, in Leaflet's own {lat, lng} order
+// (which is also what POST /api/routes/plan takes - see the backend DTO for
+// why the provider's [lng, lat] flip stays server-side).
+export interface RouteWaypoint {
+  lat: number;
+  lng: number;
+}
+
+// A run's drawn route, exactly the shape the API serves (docs/data-model.md).
+export interface RunRoute {
+  // Encoded polyline, precision 5. Drawn here from the plan response and
+  // decoded for display by RUN-55.
+  polyline: string;
+  // The tapped points, 2-5 of them: [0] is Start, the last is Finish, and up
+  // to MAX_ROUTE_WAYPOINTS numbered points sit between. Kept because the
+  // polyline's hundreds of coordinates cannot be turned back into the handful
+  // of markers the picker needs to restore, move or remove (AC5).
+  waypoints: RouteWaypoint[];
+  // Who drew it, which is also what marks it a reconstruction rather than GPS
+  // truth. Server-assigned; the client never sends one.
+  source: string;
+}
+
+// What the API ACCEPTS for a route, which is not what it serves: `source` is
+// server-assigned, and sending one is rejected outright by the API's whitelist
+// pipe (backend RunRouteDto deliberately has no such property). Hence a
+// separate type rather than reusing RunRoute for writes - the asymmetry is the
+// contract, not an oversight.
+export type RunRouteDraft = Pick<RunRoute, 'polyline' | 'waypoints'>;
+
+// A run as it is SUBMITTED: no id, and the write-shaped route above.
+export interface RunDraft extends Omit<Run, 'id' | 'route'> {
+  route?: RunRouteDraft | null;
+}
+
+// The picker offers three numbered waypoints between Start and Finish, the
+// same cap the plan endpoint enforces (MAX_WAYPOINTS there).
+export const MAX_ROUTE_WAYPOINTS = 3;
+export const MIN_ROUTE_POINTS = 2;
+export const MAX_ROUTE_POINTS = MAX_ROUTE_WAYPOINTS + 2;
+
+// How far the routed distance may drift from the entered one before the form
+// says something (AC2). A reconstruction from five points is expected to be
+// approximate; a fifth off is no longer approximate, it is a different run.
+export const ROUTE_MISMATCH_TOLERANCE = 0.2;
+
+// The amber hint under the map, or null when the two distances agree closely
+// enough to say nothing. Deliberately a HINT and nothing else: the entered
+// distance stays the source of truth, it is never corrected from the map, and
+// this never blocks a save (AC2).
+export function routeMismatchHint(routedKm: number, enteredKm: number): string | null {
+  // A zero or nonsensical entered distance cannot be compared against
+  // (the form rejects it anyway, so this is only reachable mid-typing).
+  if (!Number.isFinite(routedKm) || !Number.isFinite(enteredKm) || enteredKm <= 0) {
+    return null;
+  }
+  if (Math.abs(routedKm - enteredKm) / enteredKm <= ROUTE_MISMATCH_TOLERANCE) return null;
+  return `Routed distance is ${formatDistanceKm(routedKm)}, but you logged ${formatDistanceKm(
+    enteredKm,
+  )}. Add a waypoint where you turned.`;
+}
+
+// Whether a stored route still describes the points on the map. This is what
+// tells the Route step "the polyline you are holding is for these markers" and
+// so whether a new plan request is needed at all - a plain identity check on
+// the array would re-plan on every render, and a length check would miss a
+// dragged marker.
+export function sameWaypoints(
+  a: RouteWaypoint[] | null | undefined,
+  b: RouteWaypoint[],
+): boolean {
+  if (!a || a.length !== b.length) return false;
+  return a.every((point, index) => point.lat === b[index].lat && point.lng === b[index].lng);
+}
+
+export function isRouteWaypoint(value: unknown): value is RouteWaypoint {
+  const point = value as RouteWaypoint;
+  return (
+    typeof point?.lat === 'number' &&
+    Number.isFinite(point.lat) &&
+    typeof point.lng === 'number' &&
+    Number.isFinite(point.lng)
+  );
+}
+
+export function isRunRoute(value: unknown): value is RunRoute {
+  const route = value as RunRoute;
+  return (
+    typeof route?.polyline === 'string' &&
+    route.polyline.length > 0 &&
+    typeof route.source === 'string' &&
+    Array.isArray(route.waypoints) &&
+    route.waypoints.length >= MIN_ROUTE_POINTS &&
+    route.waypoints.length <= MAX_ROUTE_POINTS &&
+    route.waypoints.every(isRouteWaypoint)
+  );
+}
+
 export interface Run {
   id: string;
   routeName: string;
@@ -35,6 +135,11 @@ export interface Run {
   date: string;
   effort: Effort;
   note: string;
+  // The optional drawn route (RUN-54). The API always sends the key (null for
+  // a run with no route), but it stays optional in the type because absent and
+  // null mean the same thing and every run that predates the field - the v1
+  // localStorage import among them - arrives without it.
+  route?: RunRoute | null;
 }
 
 /* Dates -------------------------------------------------------------------- */
@@ -245,8 +350,12 @@ export function runToForm(run: Run): RunFormValues {
   };
 }
 
-// Only ever called with values that already passed validateRunForm.
-export function toRunDraft(values: RunFormValues): Omit<Run, 'id'> {
+// Only ever called with values that already passed validateRunForm. The route
+// is a second argument rather than a form field because it is not text the
+// user typed: it is the map's state, which the modal owns separately (RUN-54).
+// Always sent explicitly, null included - null is how the API is told "no
+// route", and on an edit it is how a cleared map survives the save.
+export function toRunDraft(values: RunFormValues, route: RunRoute | null = null): RunDraft {
   return {
     routeName: values.routeName.trim(),
     distanceKm: Number(values.distance.trim().replace(',', '.')),
@@ -254,7 +363,19 @@ export function toRunDraft(values: RunFormValues): Omit<Run, 'id'> {
     date: values.date,
     effort: values.effort,
     note: values.note.trim(),
+    // Narrowed to the two fields the API accepts. Passing the route through
+    // whole would carry `source` along, and the API's whitelist pipe rejects
+    // unknown properties - so every save of a routed run would be a 400.
+    route: route ? { polyline: route.polyline, waypoints: route.waypoints } : null,
   };
+}
+
+// The distance the form currently holds, in km, or null while it is not a
+// usable number. The mismatch hint needs this from inside the Route step,
+// where the value is still the raw string the user typed.
+export function enteredDistanceKm(values: RunFormValues): number | null {
+  const km = Number(values.distance.trim().replace(',', '.'));
+  return Number.isFinite(km) && km > 0 ? km : null;
 }
 
 
@@ -334,6 +455,10 @@ export function isRun(value: unknown): value is Run {
     typeof run.durationSeconds === 'number' &&
     typeof run.date === 'string' &&
     EFFORT_LEVELS.includes(run.effort) &&
-    typeof run.note === 'string'
+    typeof run.note === 'string' &&
+    // Absent and null are both "no route"; anything else must be a complete
+    // one, because a polyline with no waypoints is a route the picker cannot
+    // restore rather than a partial one (RUN-54).
+    (run.route === undefined || run.route === null || isRunRoute(run.route))
   );
 }

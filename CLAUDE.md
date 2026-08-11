@@ -126,6 +126,26 @@ slot for whichever event is open rather than a map, and its loading/error states
 live in the cards themselves instead of a screen-level boundary. Copy that shape
 for the next per-entity store, and the app-wide one for everything else.
 
+A third variation, and the one to copy for anything that is a **command rather
+than a cache**: `frontend/src/lib/routePlan.ts` (RUN-54) has no store at all. A
+planned route belongs to one open modal, is thrown away when it closes, and no
+other screen reads it, so there is nothing to cache; what it does keep from the
+pattern is the half that matters - the call is awaited, nothing on screen changes
+until the server answered, and the failure is an inline `role="alert"` line the
+caller owns. Ask "would a second screen read this?" before adding a store.
+
+**Leaflet is client-only, and that is enforced by the build, not by taste
+(RUN-54).** `frontend/src/components/RouteMapPicker.tsx` imports `leaflet` and
+its CSS, both of which touch `window` at module scope, so it is reachable only
+through `next/dynamic` with `ssr: false` (see `RouteStep.tsx`). Import it
+directly anywhere and `npm run build` fails with `window is not defined`. Under
+Jest it never runs for real: `jest.config.ts` maps `^leaflet$` to
+`src/test/leafletMock.ts` for **every** test, because the map sits inside the Add
+run modal and any test that opens that modal would otherwise boot a map in jsdom.
+The stub records what the picker drew and exposes `fireMapClick` /
+`fireMarkerDragEnd` / `fireMarkerClick`, so the component's own wiring stays
+under test.
+
 `frontend/src/lib/notifications.ts` (RUN-66) is app-wide but **ungated**: the
 bell it feeds is rendered by `PageHeader`, so it sits on every sidebar-reachable
 screen, and it is nobody's reason for visiting any of them. A failed read

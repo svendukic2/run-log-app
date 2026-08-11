@@ -41,6 +41,15 @@
   --color-warning: #e0a020;
   --color-warning-soft: #fbf0d9;
   --color-warning-text: #b4820e;
+
+  /* Route maps (RUN-54, reused by RUN-55). Deliberately OUTSIDE the coral
+     accent: on a map the line is data, not a call to action, and it has to
+     stay readable against the Start (success green) and Finish (accent coral)
+     pins it joins - three shades of the same coral would be three pins nobody
+     can tell apart. Blue over light OSM tiles is the language of the "M14 ·
+     Run — Map view" frame the phase-D designs adapt. */
+  --color-route: #2f6fdb;
+  --color-route-soft: #e2ebfb;
 }
 
 body {

@@ -339,7 +339,25 @@ describe('toRunDraft', () => {
       date: '2026-07-14',
       effort: 'Medium',
       note: 'felt good',
+      // Always explicit, null included: null is how the API is told there is
+      // no route, and on an edit it is what clears a stored one (RUN-54).
+      route: null,
     });
+  });
+
+  it('submits a drawn route WITHOUT its source (RUN-54)', () => {
+    const waypoints = [
+      { lat: 52.516275, lng: 13.377704 },
+      { lat: 52.520008, lng: 13.404954 },
+    ];
+    const polyline = 'wap_IsyspAsFgc@cG{h@qFe{A';
+
+    // Provenance is the server's to stamp, and the API's whitelist pipe
+    // rejects any property its DTO does not declare - so passing the route
+    // through whole would 400 every save of a routed run.
+    expect(toRunDraft(makeForm(), { polyline, waypoints, source: 'openrouteservice' }).route).toEqual(
+      { polyline, waypoints },
+    );
   });
 
   it('accepts a comma as the decimal separator', () => {
@@ -360,7 +378,12 @@ describe('runToForm (RUN-28 AC1)', () => {
 
   it('round-trips through toRunDraft without drift', () => {
     const run = makeRun();
-    expect({ ...toRunDraft(runToForm(run)), id: run.id }).toEqual(run);
+    // The route is not a form field (it is the map's state, which the modal
+    // owns), so it rides the second argument - here the run's own.
+    expect({ ...toRunDraft(runToForm(run), run.route ?? null), id: run.id }).toEqual({
+      ...run,
+      route: run.route ?? null,
+    });
   });
 });
 

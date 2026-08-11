@@ -571,7 +571,8 @@ test.describe('RUN-23 Add run modal', () => {
     request,
   }) => {
     const dialog = page.getByRole('dialog', { name: 'Add run' });
-    await dialog.getByRole('button', { name: /Save run/ }).click();
+    // Validation runs on Next since RUN-54: the save lives on the route step.
+    await dialog.getByRole('button', { name: /^Next$/ }).click();
     await expect(dialog.getByText('Route name is required')).toBeVisible();
     await expect(dialog.getByText('Distance is required')).toBeVisible();
     await expect(dialog.getByText('Duration is required')).toBeVisible();
@@ -579,7 +580,8 @@ test.describe('RUN-23 Add run modal', () => {
     await dialog.getByPlaceholder('e.g. Evening tempo').fill('Morning loop');
     await dialog.getByPlaceholder('0.0').fill('0');
     await dialog.getByPlaceholder('00:00').fill('42:75');
-    await dialog.getByRole('button', { name: /Save run/ }).click();
+    // Validation runs on Next since RUN-54: the save lives on the route step.
+    await dialog.getByRole('button', { name: /^Next$/ }).click();
     await expect(dialog.getByText('Enter a distance greater than 0')).toBeVisible();
     await expect(dialog.getByText('Enter a duration as mm:ss or h:mm:ss')).toBeVisible();
 
@@ -593,7 +595,8 @@ test.describe('RUN-23 Add run modal', () => {
     await dialog.getByPlaceholder('0.0').fill('5');
     await dialog.getByPlaceholder('00:00').fill('30:00');
     await dialog.locator('#run-date').fill('2999-01-01');
-    await dialog.getByRole('button', { name: /Save run/ }).click();
+    // Validation runs on Next since RUN-54: the save lives on the route step.
+    await dialog.getByRole('button', { name: /^Next$/ }).click();
     await expect(dialog.getByText('Date cannot be in the future')).toBeVisible();
     expect(await runsOf(request, account)).toHaveLength(0);
   });
@@ -606,6 +609,9 @@ test.describe('RUN-23 Add run modal', () => {
     await dialog.getByPlaceholder('e.g. Evening tempo').fill('Morning loop');
     await dialog.getByPlaceholder('0.0').fill('8.2');
     await dialog.getByPlaceholder('00:00').fill('42:15');
+    // Two steps since RUN-54. Nothing is placed on the map, so this is also
+    // the AC3 path: a run saved with no route at all.
+    await dialog.getByRole('button', { name: /^Next$/ }).click();
     await dialog.getByRole('button', { name: /Save run/ }).click();
     await expect(dialog).toHaveCount(0);
 
@@ -625,6 +631,9 @@ test.describe('RUN-23 Add run modal', () => {
     await dialog.getByPlaceholder('e.g. Evening tempo').fill('Long run');
     await dialog.getByPlaceholder('0.0').fill('14.2');
     await dialog.getByPlaceholder('00:00').fill('1:18:44');
+    // Two steps since RUN-54. Nothing is placed on the map, so this is also
+    // the AC3 path: a run saved with no route at all.
+    await dialog.getByRole('button', { name: /^Next$/ }).click();
     await dialog.getByRole('button', { name: /Save run/ }).click();
     await expect(dialog).toHaveCount(0);
 
@@ -650,6 +659,9 @@ test('sprint goal: a new user signs up, onboards, logs a run, and it survives a 
   await dialog.getByPlaceholder('e.g. Evening tempo').fill('River trail');
   await dialog.getByPlaceholder('0.0').fill('5.4');
   await dialog.getByPlaceholder('00:00').fill('28:40');
+  // Two steps since RUN-54. Nothing is placed on the map, so this is also
+  // the AC3 path: a run saved with no route at all.
+  await dialog.getByRole('button', { name: /^Next$/ }).click();
   await dialog.getByRole('button', { name: /Save run/ }).click();
   await expect(dialog).toHaveCount(0);
 

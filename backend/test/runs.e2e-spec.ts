@@ -85,6 +85,9 @@ describe('Runs API (e2e)', () => {
       date: '2026-07-14',
       effort: 'Medium',
       note: '',
+      // Present and null on every run: this one was saved without opening the
+      // Route step (RUN-54 AC3).
+      route: null,
     });
   });
 
@@ -266,6 +269,88 @@ describe('Runs API (e2e)', () => {
       .post('/api/runs')
       .set(auth)
       .send({ ...validRun(), date: '2026-02-31' })
+      .expect(400);
+  });
+
+  // The optional route (RUN-54). Only a booted app on the real database proves
+  // these three: JSONB survives a round-trip as the same list of points, the
+  // server stamps the source rather than trusting the client, and the
+  // all-or-none CHECK is actually on the table.
+  it('round-trips a drawn route and clears it on an explicit null (AC4, AC5)', async () => {
+    const route = {
+      polyline: 'wap_IsyspAsFgc@cG{h@qFe{A',
+      waypoints: [
+        { lat: 52.516275, lng: 13.377704 },
+        { lat: 52.518611, lng: 13.388889 },
+        { lat: 52.520008, lng: 13.404954 },
+      ],
+    };
+
+    const created = await request(app.getHttpServer())
+      .post('/api/runs')
+      .set(auth)
+      .send({ ...validRun(), route })
+      .expect(201);
+
+    expect(runBody(created).route).toEqual({
+      ...route,
+      // Server-assigned: the client never sends a source, and the whitelist
+      // pipe rejects it if it tries (see below).
+      source: 'openrouteservice',
+    });
+
+    // The stored row reads back identically, points in the same order - the
+    // ordering is what tells Start from Finish.
+    const reread = await request(app.getHttpServer())
+      .get(`/api/runs/${runBody(created).id}`)
+      .set(auth)
+      .expect(200);
+    expect(runBody(reread).route).toEqual(runBody(created).route);
+
+    // A PATCH that says nothing about the route keeps it: an edit that never
+    // opened the map must not wipe it.
+    const renamed = await request(app.getHttpServer())
+      .patch(`/api/runs/${runBody(created).id}`)
+      .set(auth)
+      .send({ routeName: 'Evening tempo' })
+      .expect(200);
+    expect(runBody(renamed).route).toEqual(runBody(created).route);
+
+    // An explicit null removes it - the Clear button's other half.
+    const cleared = await request(app.getHttpServer())
+      .patch(`/api/runs/${runBody(created).id}`)
+      .set(auth)
+      .send({ route: null })
+      .expect(200);
+    expect(runBody(cleared).route).toBeNull();
+  });
+
+  it('rejects a route the picker could not have produced (AC4)', async () => {
+    const server = app.getHttpServer();
+    // One point is not a route.
+    await request(server)
+      .post('/api/runs')
+      .set(auth)
+      .send({
+        ...validRun(),
+        route: { polyline: 'abc', waypoints: [{ lat: 52, lng: 13 }] },
+      })
+      .expect(400);
+    // A client-asserted provenance is not a thing: source is the server's.
+    await request(server)
+      .post('/api/runs')
+      .set(auth)
+      .send({
+        ...validRun(),
+        route: {
+          polyline: 'abc',
+          waypoints: [
+            { lat: 52, lng: 13 },
+            { lat: 53, lng: 14 },
+          ],
+          source: 'gps',
+        },
+      })
       .expect(400);
   });
 
