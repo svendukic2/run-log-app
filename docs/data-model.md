@@ -21,7 +21,7 @@ onboarding-era entities). What remains in localStorage is device-scoped by natur
 | Profile (incl. level + default goal) | `frontend/src/lib/onboarding.ts` | PostgreSQL via `/api/profile` (RUN-50) | RUN-8 |
 | Goal | `frontend/src/lib/goal.ts` | PostgreSQL via `/api/goal` (RUN-50) | RUN-10 |
 | Week targets | `frontend/src/lib/goal.ts` | PostgreSQL via `/api/week-targets` (RUN-50) | RUN-17/33 |
-| Device session | `frontend/src/lib/session.ts` | `runlog.session` (localStorage) | RUN-48 |
+| Session (JWT + email) | `frontend/src/lib/session.ts` | `runlog.session` (localStorage) | RUN-48, reshaped by RUN-58 |
 | Onboarding wizard draft | `frontend/src/lib/onboarding.ts` | `runlog.onboardingDraft` (localStorage) | RUN-50 |
 | Plan stamp | `frontend/src/lib/plan.ts` | `runlog.plan` (localStorage) | RUN-32 |
 
@@ -42,26 +42,25 @@ it rather than inventing another:
 - **Same-origin calls, proxied.** The browser calls `/api/*` on the frontend's own
   origin; `next.config.ts` rewrites that to the backend server-side. `BACKEND_URL`
   stays a server-only variable and CORS never enters the picture.
-- **The device is the account, minted lazily.** The design draws no login ("No password
-  needed - your runs stay on this device", WEL-4) while the API requires a Bearer token
-  (RUN-56/57). `frontend/src/lib/session.ts` reconciles the two: a synthetic per-device
-  identity (`runner-<random>@device.runlog` + random secret, stored in `runlog.session`)
-  is created only when something real needs the server - never on a page view, so
-  crawlers and incognito visits create no accounts. A device with no session and no v1
-  data reads as an empty log without any network. The stored secret is a deliberate,
-  documented trade-off (see the header of `session.ts`); it dies with RUN-50. The
-  in-memory session is the source of truth and localStorage only persists it, so
-  blocked storage degrades durability, never identity. `apiFetch()` attaches the token,
-  times out hung requests (8s), and retries once on 401 with a silent re-login.
-- **One-time v1 import.** Data still under the v1 localStorage keys is imported into
-  the device account on first load, then the keys are deleted. Runs (RUN-48): POSTed
-  oldest first, resumable after transient failures; rows the stricter API rejects are
-  dropped and counted, never allowed to wedge the app; the user sees a dismissible
-  notice with the count. Onboarding data (RUN-50): a completed v1 onboarding becomes
-  the account's goal + profile (level capitalized, the old default-goal km folded into
-  `defaultWeeklyGoalKm`, an applied goal for the running week PUT as its week target);
-  a half-finished or invalid one moves into the wizard draft instead, so the visitor
-  finishes prefilled rather than the import wedging on a 400.
+- **Real sign in (RUN-58).** Identity comes from the Sign in / Sign up screens; the v1
+  "device is the account" bridge (a silently minted `runner-<random>@device.runlog`
+  identity with a stored secret) is gone. `runlog.session` now stores ONLY the JWT and
+  the account email - never a password. Every guarded screen sits behind
+  `RequireSession` (signed out lands on `/signin`); the setup steps run AFTER signup,
+  which also seeds the wizard draft with the names/email it collected. `apiFetch()`
+  attaches the token and times out hung requests (8s); a 401 signs the user out cleanly
+  and lands on Sign in - there is no refresh endpoint to retry against (that follow-up
+  is RUN-74). A signed-out visitor reads as empty data without any network. With
+  blocked storage (private browsing) the session cannot survive the post-auth page
+  load, so the Sign in / Sign up screens refuse to navigate and show an inline error
+  instead of a silent bounce-back loop.
+- **One-time v1 runs import.** Runs still under the v1 `runlog.runs` key are imported
+  into the SIGNED-IN account on first load, then the key is deleted: POSTed oldest
+  first, resumable after transient failures; rows the stricter API rejects are dropped
+  and counted, never allowed to wedge the app; the user sees a dismissible notice with
+  the count. The v1 onboarding-data import (RUN-50) died with RUN-58: a v1 device's
+  minted account has no password its user could ever type, so there is no account to
+  import into.
 - **Reads: cache + screen-level gate.** Stores keep an in-memory cache behind
   `useSyncExternalStore`; hooks stay synchronous (`useRuns(): Run[]`,
   `useProfile(): ProfileRecord | null`, `useGoalTarget(iso): number`). Each screen
@@ -69,7 +68,8 @@ it rather than inventing another:
   three stores: blank for the first 250 ms (no spinner flash on the fast local API),
   then an honest spinner, then either content or one error card. Retryable failures
   (network, timeout, 5xx) get "Try again" that reloads only the failed stores;
-  terminal ones (the device identity cannot authenticate) explain the way out instead.
+  terminal ones (an expired session, which also signs the user out) explain the way
+  out instead.
   `useRuns()` throws in development when read while loading outside a boundary, so a
   forgotten gate cannot ship a false empty state; `useProfile()` is deliberately soft
   (null while loading) because the sidebar footer legitimately reads it outside any

@@ -1,6 +1,7 @@
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { seedProfile } from '@/test/runsApiMock';
+import { seedProfile, signInRedirectCount } from '@/test/runsApiMock';
+import { hasStoredSession } from '@/lib/session';
 import Sidebar from './Sidebar';
 
 // usePathname drives the active state; mock it per test.
@@ -116,6 +117,17 @@ describe('Sidebar', () => {
       renderSidebar();
 
       expect(screen.queryByTestId('profile-footer')).not.toBeInTheDocument();
+    });
+
+    it('signs out from the footer: session cleared, redirected to Sign in (RUN-58 AC5)', async () => {
+      seedProfile({ firstName: 'Marko', lastName: 'Kovačić', email: 'marko@email.com' });
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(screen.getByRole('button', { name: 'Sign out' }));
+
+      expect(hasStoredSession()).toBe(false);
+      expect(signInRedirectCount()).toBe(1);
     });
   });
 

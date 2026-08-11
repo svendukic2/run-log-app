@@ -100,9 +100,10 @@ is an **async Server Component**: it fetches the backend at request time on the 
 with `cache: 'no-store'`, no CORS involved. App data (runs, since RUN-48) goes the other
 way: **client-side calls to same-origin `/api/*`**, which `next.config.ts` rewrites to
 the backend server-side, so `BACKEND_URL` never reaches the browser bundle and CORS
-still never enters the picture. Those calls carry a Bearer token minted silently by
-`frontend/src/lib/session.ts` (the device-account bridge between the no-login design and
-the authenticated API; see `docs/data-model.md`, "The frontend API pattern"). CORS stays
+still never enters the picture. Those calls carry a Bearer token from the
+Sign in / Sign up screens (RUN-58, `frontend/src/lib/session.ts`): `runlog.session`
+stores token + email, a 401 signs the user out cleanly (no refresh endpoint yet,
+RUN-74), and every guarded screen sits behind `RequireSession`. CORS stays
 enabled on the backend (`main.ts`, origin `FRONTEND_URL`) for any genuinely cross-origin
 fetch.
 

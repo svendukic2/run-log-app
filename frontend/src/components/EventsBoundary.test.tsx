@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { holdEventsLoading, makeEventsLoadFail, restoreEventsApi } from '@/test/eventsApiMock';
-import { breakRunsAuth } from '@/test/runsApiMock';
+import { expireRunsTokens } from '@/test/runsApiMock';
 import EventsBoundary from './EventsBoundary';
 
 function renderBoundary() {
@@ -44,17 +44,18 @@ describe('EventsBoundary (RUN-68, the RUN-48 screen gate for events)', () => {
     expect(await screen.findByTestId('events-child')).toBeInTheDocument();
   });
 
-  it('drops the retry button for terminal identity failures', async () => {
-    // A device whose identity cannot authenticate (login 401, signup 409:
-    // the session layer's terminal case) must get the way-out copy, not a
-    // Try again that fails identically forever.
-    breakRunsAuth();
-    makeEventsLoadFail(500); // re-arms the load; auth fails before the GET
+  it('drops the retry button for terminal session failures', async () => {
+    // An expired token 401s the load and signs the user out (RUN-58 AC6:
+    // there is no refresh endpoint). Anything rendered before the sign-in
+    // navigation lands must not offer a Try again that fails identically
+    // forever.
+    expireRunsTokens();
+    makeEventsLoadFail(500); // re-arms the load; the 401 fires before the GET
 
     renderBoundary();
 
     const card = await screen.findByRole('alert');
-    expect(card).toHaveTextContent(/can't sign in/i);
+    expect(card).toHaveTextContent('Your session has expired. Sign in again.');
     expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
   });
 });

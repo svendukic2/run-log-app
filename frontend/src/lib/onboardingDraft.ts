@@ -1,15 +1,14 @@
 'use client';
 
-// The onboarding wizard's local state: the half-finished answers of a
-// visitor still walking the setup steps, plus the reader for the v1
-// runlog.profile key. A LEAF module on purpose - session.ts needs the
-// draft (signup wants real names when it has them, WEL-5) and sits below
-// the profile store in the import graph, so the draft lives where both can
-// import it directly. No mutable registration, no import-order dependence.
+// The onboarding wizard's local state: the answers of a user still walking
+// the setup steps. A LEAF module on purpose, kept below the stores in the
+// import graph so forms and stores alike can read the draft directly.
+// Seeded by Sign up (names/email, RUN-58), grown by the goal step, consumed
+// by "Finish setup" (onboarding.ts#finishOnboarding), which turns it into
+// the account's records and deletes it.
 //
-// The draft is local-only BY DESIGN: no server account exists until
-// "Finish setup" (onboarding.ts#finishOnboarding), so an abandoned wizard
-// costs nothing server-side. It dies the moment the finish lands.
+// The draft is local-only BY DESIGN: abandoning the wizard costs nothing
+// server-side beyond the signup-created User row.
 import { type Goal } from './goalMath';
 
 // The display subset the forms and the avatar work with; the stored record
@@ -85,33 +84,6 @@ export function clearOnboardingDraft(): void {
   } catch {
     // Nothing to do: the memory copy is gone and the stale key reads as a
     // draft only until the profile exists, which now it does.
-  }
-}
-
-// The v1 profile key, read here because it is the signup-names fallback for
-// v1 devices whose import has not run yet (session.ts) as well as the
-// import's own input (onboarding.ts). Trimmed; wrong shapes read as absent.
-const LEGACY_PROFILE_KEY = 'runlog.profile';
-
-export function readLegacyProfile(): Profile | null {
-  try {
-    const raw = window.localStorage.getItem(LEGACY_PROFILE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Profile;
-    if (
-      typeof parsed?.firstName !== 'string' ||
-      typeof parsed.lastName !== 'string' ||
-      typeof parsed.email !== 'string'
-    ) {
-      return null;
-    }
-    return {
-      firstName: parsed.firstName.trim(),
-      lastName: parsed.lastName.trim(),
-      email: parsed.email.trim(),
-    };
-  } catch {
-    return null;
   }
 }
 

@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import Badge from '@/components/Badge';
 import Brand from '@/components/Brand';
@@ -112,17 +111,6 @@ export default function RunningLevelPage() {
           {finishError && (
             <p role="alert" className="mt-[18px] w-full text-[13.5px] text-accent-pressed">
               {finishError}
-              {/* "Start from the beginning" needs a road there: this screen's
-                  only other exit is Back, which stops one step short of the
-                  form that can fix missing first-step details. */}
-              {finishError.includes('first step') && (
-                <>
-                  {' '}
-                  <Link href={ROUTES.welcome} className="font-semibold underline underline-offset-2">
-                    Go to the first step
-                  </Link>
-                </>
-              )}
             </p>
           )}
           <div className="mt-[30px] flex w-full items-center justify-between">

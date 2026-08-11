@@ -2,6 +2,8 @@
 // sidebar, the landing redirect and the tests cannot drift apart.
 export const ROUTES = {
   welcome: '/',
+  signIn: '/signin',
+  signUp: '/signup',
   setupGoal: '/setup/goal',
   setupLevel: '/setup/level',
   dashboard: '/dashboard',
