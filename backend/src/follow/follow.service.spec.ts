@@ -4,6 +4,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { FollowService } from './follow.service';
 
@@ -35,6 +36,7 @@ describe('FollowService', () => {
   const prisma: {
     follow: Record<string, jest.Mock>;
     user: Record<string, jest.Mock>;
+    $transaction: jest.Mock;
   } = {
     follow: {
       create: jest.fn(),
@@ -45,6 +47,13 @@ describe('FollowService', () => {
     user: {
       findUnique: jest.fn(),
     },
+    // The interactive-transaction mock hands the callback the same mock
+    // client, so tests assert on prisma.follow.create as before; a thrown
+    // error escapes exactly like a real aborted transaction.
+    $transaction: jest.fn(),
+  };
+  const notifications = {
+    recordNewFollower: jest.fn(),
   };
 
   // What Prisma throws on constraint violations; the service duck-types on
@@ -59,14 +68,21 @@ describe('FollowService', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    prisma.$transaction.mockImplementation(
+      (callback: (tx: unknown) => Promise<unknown>) => callback(prisma),
+    );
     const moduleRef = await Test.createTestingModule({
-      providers: [FollowService, { provide: PrismaService, useValue: prisma }],
+      providers: [
+        FollowService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: NotificationsService, useValue: notifications },
+      ],
     }).compile();
     service = moduleRef.get(FollowService);
   });
 
   describe('follow', () => {
-    it('creates the edge with the caller as follower', async () => {
+    it('creates the edge with the caller as follower and notifies the followee (RUN-65 AC1)', async () => {
       prisma.follow.create.mockResolvedValue({});
 
       await expect(service.follow(USER_ID, TARGET_ID)).resolves.toEqual({
@@ -75,6 +91,12 @@ describe('FollowService', () => {
       expect(prisma.follow.create).toHaveBeenCalledWith({
         data: { followerId: USER_ID, followeeId: TARGET_ID },
       });
+      // The notification rides the same transaction client as the edge.
+      expect(notifications.recordNewFollower).toHaveBeenCalledWith(
+        prisma,
+        TARGET_ID,
+        USER_ID,
+      );
     });
 
     it('rejects following yourself with a 400 before touching the database (AC1)', async () => {
@@ -90,6 +112,9 @@ describe('FollowService', () => {
       await expect(service.follow(USER_ID, TARGET_ID)).resolves.toEqual({
         following: true,
       });
+      // The aborted transaction never reached the notification write: a
+      // repeat follow must not re-notify (RUN-65 AC1, "one notification").
+      expect(notifications.recordNewFollower).not.toHaveBeenCalled();
     });
 
     it('404s a follow of a nonexistent user straight from the named followee constraint (P2003)', async () => {

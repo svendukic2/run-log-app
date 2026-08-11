@@ -12,6 +12,7 @@ import { __resetGoalStoreForTests, todayIso, type Goal } from '@/lib/goal';
 import { __resetProfileStoreForTests } from '@/lib/onboarding';
 import { __resetRunsStoreForTests, startOfWeek, type Run } from '@/lib/runs';
 import { __resetSessionForTests } from '@/lib/session';
+import { handleEventsRequest } from './eventsApiMock';
 
 let db: Run[] = [];
 let idCounter = 0;
@@ -233,6 +234,17 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
     };
     db.push(run);
     return Promise.resolve(jsonResponse(201, run));
+  }
+
+  // The events API (RUN-68) lives in its own module but shares this fetch
+  // mock and its Bearer handshake, so the session layer is exercised for
+  // both stores the same way.
+  if (url.startsWith('/api/events')) {
+    if (!authorized(init)) {
+      return Promise.resolve(jsonResponse(401, { message: 'Missing bearer token' }));
+    }
+    const handled = handleEventsRequest(url, method, init);
+    if (handled) return handled;
   }
 
   const byId = url.match(/^\/api\/runs\/([^/]+)$/);

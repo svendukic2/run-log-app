@@ -5,7 +5,8 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { toDbDate, toIsoDate } from '../common/dates';
-import { isPrismaError } from '../prisma/prisma-errors';
+import { NotificationsService } from '../notifications/notifications.service';
+import { isPrismaError, prismaConstraint } from '../prisma/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
 import type { Run as RunRow } from '../generated/prisma/client';
 import {
@@ -31,6 +32,14 @@ export interface RunResponse {
   note: string;
 }
 
+// The two FK constraints a run-create transaction can violate (P2003) since
+// the RUN-65 fan-out joined it: the run's own owner FK and the notification
+// rows' recipient FK. Postgres names the violated constraint in the error
+// meta, which is what tells a transaction writing two FK-carrying tables
+// WHICH one broke - the same technique follow.service uses.
+const RUN_OWNER_FKEY = 'Run_userId_fkey';
+const NOTIFICATION_RECIPIENT_FKEY = 'Notification_userId_fkey';
+
 // The column is plain TEXT until RUN-73 adds a real enum, so a row edited
 // outside the API (psql, a seed script) can hold anything. A loud 500 that
 // names the row beats a silently wrong Effort type reaching the frontend's
@@ -53,7 +62,10 @@ function toEffort(rowId: string, value: string): Effort {
 // {id, userId} atomically; delete uses deleteMany for the same shape.
 @Injectable()
 export class RunsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   private toResponse(row: RunRow): RunResponse {
     return {
@@ -87,31 +99,91 @@ export class RunsService {
     return this.toResponse(row);
   }
 
-  async create(userId: string, dto: CreateRunDto): Promise<RunResponse> {
+  create(userId: string, dto: CreateRunDto): Promise<RunResponse> {
+    return this.createRun(userId, dto, /* retryOnFanOutRace */ true);
+  }
+
+  // One attempt of the create transaction, plus the error mapping that needs
+  // to know whether a retry is still available. The fan-out reads follower
+  // ids without locks, so a follower deleting their account mid-transaction
+  // can break the notification FK; the same cascade that deleted them also
+  // removed their Follow edge, so one retry re-reads a clean list. A second
+  // consecutive failure escapes as the 500 it is.
+  private async createRun(
+    userId: string,
+    dto: CreateRunDto,
+    retryOnFanOutRace: boolean,
+  ): Promise<RunResponse> {
     try {
-      const row = await this.prisma.run.create({
-        data: {
-          userId,
-          routeName: dto.routeName,
-          distanceKm: dto.distanceKm,
-          durationSeconds: dto.durationSeconds,
-          date: toDbDate(dto.date),
-          // The Add run modal preselects Medium (ADD-8) and treats the note
-          // as optional-empty (data-model: optional text is ''), so the API
-          // does the same for payloads that omit them. Omit means absent:
-          // explicit nulls were already rejected by the DTO.
-          effort: dto.effort ?? DEFAULT_EFFORT,
-          note: dto.note ?? '',
+      // Run and fan-out commit together (RUN-65 AC2): every follower gets
+      // exactly one 'followed-ran' per run that actually exists, and a
+      // failed request the user retries cannot double-notify because the
+      // first attempt's run never committed either.
+      const row = await this.prisma.$transaction(
+        async (tx) => {
+          const created = await tx.run.create({
+            data: {
+              userId,
+              routeName: dto.routeName,
+              distanceKm: dto.distanceKm,
+              durationSeconds: dto.durationSeconds,
+              date: toDbDate(dto.date),
+              // The Add run modal preselects Medium (ADD-8) and treats the note
+              // as optional-empty (data-model: optional text is ''), so the API
+              // does the same for payloads that omit them. Omit means absent:
+              // explicit nulls were already rejected by the DTO.
+              effort: dto.effort ?? DEFAULT_EFFORT,
+              note: dto.note ?? '',
+            },
+          });
+          await this.notifications.fanOutRunLogged(tx, userId, {
+            id: created.id,
+            routeName: created.routeName,
+            distanceKm: created.distanceKm,
+            durationSeconds: created.durationSeconds,
+            date: toIsoDate(created.date),
+          });
+          return created;
         },
-      });
+        {
+          // The fan-out makes this window proportional to follower count
+          // (one createMany per FAN_OUT_CHUNK); Prisma's 5s default was
+          // sized for single-row writes. 15s buys enough headroom for any
+          // follower count this app will see; if real fan-outs ever
+          // approach it, the upgrade is an outbox processed outside the
+          // request, not a bigger number here.
+          timeout: 15_000,
+        },
+      );
       return this.toResponse(row);
     } catch (error) {
-      // P2003 = the userId foreign key has no User row: the token verified
-      // (signed, unexpired) but its account was deleted mid-session. The
-      // caller's fix is signing in again, so answer like any other dead
-      // session instead of a 500.
       if (isPrismaError(error, 'P2003')) {
-        throw new UnauthorizedException('Invalid or expired token');
+        const constraint = prismaConstraint(error);
+        // The run's own owner FK: the token verified (signed, unexpired)
+        // but its account was deleted mid-session. The caller's fix is
+        // signing in again, so answer like any other dead session.
+        if (constraint === RUN_OWNER_FKEY) {
+          throw new UnauthorizedException('Invalid or expired token');
+        }
+        // A follower vanished between the fan-out's read and its insert:
+        // the runner's session is fine, so a 401 here would wrongly log
+        // out a valid user. Retry once against the now-clean edge list.
+        if (constraint === NOTIFICATION_RECIPIENT_FKEY && retryOnFanOutRace) {
+          return this.createRun(userId, dto, false);
+        }
+        // No constraint name in the meta (other drivers put nothing or an
+        // array there): decide like follow.service does, caller-existence
+        // first - re-authenticating comes before retrying.
+        if (constraint === undefined) {
+          const caller = await this.prisma.user.findUnique({
+            where: { id: userId },
+            select: { id: true },
+          });
+          if (!caller) {
+            throw new UnauthorizedException('Invalid or expired token');
+          }
+          if (retryOnFanOutRace) return this.createRun(userId, dto, false);
+        }
       }
       throw error;
     }

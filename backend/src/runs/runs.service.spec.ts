@@ -1,5 +1,6 @@
 import { NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RunsService } from './runs.service';
 
@@ -24,7 +25,11 @@ function row(overrides: Partial<Record<string, unknown>> = {}) {
 
 describe('RunsService', () => {
   let service: RunsService;
-  const prisma: { run: Record<string, jest.Mock> } = {
+  const prisma: {
+    run: Record<string, jest.Mock>;
+    user: Record<string, jest.Mock>;
+    $transaction: jest.Mock;
+  } = {
     run: {
       findMany: jest.fn(),
       findFirst: jest.fn(),
@@ -32,18 +37,39 @@ describe('RunsService', () => {
       update: jest.fn(),
       deleteMany: jest.fn(),
     },
+    user: {
+      findUnique: jest.fn(),
+    },
+    // The interactive-transaction mock hands the callback the same mock
+    // client, so tests assert on prisma.run.create as before; a thrown
+    // error escapes exactly like a real aborted transaction.
+    $transaction: jest.fn(),
+  };
+  const notifications = {
+    fanOutRunLogged: jest.fn(),
   };
 
-  // What Prisma throws when a mutation's unique where matches nothing. The
-  // service duck-types on the code, so the mock only needs that shape.
-  function prismaError(code: string) {
-    return Object.assign(new Error(`prisma ${code}`), { code });
+  // What Prisma throws on constraint violations; the service duck-types on
+  // the code and the optional meta.constraint, so the mock only needs that
+  // shape.
+  function prismaError(code: string, constraint?: string) {
+    return Object.assign(new Error(`prisma ${code}`), {
+      code,
+      ...(constraint && { meta: { constraint } }),
+    });
   }
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    prisma.$transaction.mockImplementation(
+      (callback: (tx: unknown) => Promise<unknown>) => callback(prisma),
+    );
     const moduleRef = await Test.createTestingModule({
-      providers: [RunsService, { provide: PrismaService, useValue: prisma }],
+      providers: [
+        RunsService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: NotificationsService, useValue: notifications },
+      ],
     }).compile();
     service = moduleRef.get(RunsService);
   });
@@ -127,6 +153,14 @@ describe('RunsService', () => {
       }),
     });
     expect(created.date).toBe('2026-08-03');
+    // The fan-out rides the same transaction client with the stored run's
+    // headline stats (RUN-65 AC2).
+    expect(notifications.fanOutRunLogged).toHaveBeenCalledWith(
+      prisma,
+      USER_ID,
+
+      expect.objectContaining({ id: 'run-2', date: '2026-08-03' }),
+    );
   });
 
   it('defaults effort to Medium and note to empty when omitted (ADD-8)', async () => {
@@ -148,8 +182,10 @@ describe('RunsService', () => {
     });
   });
 
-  it('answers 401, not 500, when the tokens user row is gone (P2003 on create)', async () => {
-    prisma.run.create.mockRejectedValue(prismaError('P2003'));
+  it('answers 401 straight from the named owner constraint: the callers account is gone', async () => {
+    prisma.run.create.mockRejectedValue(
+      prismaError('P2003', 'Run_userId_fkey'),
+    );
 
     await expect(
       service.create('deleted-user', {
@@ -159,6 +195,83 @@ describe('RunsService', () => {
         date: '2026-08-03',
       }),
     ).rejects.toThrow(UnauthorizedException);
+    // The constraint name told the whole story: no second query, no retry.
+    expect(prisma.user.findUnique).not.toHaveBeenCalled();
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries once when a follower vanished mid-fan-out instead of answering 401', async () => {
+    // First attempt: the notification insert hits the recipient FK because
+    // a follower's account was deleted between the read and the insert.
+    // Second attempt: the cascade removed their edge, so it succeeds.
+    prisma.run.create
+      .mockRejectedValueOnce(prismaError('P2003', 'Notification_userId_fkey'))
+      .mockImplementationOnce(({ data }: { data: Record<string, unknown> }) =>
+        Promise.resolve(row({ ...data, id: 'run-4' })),
+      );
+
+    const created = await service.create(USER_ID, {
+      routeName: 'Raced run',
+      distanceKm: 5,
+      durationSeconds: 1500,
+      date: '2026-08-03',
+    });
+
+    expect(created.id).toBe('run-4');
+    expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+  });
+
+  it('gives up after one fan-out retry and lets the error escape', async () => {
+    prisma.run.create.mockRejectedValue(
+      prismaError('P2003', 'Notification_userId_fkey'),
+    );
+
+    await expect(
+      service.create(USER_ID, {
+        routeName: 'Cursed run',
+        distanceKm: 5,
+        durationSeconds: 1500,
+        date: '2026-08-03',
+      }),
+    ).rejects.toThrow('prisma P2003');
+    expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+  });
+
+  it('falls back to a caller-existence check when P2003 names no constraint: dead session wins', async () => {
+    prisma.run.create.mockRejectedValue(prismaError('P2003'));
+    prisma.user.findUnique.mockResolvedValue(null);
+
+    await expect(
+      service.create('deleted-user', {
+        routeName: 'Ghost run',
+        distanceKm: 5,
+        durationSeconds: 1500,
+        date: '2026-08-03',
+      }),
+    ).rejects.toThrow(UnauthorizedException);
+    expect(prisma.user.findUnique).toHaveBeenCalledWith({
+      where: { id: 'deleted-user' },
+      select: { id: true },
+    });
+  });
+
+  it('retries the ambiguous no-constraint P2003 when the caller still exists', async () => {
+    prisma.run.create
+      .mockRejectedValueOnce(prismaError('P2003'))
+      .mockImplementationOnce(({ data }: { data: Record<string, unknown> }) =>
+        Promise.resolve(row({ ...data, id: 'run-5' })),
+      );
+    prisma.user.findUnique.mockResolvedValue({ id: USER_ID });
+
+    const created = await service.create(USER_ID, {
+      routeName: 'Raced run',
+      distanceKm: 5,
+      durationSeconds: 1500,
+      date: '2026-08-03',
+    });
+
+    expect(created.id).toBe('run-5');
+    expect(prisma.$transaction).toHaveBeenCalledTimes(2);
   });
 
   it('updates atomically with the owner inside the unique WHERE', async () => {

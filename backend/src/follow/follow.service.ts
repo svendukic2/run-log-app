@@ -4,12 +4,14 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
+import {
+  newestFirstOrder,
+  PaginationQueryDto,
+  resolvePagination,
+} from '../common/pagination-query.dto';
+import { NotificationsService } from '../notifications/notifications.service';
 import { isPrismaError, prismaConstraint } from '../prisma/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
-import {
-  DEFAULT_PAGE_SIZE,
-  PaginationQueryDto,
-} from './dto/pagination-query.dto';
 
 // What POST /users/:id/follow answers: the state the call guaranteed, not
 // whether this particular request inserted the row (idempotency makes that
@@ -62,7 +64,10 @@ const FOLLOWEE_FKEY = 'Follow_followeeId_fkey';
 // so no request can write or read an edge on someone else's behalf.
 @Injectable()
 export class FollowService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   // Ensures the caller follows the target. Idempotent by way of the unique
   // (followerId, followeeId) pair: the second POST hits P2002 and reports
@@ -73,8 +78,15 @@ export class FollowService {
     }
 
     try {
-      await this.prisma.follow.create({
-        data: { followerId: userId, followeeId: targetId },
+      // Edge and notification commit together (RUN-65 AC1): a repeat POST
+      // aborts on P2002 before the notification write, so the followee gets
+      // exactly one 'new-follower' per edge, and a failed notification never
+      // leaves a follow that silently notified nobody.
+      await this.prisma.$transaction(async (tx) => {
+        await tx.follow.create({
+          data: { followerId: userId, followeeId: targetId },
+        });
+        await this.notifications.recordNewFollower(tx, targetId, userId);
       });
     } catch (error) {
       if (isPrismaError(error, 'P2002')) {
@@ -198,18 +210,15 @@ export class FollowService {
     };
   }
 
-  // One page of the users on the other end of my edges, newest edge first.
-  // The id tiebreak makes the order deterministic within one snapshot of
-  // the data; offset pages can still shift when edges are created or
-  // removed between two requests (cursor pagination is the upgrade if that
-  // ever matters to the frontend).
+  // One page of the users on the other end of my edges, newest edge first
+  // (newestFirstOrder holds the determinism reasoning).
   private async pageOfEdges(
     userId: string,
     direction: ListDirection,
     skip: number,
     take: number,
   ): Promise<Array<{ id: string; firstName: string; lastName: string }>> {
-    const orderBy = [{ createdAt: 'desc' as const }, { id: 'desc' as const }];
+    const orderBy = newestFirstOrder();
     const select = { id: true, firstName: true, lastName: true };
 
     // The two branches must stay exact mirrors: same order, same select,
@@ -257,14 +266,4 @@ export class FollowService {
     });
     return new Set(edges.map((edge) => edge.followerId));
   }
-}
-
-function resolvePagination(query: PaginationQueryDto): {
-  page: number;
-  pageSize: number;
-  skip: number;
-} {
-  const page = query.page ?? 1;
-  const pageSize = query.pageSize ?? DEFAULT_PAGE_SIZE;
-  return { page, pageSize, skip: (page - 1) * pageSize };
 }
