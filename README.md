@@ -170,6 +170,11 @@ cd frontend && npm run dev          # http://localhost:4200
 Open <http://localhost:4200>. You should see "Frontend + Backend connected" with the
 message fetched from the API.
 
+Since RUN-48 the app screens (dashboard, runs, coach) read and write runs through the
+backend: the browser calls same-origin `/api/*`, which Next.js proxies to :3000. Both
+the backend and the database therefore need to be running for those screens to show
+data; if they are not, the pages show a retry card instead of your runs.
+
 ### Verify the backend directly
 
 ```bash

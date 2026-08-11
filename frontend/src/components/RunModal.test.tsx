@@ -1,7 +1,8 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import RunModal from './RunModal';
-import { addRun, getRuns, todayIso, type Run } from '@/lib/runs';
+import { getRuns, todayIso, type Run } from '@/lib/runs';
+import { failRunsApi, restoreRunsApi, seedRuns } from '@/test/runsApiMock';
 
 function renderModal(run?: Run) {
   const onClose = jest.fn();
@@ -30,7 +31,8 @@ const save = (user: ReturnType<typeof userEvent.setup>) =>
 
 describe('Add run modal (RUN-23)', () => {
   beforeEach(() => {
-    window.localStorage.clear();
+    // jest.setup installs a fresh runs API mock with an empty store before
+    // every test; only the scroll lock needs resetting by hand.
     document.body.style.overflow = '';
   });
 
@@ -66,6 +68,9 @@ describe('Add run modal (RUN-23)', () => {
     setDate('2026-07-14');
     await save(user);
 
+    // The save round-trips to the API since RUN-48, so the close arrives once
+    // the write lands.
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(getRuns()).toEqual([
       {
         id: expect.any(String),
@@ -144,6 +149,7 @@ describe('Add run modal (RUN-23)', () => {
     await fillValidRun(user, { duration });
     await save(user);
 
+    await waitFor(() => expect(getRuns()).toHaveLength(1));
     const [run] = getRuns();
     expect(run.durationSeconds).toBe(seconds);
     // Pace is computed from distance and duration, never collected.
@@ -156,7 +162,37 @@ describe('Add run modal (RUN-23)', () => {
     await fillValidRun(user, { date: '2026-07-02' });
     await save(user);
 
+    await waitFor(() => expect(getRuns()).toHaveLength(1));
     expect(getRuns()[0].date).toBe('2026-07-02');
+  });
+
+  it('keeps the modal open with the failure inline, and the retry saves (RUN-48)', async () => {
+    const { user, onClose } = renderModal();
+    await fillValidRun(user);
+    failRunsApi('POST');
+
+    await save(user);
+
+    // The failure is announced, nothing was written, and everything typed is
+    // still there: closing would silently discard a run the user believes is
+    // saved.
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Saving the run failed (500).');
+    expect(screen.getByRole('dialog', { name: 'Add run' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Route name')).toHaveValue('Evening tempo');
+    expect(screen.getByLabelText('Distance (km)')).toHaveValue('8.2');
+    expect(screen.getByLabelText('Duration')).toHaveValue('42:15');
+    expect(getRuns()).toEqual([]);
+    expect(onClose).not.toHaveBeenCalled();
+
+    // The API comes back: the same click now saves and closes as normal.
+    restoreRunsApi();
+    await save(user);
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(getRuns()).toEqual([
+      expect.objectContaining({ routeName: 'Evening tempo', distanceKm: 8.2 }),
+    ]);
   });
 
   it('stacks the card, its paired fields and its buttons on a phone (responsive)', () => {
@@ -185,21 +221,25 @@ describe('Add run modal (RUN-23)', () => {
 
 describe('Edit run modal (RUN-28)', () => {
   beforeEach(() => {
-    window.localStorage.clear();
+    // jest.setup installs a fresh runs API mock with an empty store before
+    // every test; only the scroll lock needs resetting by hand.
     document.body.style.overflow = '';
   });
 
-  // The run the ticket's mock shows, stored first so edits have something to
-  // land on.
+  // The run the ticket's mock shows, seeded into the mock backend and the
+  // store cache before render so edits have something to land on.
   function seedRun(): Run {
-    return addRun({
-      routeName: 'Morning loop',
-      distanceKm: 8.2,
-      durationSeconds: 2535,
-      date: '2026-07-07',
-      effort: 'Medium',
-      note: 'Felt smooth, negative splits.',
-    });
+    const [run] = seedRuns([
+      {
+        routeName: 'Morning loop',
+        distanceKm: 8.2,
+        durationSeconds: 2535,
+        date: '2026-07-07',
+        effort: 'Medium',
+        note: 'Felt smooth, negative splits.',
+      },
+    ]);
+    return run;
   }
 
   const saveChanges = (user: ReturnType<typeof userEvent.setup>) =>
@@ -235,6 +275,9 @@ describe('Edit run modal (RUN-28)', () => {
     await user.click(screen.getByRole('radio', { name: 'Hard' }));
     await saveChanges(user);
 
+    // The save round-trips to the API since RUN-48, so the close arrives once
+    // the write lands.
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
     // Same id, updated values, still exactly one run: an edit, not a copy.
     expect(getRuns()).toEqual([
       {

@@ -1,10 +1,11 @@
 import { act, render, screen, within } from '@testing-library/react';
 import { renderToString } from 'react-dom/server';
 import { addRun, type Run } from '@/lib/runs';
+import { seedRuns } from '@/test/runsApiMock';
 import InsightCards from './InsightCards';
 
-function seedRun(overrides: Partial<Omit<Run, 'id'>> = {}): Run {
-  return addRun({
+function runDraft(overrides: Partial<Omit<Run, 'id'>> = {}): Omit<Run, 'id'> {
+  return {
     routeName: 'Morning loop',
     distanceKm: 10,
     durationSeconds: 3000,
@@ -12,6 +13,18 @@ function seedRun(overrides: Partial<Omit<Run, 'id'>> = {}): Run {
     effort: 'Medium',
     note: '',
     ...overrides,
+  };
+}
+
+// Before render only: seeds the backend and primes the store cache.
+function seedRun(overrides: Partial<Omit<Run, 'id'>> = {}): Run {
+  return seedRuns([runDraft(overrides)])[0];
+}
+
+// After render: goes through the real async store so mounted components see it.
+async function logRun(overrides: Partial<Omit<Run, 'id'>> = {}): Promise<void> {
+  await act(async () => {
+    await addRun(runDraft(overrides));
   });
 }
 
@@ -54,14 +67,12 @@ describe('Insight cards (RUN-34)', () => {
     expect(consistency.getByText('Below your planned cadence')).toBeInTheDocument();
   });
 
-  it('follows the runs store: a new run moves the numbers', () => {
+  it('follows the runs store: a new run moves the numbers', async () => {
     seedRun({ date: '2026-07-28' });
     render(<InsightCards />);
     expect(screen.getByText('10 km')).toBeInTheDocument();
 
-    act(() => {
-      seedRun({ date: '2026-07-21', distanceKm: 5.2, routeName: 'River trail' });
-    });
+    await logRun({ date: '2026-07-21', distanceKm: 5.2, routeName: 'River trail' });
 
     expect(screen.getByText('15.2 km')).toBeInTheDocument();
   });

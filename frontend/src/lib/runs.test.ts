@@ -1,5 +1,19 @@
+import React from 'react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import {
+  expireRunsTokens,
+  failRunsApi,
+  holdRunsLoading,
+  makeRunsLoadFail,
+  plantTestSession,
+  rejectRunsNamed,
+  restoreRunsApi,
+  seedLegacyRuns,
+} from '@/test/runsApiMock';
+import {
+  __resetRunsStoreForTests,
   addRun,
+  clearRunsNotice,
   daysLeftInWeek,
   deleteRun,
   emptyRunForm,
@@ -16,6 +30,7 @@ import {
   lastDays,
   lastWeekStarts,
   parseDuration,
+  reloadRuns,
   roundKm,
   runToForm,
   sortRuns,
@@ -23,10 +38,24 @@ import {
   toRunDraft,
   totalsForWeek,
   updateRun,
+  useRuns,
+  useRunsNotice,
+  useRunsStatus,
   validateRunForm,
   type Run,
   type RunFormValues,
 } from './runs';
+
+// A minimal component exposing the store status and notice, for the
+// load-path tests.
+function StatusProbe() {
+  return React.createElement(
+    React.Fragment,
+    null,
+    React.createElement('span', { 'data-testid': 'runs-status' }, useRunsStatus()),
+    React.createElement('span', { 'data-testid': 'runs-notice' }, useRunsNotice()),
+  );
+}
 
 function makeRun(overrides: Partial<Run> = {}): Run {
   return {
@@ -355,40 +384,84 @@ describe('emptyRunForm (AC1)', () => {
   });
 });
 
-describe('store', () => {
+describe('store (API-backed since RUN-48)', () => {
+  // jest.setup.ts installs a fresh in-memory /api/runs backend and primes
+  // the cache to ready-and-empty before every test. The device session is
+  // cleared too: the mock's issued-token set resets per test, so a session
+  // carried over from a previous test would 401 once and re-login, adding
+  // phantom calls to the exact counts asserted below.
   beforeEach(() => {
     window.localStorage.clear();
   });
 
-  it('starts empty and keeps what it is given', () => {
+  it('starts empty and keeps what it is given', async () => {
     expect(getRuns()).toEqual([]);
 
-    const saved = addRun(toRunDraft(makeForm()));
+    const saved = await addRun(toRunDraft(makeForm()));
 
     expect(getRuns()).toEqual([saved]);
     expect(saved.id).toEqual(expect.any(String));
   });
 
-  it('returns the newest run first whatever order they were entered in', () => {
-    addRun(toRunDraft(makeForm({ routeName: 'Older', date: '2026-07-01' })));
-    addRun(toRunDraft(makeForm({ routeName: 'Newer', date: '2026-07-20' })));
+  it('returns the newest run first whatever order they were entered in', async () => {
+    await addRun(toRunDraft(makeForm({ routeName: 'Older', date: '2026-07-01' })));
+    await addRun(toRunDraft(makeForm({ routeName: 'Newer', date: '2026-07-20' })));
 
     expect(getRuns().map((run) => run.routeName)).toEqual(['Newer', 'Older']);
   });
 
-  it('ignores stored junk rather than crashing the page', () => {
-    window.localStorage.setItem('runlog.runs', '{ not json');
-    expect(getRuns()).toEqual([]);
+  it('rejects with the failure and caches nothing when the save fails', async () => {
+    failRunsApi('POST');
 
-    window.localStorage.setItem('runlog.runs', JSON.stringify([{ id: 'x' }, makeRun()]));
-    expect(getRuns()).toEqual([makeRun()]);
+    await expect(addRun(toRunDraft(makeForm()))).rejects.toThrow(/Saving the run failed/);
+    expect(getRuns()).toEqual([]);
   });
 
-  it('updateRun replaces the run in place and keeps its id (RUN-28 AC2)', () => {
-    const other = addRun(toRunDraft(makeForm({ routeName: 'Other', date: '2026-07-01' })));
-    const target = addRun(toRunDraft(makeForm()));
+  it('lands in the error state when the initial load fails, and recovers on retry', async () => {
+    makeRunsLoadFail();
+    render(React.createElement(StatusProbe));
 
-    const updated = updateRun(
+    expect(await screen.findByTestId('runs-status')).toHaveTextContent('error');
+
+    restoreRunsApi();
+    act(() => {
+      reloadRuns();
+    });
+    expect(await screen.findByTestId('runs-status')).toHaveTextContent('ready');
+  });
+
+  it('treats a malformed server body as an error, not an empty log', async () => {
+    // A session must exist or the lazy load answers ready-empty without
+    // ever asking the server.
+    plantTestSession();
+    global.fetch = jest.fn((input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = String(input);
+      if (url.startsWith('/api/auth/')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ token: 't' }),
+        } as Response);
+      }
+      void init;
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ nope: true }),
+      } as Response);
+    }) as unknown as typeof fetch;
+    __resetRunsStoreForTests(null);
+
+    render(React.createElement(StatusProbe));
+
+    expect(await screen.findByTestId('runs-status')).toHaveTextContent('error');
+  });
+
+  it('updateRun replaces the run in place and keeps its id (RUN-28 AC2)', async () => {
+    const other = await addRun(toRunDraft(makeForm({ routeName: 'Other', date: '2026-07-01' })));
+    const target = await addRun(toRunDraft(makeForm()));
+
+    const updated = await updateRun(
       target.id,
       toRunDraft(makeForm({ routeName: 'Corrected', distance: '10' })),
     );
@@ -398,48 +471,239 @@ describe('store', () => {
     expect(getRuns()).toEqual([updated, other]);
   });
 
-  it('updateRun re-files the run when the edit moves its date', () => {
-    const other = addRun(toRunDraft(makeForm({ routeName: 'Other', date: '2026-07-10' })));
-    const target = addRun(toRunDraft(makeForm({ date: '2026-07-14' })));
+  it('updateRun re-files the run when the edit moves its date', async () => {
+    const other = await addRun(toRunDraft(makeForm({ routeName: 'Other', date: '2026-07-10' })));
+    const target = await addRun(toRunDraft(makeForm({ date: '2026-07-14' })));
 
-    updateRun(target.id, toRunDraft(makeForm({ date: '2026-07-01' })));
+    await updateRun(target.id, toRunDraft(makeForm({ date: '2026-07-01' })));
 
     // Newest-first ordering follows the corrected date.
     expect(getRuns().map((run) => run.id)).toEqual([other.id, target.id]);
   });
 
-  it('updateRun writes nothing when the id matches no run', () => {
-    const run = addRun(toRunDraft(makeForm()));
+  it('updateRun resolves null and drops the ghost row when the id matches no run', async () => {
+    const run = await addRun(toRunDraft(makeForm()));
 
-    expect(updateRun('missing', toRunDraft(makeForm({ routeName: 'Ghost' })))).toBeNull();
+    await expect(
+      updateRun('missing', toRunDraft(makeForm({ routeName: 'Ghost' }))),
+    ).resolves.toBeNull();
     expect(getRuns()).toEqual([run]);
   });
 
-  it('deleteRun removes exactly that run and keeps the rest (RUN-30 AC2)', () => {
-    const other = addRun(toRunDraft(makeForm({ routeName: 'Other', date: '2026-07-01' })));
-    const target = addRun(toRunDraft(makeForm()));
+  it('deleteRun removes exactly that run and keeps the rest (RUN-30 AC2)', async () => {
+    const other = await addRun(toRunDraft(makeForm({ routeName: 'Other', date: '2026-07-01' })));
+    const target = await addRun(toRunDraft(makeForm()));
 
-    expect(deleteRun(target.id)).toBe(true);
+    await expect(deleteRun(target.id)).resolves.toBe(true);
 
     expect(getRuns()).toEqual([other]);
   });
 
-  it('deleteRun announces the change so derived screens recompute (DEL-3)', () => {
-    const target = addRun(toRunDraft(makeForm()));
+  it('deleteRun announces the change so derived screens recompute (DEL-3)', async () => {
+    const target = await addRun(toRunDraft(makeForm()));
     const onChange = jest.fn();
     window.addEventListener('runlog:runs-changed', onChange);
 
-    deleteRun(target.id);
+    await deleteRun(target.id);
 
     expect(onChange).toHaveBeenCalled();
     window.removeEventListener('runlog:runs-changed', onChange);
   });
 
-  it('deleteRun writes nothing when the id matches no run', () => {
-    const run = addRun(toRunDraft(makeForm()));
+  it('deleteRun resolves false when the id matches no run', async () => {
+    const run = await addRun(toRunDraft(makeForm()));
 
-    expect(deleteRun('missing')).toBe(false);
+    await expect(deleteRun('missing')).resolves.toBe(false);
     expect(getRuns()).toEqual([run]);
+  });
+
+  it('rejects and keeps the run when the delete call fails', async () => {
+    const run = await addRun(toRunDraft(makeForm()));
+    failRunsApi('DELETE');
+
+    await expect(deleteRun(run.id)).rejects.toThrow(/Deleting the run failed/);
+    expect(getRuns()).toEqual([run]);
+  });
+
+  it('answers a fresh device without the network: no session, no legacy data, no requests', async () => {
+    // A device that never wrote anything has an empty log by definition;
+    // resolving that with an API call would mint a server account as a
+    // side effect of a page view (crawlers, previews, incognito).
+    window.localStorage.clear();
+    __resetRunsStoreForTests(null);
+
+    render(React.createElement(StatusProbe));
+
+    expect(await screen.findByTestId('runs-status')).toHaveTextContent('ready');
+    expect(getRuns()).toEqual([]);
+    expect((global.fetch as jest.Mock).mock.calls).toHaveLength(0);
+  });
+
+  it('keeps the client order identical to a fresh load for same-day runs', async () => {
+    const first = await addRun(toRunDraft(makeForm({ routeName: 'First', date: '2026-07-14' })));
+    const second = await addRun(toRunDraft(makeForm({ routeName: 'Second', date: '2026-07-14' })));
+    const cachedOrder = getRuns().map((run) => run.id);
+
+    // Reload from the (mock) server: the order must not change, which is
+    // what the shared date-desc-then-id-desc comparator guarantees.
+    __resetRunsStoreForTests(null);
+    render(React.createElement(StatusProbe));
+    expect(await screen.findByTestId('runs-status')).toHaveTextContent('ready');
+
+    expect(getRuns().map((run) => run.id)).toEqual(cachedOrder);
+    expect(cachedOrder).toEqual([second.id, first.id]);
+  });
+
+  it('never launders an error state into ready: a save during error reloads the real list', async () => {
+    // The Add run button lives in the page header, OUTSIDE the boundary, so
+    // a save while the store shows the error card is reachable. Merging the
+    // one new run into the empty error cache would fabricate "you have one
+    // run" out of an unknown state.
+    plantTestSession();
+    await addRun(toRunDraft(makeForm({ routeName: 'Already on server', date: '2026-07-01' })));
+    makeRunsLoadFail();
+    render(React.createElement(StatusProbe));
+    expect(await screen.findByTestId('runs-status')).toHaveTextContent('error');
+
+    restoreRunsApi();
+    await act(async () => {
+      await addRun(toRunDraft(makeForm({ routeName: 'Saved during error' })));
+    });
+
+    expect(await screen.findByTestId('runs-status')).toHaveTextContent('ready');
+    // The full server list arrived, not a synthesized single-run one.
+    await waitFor(() => {
+      expect(getRuns().map((run) => run.routeName)).toEqual([
+        'Saved during error',
+        'Already on server',
+      ]);
+    });
+  });
+
+  it('useRuns refuses an ungated read while loading instead of flashing an empty state', () => {
+    holdRunsLoading();
+    const Ungated = () => {
+      useRuns();
+      return null;
+    };
+    // React logs the render error itself; keep the test output clean.
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() => render(React.createElement(Ungated))).toThrow(/RunsBoundary/);
+    consoleError.mockRestore();
+  });
+
+  it('recovers from an expired token mid-session: one silent re-login, one retry, one run', async () => {
+    await addRun(toRunDraft(makeForm({ routeName: 'Before expiry' })));
+    expireRunsTokens();
+
+    const run = await addRun(toRunDraft(makeForm({ routeName: 'After expiry' })));
+
+    expect(run.routeName).toBe('After expiry');
+    expect(getRuns()).toHaveLength(2);
+    const calls = (global.fetch as jest.Mock).mock.calls as Array<[string, RequestInit?]>;
+    const logins = calls.filter(([url]) => url === '/api/auth/login');
+    const posts = calls.filter(
+      ([url, init]) => url === '/api/runs' && init?.method === 'POST',
+    );
+    // One login per addRun's session (first mint + post-expiry re-login),
+    // and exactly three POSTs: the first run, the 401ed attempt, its single
+    // retry. No duplicate run was created.
+    expect(logins).toHaveLength(2);
+    expect(posts).toHaveLength(3);
+  });
+});
+
+describe('one-time import of v1 localStorage runs (RUN-48)', () => {
+  function legacyRun(overrides: Partial<Run> = {}): Run {
+    return makeRun({ id: `local-${Math.random().toString(36).slice(2, 8)}`, ...overrides });
+  }
+
+  it('imports legacy runs into the device account, oldest first, then deletes the key', async () => {
+    window.localStorage.clear();
+    seedLegacyRuns([
+      legacyRun({ routeName: 'Newest local', date: '2026-07-20' }),
+      legacyRun({ routeName: 'Oldest local', date: '2026-07-01' }),
+    ]);
+
+    render(React.createElement(StatusProbe));
+    expect(await screen.findByTestId('runs-status')).toHaveTextContent('ready');
+
+    // Both runs now live behind the API with server-minted ids, in the
+    // same newest-first order the user had.
+    expect(getRuns().map((run) => run.routeName)).toEqual(['Newest local', 'Oldest local']);
+    expect(getRuns().every((run) => run.id.startsWith('run-'))).toBe(true);
+    // The key is gone: the import can never run twice.
+    expect(window.localStorage.getItem('runlog.runs')).toBeNull();
+
+    const posts = ((global.fetch as jest.Mock).mock.calls as Array<[string, RequestInit?]>)
+      .filter(([url, init]) => url === '/api/runs' && init?.method === 'POST')
+      .map(([, init]) => (JSON.parse(String(init?.body)) as { routeName: string }).routeName);
+    expect(posts).toEqual(['Oldest local', 'Newest local']);
+  });
+
+  it('keeps the unimported remainder on a mid-import failure and resumes on retry', async () => {
+    window.localStorage.clear();
+    seedLegacyRuns([
+      legacyRun({ routeName: 'Newest local', date: '2026-07-20' }),
+      legacyRun({ routeName: 'Oldest local', date: '2026-07-01' }),
+    ]);
+    failRunsApi('POST');
+
+    render(React.createElement(StatusProbe));
+    expect(await screen.findByTestId('runs-status')).toHaveTextContent('error');
+
+    // Nothing imported, nothing lost: the whole list still waits locally.
+    const remaining = JSON.parse(window.localStorage.getItem('runlog.runs') ?? '[]') as Run[];
+    expect(remaining).toHaveLength(2);
+
+    restoreRunsApi();
+    act(() => {
+      reloadRuns();
+    });
+    expect(await screen.findByTestId('runs-status')).toHaveTextContent('ready');
+    expect(getRuns().map((run) => run.routeName)).toEqual(['Newest local', 'Oldest local']);
+    expect(window.localStorage.getItem('runlog.runs')).toBeNull();
+  });
+
+  it('drops rows the stricter API rejects instead of bricking the app, and says how many', async () => {
+    // RUN-47 added rules the v1 forms never enforced (length caps, date
+    // rules): a 400 on one legacy row must cost that row, never turn every
+    // screen into a retry card that can never succeed.
+    window.localStorage.clear();
+    seedLegacyRuns([
+      legacyRun({ routeName: 'Good newest', date: '2026-07-20' }),
+      legacyRun({ routeName: 'Poisoned', date: '2026-07-10' }),
+      legacyRun({ routeName: 'Good oldest', date: '2026-07-01' }),
+    ]);
+    rejectRunsNamed('Poisoned');
+
+    render(React.createElement(StatusProbe));
+    expect(await screen.findByTestId('runs-status')).toHaveTextContent('ready');
+
+    expect(getRuns().map((run) => run.routeName)).toEqual(['Good newest', 'Good oldest']);
+    expect(window.localStorage.getItem('runlog.runs')).toBeNull();
+    // The user is told, once, and can dismiss it.
+    expect(screen.getByTestId('runs-notice')).toHaveTextContent(
+      "1 of your locally saved run couldn't be imported",
+    );
+    act(() => {
+      clearRunsNotice();
+    });
+    expect(screen.getByTestId('runs-notice')).toHaveTextContent('');
+  });
+
+  it('clears a key holding only junk without contacting the server', async () => {
+    window.localStorage.clear();
+    window.localStorage.setItem('runlog.runs', '{ not json');
+    __resetRunsStoreForTests(null);
+
+    render(React.createElement(StatusProbe));
+    expect(await screen.findByTestId('runs-status')).toHaveTextContent('ready');
+
+    expect((global.fetch as jest.Mock).mock.calls).toHaveLength(0);
+    // The old parser ignored junk; the new path also stops it from
+    // re-triggering the import check forever.
+    expect(window.localStorage.getItem('runlog.runs')).toBeNull();
   });
 });
 

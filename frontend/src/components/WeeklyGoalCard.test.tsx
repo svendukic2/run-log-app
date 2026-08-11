@@ -1,6 +1,7 @@
 import { act, render, screen, within } from '@testing-library/react';
 import { saveDefaultGoal, saveGoal } from '@/lib/goal';
 import { addRun } from '@/lib/runs';
+import { seedRuns } from '@/test/runsApiMock';
 import WeeklyGoalCard from './WeeklyGoalCard';
 
 function runOn(date: string, distanceKm: number, durationSeconds: number) {
@@ -93,8 +94,7 @@ describe('WeeklyGoalCard (RUN-17)', () => {
 
   it("reflects this week's runs in badge, readout, bar, captions and stats (AC3)", () => {
     freezeDateAt(FRIDAY);
-    addRun(runOn('2026-08-05', 8, 2400));
-    addRun(runOn('2026-08-07', 6, 2160));
+    seedRuns([runOn('2026-08-05', 8, 2400), runOn('2026-08-07', 6, 2160)]);
 
     render(<WeeklyGoalCard />);
 
@@ -112,8 +112,7 @@ describe('WeeklyGoalCard (RUN-17)', () => {
 
   it('keeps readout and remaining caption consistent for decimal distances', () => {
     freezeDateAt(FRIDAY);
-    addRun(runOn('2026-08-04', 5.3, 1600));
-    addRun(runOn('2026-08-05', 4.7, 1400));
+    seedRuns([runOn('2026-08-04', 5.3, 1600), runOn('2026-08-05', 4.7, 1400)]);
 
     render(<WeeklyGoalCard />);
 
@@ -125,7 +124,7 @@ describe('WeeklyGoalCard (RUN-17)', () => {
 
   it('rounds a fractional distance to one decimal in both captions', () => {
     freezeDateAt(FRIDAY);
-    addRun(runOn('2026-08-04', 9.35, 3000));
+    seedRuns([runOn('2026-08-04', 9.35, 3000)]);
 
     render(<WeeklyGoalCard />);
 
@@ -136,7 +135,7 @@ describe('WeeklyGoalCard (RUN-17)', () => {
   it('reads the target from the stored goal instead of the default', () => {
     freezeDateAt(FRIDAY);
     saveGoal({ km: 30, startDate: '2026-08-03', endDate: null });
-    addRun(runOn('2026-08-05', 14, 4200));
+    seedRuns([runOn('2026-08-05', 14, 4200)]);
 
     render(<WeeklyGoalCard />);
 
@@ -159,7 +158,7 @@ describe('WeeklyGoalCard (RUN-17)', () => {
 
   it('ignores runs dated outside the current week', () => {
     freezeDateAt(FRIDAY);
-    addRun(runOn('2026-07-20', 10, 3000));
+    seedRuns([runOn('2026-07-20', 10, 3000)]);
 
     render(<WeeklyGoalCard />);
 
@@ -167,13 +166,13 @@ describe('WeeklyGoalCard (RUN-17)', () => {
     expect(within(readout()).getByText('0')).toBeInTheDocument();
   });
 
-  it('recomputes when a run is saved while the card is mounted (AC4, A18)', () => {
+  it('recomputes when a run is saved while the card is mounted (AC4, A18)', async () => {
     freezeDateAt(FRIDAY);
     render(<WeeklyGoalCard />);
     expect(screen.getByText('Not started')).toBeInTheDocument();
 
-    act(() => {
-      addRun(runOn('2026-08-07', 5, 1500));
+    await act(async () => {
+      await addRun(runOn('2026-08-07', 5, 1500));
     });
 
     expect(screen.getByText('On track')).toBeInTheDocument();
@@ -209,7 +208,7 @@ describe('WeeklyGoalCard (RUN-17)', () => {
 
   it('clamps the bar and the remaining caption when the goal is exceeded', () => {
     freezeDateAt(FRIDAY);
-    addRun(runOn('2026-08-05', 25, 7500));
+    seedRuns([runOn('2026-08-05', 25, 7500)]);
 
     render(<WeeklyGoalCard />);
 

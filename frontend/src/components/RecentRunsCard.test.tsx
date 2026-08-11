@@ -1,5 +1,6 @@
 import { act, render, screen, within } from '@testing-library/react';
 import { addRun, type Effort } from '@/lib/runs';
+import { seedRuns } from '@/test/runsApiMock';
 import RecentRunsCard from './RecentRunsCard';
 
 function runOn(date: string, routeName: string, effort: Effort = 'Medium') {
@@ -14,15 +15,13 @@ function runOn(date: string, routeName: string, effort: Effort = 'Medium') {
 }
 
 describe('RecentRunsCard (RUN-20)', () => {
-  beforeEach(() => {
-    window.localStorage.clear();
-  });
-
   it('lists the 3 most recent runs with dot, name, caption, distance and pace (AC1)', () => {
-    addRun(runOn('2026-07-01', 'Oldest loop'));
-    addRun(runOn('2026-07-03', 'Hill repeats'));
-    addRun(runOn('2026-07-05', 'River trail'));
-    addRun(runOn('2026-07-07', 'Morning loop'));
+    seedRuns([
+      runOn('2026-07-01', 'Oldest loop'),
+      runOn('2026-07-03', 'Hill repeats'),
+      runOn('2026-07-05', 'River trail'),
+      runOn('2026-07-07', 'Morning loop'),
+    ]);
 
     render(<RecentRunsCard />);
 
@@ -44,22 +43,24 @@ describe('RecentRunsCard (RUN-20)', () => {
   });
 
   it('links "View all" to the runs list (AC2)', () => {
-    addRun(runOn('2026-07-07', 'Morning loop'));
+    seedRuns([runOn('2026-07-07', 'Morning loop')]);
 
     render(<RecentRunsCard />);
 
     expect(screen.getByRole('link', { name: 'View all' })).toHaveAttribute('href', '/runs');
   });
 
-  it('puts a newly saved run on top and drops the oldest of the three (AC3)', () => {
-    addRun(runOn('2026-07-03', 'Hill repeats'));
-    addRun(runOn('2026-07-05', 'River trail'));
-    addRun(runOn('2026-07-07', 'Morning loop'));
+  it('puts a newly saved run on top and drops the oldest of the three (AC3)', async () => {
+    seedRuns([
+      runOn('2026-07-03', 'Hill repeats'),
+      runOn('2026-07-05', 'River trail'),
+      runOn('2026-07-07', 'Morning loop'),
+    ]);
 
     render(<RecentRunsCard />);
 
-    act(() => {
-      addRun(runOn('2026-07-09', 'Evening tempo'));
+    await act(async () => {
+      await addRun(runOn('2026-07-09', 'Evening tempo'));
     });
 
     const rows = screen.getAllByRole('listitem');
@@ -67,16 +68,15 @@ describe('RecentRunsCard (RUN-20)', () => {
     expect(screen.queryByText('Hill repeats')).toBeNull();
   });
 
-  it('puts a run saved on the same date as an existing one on top (AC3)', () => {
-    addRun(runOn('2026-07-05', 'River trail'));
-    addRun(runOn('2026-07-07', 'Morning loop'));
+  it('puts a run saved on the same date as an existing one on top (AC3)', async () => {
+    seedRuns([runOn('2026-07-05', 'River trail'), runOn('2026-07-07', 'Morning loop')]);
 
     render(<RecentRunsCard />);
 
     // The store prepends new runs and its date sort is stable, so within one
     // date the most recently saved run stays first.
-    act(() => {
-      addRun(runOn('2026-07-07', 'Evening tempo'));
+    await act(async () => {
+      await addRun(runOn('2026-07-07', 'Evening tempo'));
     });
 
     const rows = screen.getAllByRole('listitem');
@@ -85,9 +85,11 @@ describe('RecentRunsCard (RUN-20)', () => {
   });
 
   it('colors the effort dot per effort level (AC4)', () => {
-    addRun(runOn('2026-07-03', 'Hard intervals', 'Hard'));
-    addRun(runOn('2026-07-05', 'Steady miles', 'Medium'));
-    addRun(runOn('2026-07-07', 'Recovery jog', 'Easy'));
+    seedRuns([
+      runOn('2026-07-03', 'Hard intervals', 'Hard'),
+      runOn('2026-07-05', 'Steady miles', 'Medium'),
+      runOn('2026-07-07', 'Recovery jog', 'Easy'),
+    ]);
 
     render(<RecentRunsCard />);
 
