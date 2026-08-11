@@ -10,11 +10,16 @@ export const ROUTES = {
   runs: '/runs',
   coach: '/coach',
   events: '/events',
+  leaderboard: '/leaderboard',
   settings: '/settings',
 } as const;
 
 // The views that live behind the shared shell, in sidebar order (Events
 // joined with the COMMUNITY section, RUN-68).
+//
+// The global leaderboard (RUN-70) is deliberately NOT here yet: RUN-62 owns
+// the sidebar's COMMUNITY section and adds the link there, so the page is
+// reachable by URL (and from wherever a row links to it) until that lands.
 export const APP_ROUTES = [
   ROUTES.dashboard,
   ROUTES.runs,

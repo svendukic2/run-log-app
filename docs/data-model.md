@@ -297,6 +297,41 @@ start or end day counts), computed by one `GROUP BY` at read time and never
 stored, the same rule the event's own derived state follows. Ties share a rank
 and the next distinct distance skips the places they consumed (1, 1, 3).
 
+### The global weekly leaderboard (RUN-70, stores nothing)
+
+`GET /api/leaderboard[?weekStart=yyyy-mm-dd]` ranks every opted-in runner by the
+kilometres they logged inside one **Monday-Sunday inclusive** week. It has no
+entity of its own: the answer is derived at read time from `User` and `Run`, like
+every other number in the "Never stored" section below.
+
+`weekStart` may name **any** day; the server normalizes it to the Monday of that
+day's week (the same week definition as the dashboard's `startOfWeek`) and echoes
+the resolved `{ weekStart, weekEnd }` back, so a client never has to guess which
+week it is looking at. Omitting it means the current week.
+
+The envelope is `{ weekStart, weekEnd, items, me, total }`, where each row is
+`{ id, firstName, lastName, rank, totalKm, runCount, me }` and `id` is the
+**user's** id (the row links to their public profile). Nothing in a row is
+nullable, unlike the event board's: a runner with `showOnLeaderboard` false is
+**absent** here rather than present with withheld numbers, because a global board
+has no membership list they would otherwise appear on. `me` repeats the caller's
+own row outside `items` and is `null` **exactly** when the caller is opted out -
+the one signal the page's banner needs, and one that names nobody else's setting.
+
+`items` is capped at the top 50 while `total` counts every ranked runner, so the
+caller's pinned row stays truthful when they rank far below the served slice. The
+ranking is computed over **everyone**, never within the served slice: opted-in
+runners with no runs that week tie at 0 km at the bottom rather than vanishing
+from their own leaderboard. Ranking and rounding are shared with the event board
+(`common/ranking.ts`, moved there by this ticket): ties share a rank, the next
+distinct distance skips the places they consumed (1, 1, 3), and distances round
+to **one** decimal, the precision the UI prints.
+
+Two reads serve it, exactly one of them the aggregation: the opted-in users, then
+one `GROUP BY` over their runs inside the week. Candidates first is deliberate -
+the opt-in gate applies before any run is touched, so an opted-out runner's
+distances are never read at all.
+
 ### Profile (one per user since RUN-57)
 
 | Field | Type | Notes |
