@@ -588,7 +588,7 @@ describe('store (API-backed since RUN-48)', () => {
     };
     // React logs the render error itself; keep the test output clean.
     const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
-    expect(() => render(React.createElement(Ungated))).toThrow(/RunsBoundary/);
+    expect(() => render(React.createElement(Ungated))).toThrow(/AppDataBoundary/);
     consoleError.mockRestore();
   });
 
@@ -602,9 +602,7 @@ describe('store (API-backed since RUN-48)', () => {
     expect(getRuns()).toHaveLength(2);
     const calls = (global.fetch as jest.Mock).mock.calls as Array<[string, RequestInit?]>;
     const logins = calls.filter(([url]) => url === '/api/auth/login');
-    const posts = calls.filter(
-      ([url, init]) => url === '/api/runs' && init?.method === 'POST',
-    );
+    const posts = calls.filter(([url, init]) => url === '/api/runs' && init?.method === 'POST');
     // One login per addRun's session (first mint + post-expiry re-login),
     // and exactly three POSTs: the first run, the 401ed attempt, its single
     // retry. No duplicate run was created.

@@ -26,6 +26,7 @@ workspaces, turbo, or nx setup. The root `package.json` owns only repo-wide dev 
 ```text
 backend/          NestJS 11 API, port 3000, its own package.json + node_modules
 frontend/         Next.js 16 + React 19, port 4200, its own package.json + node_modules
+e2e/              Playwright acceptance tests, its own package.json (see e2e/README.md)
 .claude/          Skills, agents and permissions for Claude Code (see below)
 .github/workflows/ci.yml
 .husky/           pre-commit and commit-msg hooks
@@ -105,14 +106,17 @@ the authenticated API; see `docs/data-model.md`, "The frontend API pattern"). CO
 enabled on the backend (`main.ts`, origin `FRONTEND_URL`) for any genuinely cross-origin
 fetch.
 
-**The runs store is an API-backed cache (RUN-48), and its pattern is the app-wide
-default.** `frontend/src/lib/runs.ts` keeps an in-memory cache behind
-`useSyncExternalStore`; `useRuns()` stays synchronous, every screen deriving from runs
-renders through one `RunsBoundary` (nothing while loading, one retry card on error), and
-mutations are awaited with inline `role="alert"` failure lines in the forms. Follow this
-pattern (not a new one) when migrating the remaining localStorage stores or adding v2
-screens. In Jest, `jest.setup.ts` installs an in-memory `/api/runs` fake before every
-test and `seedRuns()` from `src/test/runsApiMock.ts` replaces localStorage seeding.
+**Every app-data store is an API-backed cache (RUN-48 pattern, app-wide since
+RUN-50).** `frontend/src/lib/runs.ts`, `onboarding.ts` (profile) and `goal.ts` (goal +
+week target) keep in-memory caches behind `useSyncExternalStore`; the hooks stay
+synchronous, every data screen renders through one `AppDataBoundary` (nothing while
+loading, one retry card on error, gates all three stores), and mutations are awaited
+with inline `role="alert"` failure lines in the forms. Follow this pattern (not a new
+one) when adding v2 screens. Onboarding is a local wizard draft until "Finish setup"
+PUTs the goal and profile; "onboarding complete" is derived (the profile exists
+server-side), not stored. In Jest, `jest.setup.ts` installs an in-memory `/api/*` fake
+before every test; `seedRuns()`/`seedProfile()`/`seedGoal()` from
+`src/test/runsApiMock.ts` replace localStorage seeding.
 
 **Configuration goes through ConfigService.** `ConfigModule.forRoot({ isGlobal: true })`
 is registered in `backend/src/app.module.ts`, so it reads `backend/.env` at startup and
@@ -224,12 +228,16 @@ the backend has its own `backend/.prettierrc`.
 
 ## CI
 
-`.github/workflows/ci.yml` runs three jobs in parallel on every PR and on pushes to
+`.github/workflows/ci.yml` runs four jobs in parallel on every PR and on pushes to
 `main`:
 
 - **backend**: Postgres 18 service container, `prisma migrate deploy`, then lint, build,
   unit tests, e2e (the e2e suite connects to that database at startup)
 - **frontend**: lint, unit tests, build
+- **e2e**: its own Postgres 18 service container, then the Playwright suite (`e2e/`)
+  against the real stack - Playwright's webServer boots the backend and frontend itself.
+  Test isolation is per device account, not per database wipe; the strategy is
+  documented in `e2e/README.md`
 - **conventions**: commitlint over the PR's commit range
 
 A repo-wide `prettier --check` step exists but is **intentionally commented out**: 55

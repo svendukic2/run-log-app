@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { useHydrated } from '@/lib/useHydrated';
+import { reloadGoal, useGoalStoreError, useGoalStoreStatus } from '@/lib/goal';
+import { reloadProfile, useProfileError, useProfileStatus } from '@/lib/onboarding';
 import {
   clearRunsNotice,
   reloadRuns,
@@ -37,61 +39,83 @@ function LoadingNotice({ immediate }: { immediate: boolean }) {
         aria-hidden="true"
         className="size-[18px] rounded-full border-2 border-line border-t-accent motion-safe:animate-spin"
       />
-      <p className="text-[13.5px] text-secondary">Loading your runs…</p>
+      <p className="text-[13.5px] text-secondary">Loading your data…</p>
     </div>
   );
 }
 
-// The screen-level gate of the app-wide async pattern (RUN-48): every page
-// that derives its UI from the runs store renders through this boundary, so
-// the loading and error handling is decided once instead of per card.
+// The screen-level gate of the app-wide async pattern (RUN-48, widened in
+// RUN-50): every page that derives its UI from the API-backed stores (runs,
+// profile, goal) renders through this boundary, so loading and error
+// handling is decided once instead of per card. Mounting it is also what
+// triggers each store's lazy initial load.
 //
 // Loading renders nothing for the first quarter second (extending the
 // useHydrated idiom), then an honest spinner; the request timeout in
 // session.ts guarantees it cannot spin forever. Errors get one card in two
 // shapes: retryable failures (network, timeout, 5xx) carry a Try again;
 // terminal ones (this device's identity cannot authenticate) explain the
-// way out instead of offering a button that fails identically forever. v1
-// designs none of these states (design-review note in the PR). Children
-// render only when the store is 'ready', and they learn that through
-// RunsGateContext, which useRuns() uses to fail loudly on ungated screens.
-export default function RunsBoundary({ children }: { children: React.ReactNode }) {
+// way out instead of offering a button that fails identically forever.
+// Children render only when every store is 'ready', and they learn that
+// through RunsGateContext, which useRuns() uses to fail loudly on ungated
+// screens.
+export default function AppDataBoundary({ children }: { children: React.ReactNode }) {
   const hydrated = useHydrated();
-  const status = useRunsStatus();
-  const error = useRunsError();
+  const runsStatus = useRunsStatus();
+  const profileStatus = useProfileStatus();
+  const goalStatus = useGoalStoreStatus();
+  const runsError = useRunsError();
+  const profileError = useProfileError();
+  const goalError = useGoalStoreError();
   const notice = useRunsNotice();
   const [retried, setRetried] = useState(false);
 
-  if (!hydrated || status === 'loading') return <LoadingNotice immediate={retried} />;
+  const statuses = [runsStatus, profileStatus, goalStatus];
+  // One card, one message - but a TERMINAL error always outranks a
+  // transient one: showing "Try again" because the runs load happened to
+  // fail first, while the profile is terminally unable to authenticate,
+  // would loop the user through retries that can never end well.
+  const errors = [runsError, profileError, goalError].filter(
+    (candidate): candidate is NonNullable<typeof candidate> => candidate !== null,
+  );
+  const error = errors.find((candidate) => candidate.terminal) ?? errors[0] ?? null;
 
-  if (status === 'error') {
+  if (!hydrated || statuses.includes('loading')) {
+    return <LoadingNotice immediate={retried} />;
+  }
+
+  if (statuses.includes('error')) {
     const terminal = error?.terminal ?? false;
     return (
       <section
         role="alert"
-        aria-labelledby="runs-error-title"
+        aria-labelledby="app-data-error-title"
         className="mx-5 mb-6 flex flex-col items-start gap-[10px] rounded-[18px] border border-line bg-white p-[28px] sm:mx-8 lg:mx-[40px]"
       >
         <h2
-          id="runs-error-title"
+          id="app-data-error-title"
           className="font-display text-[19px] font-bold tracking-[-0.3px] text-text-primary"
         >
-          {terminal ? "This device can't sign in to its runs" : "Your runs didn't load"}
+          {terminal ? "This device can't sign in to its data" : "Your data didn't load"}
         </h2>
         <p className="text-[13.5px] leading-[1.55] text-secondary">
-          {error?.message ?? 'Something went wrong loading your runs.'}
+          {error?.message ?? 'Something went wrong loading your data.'}
         </p>
         {terminal ? (
           <p className="text-[13.5px] leading-[1.55] text-secondary">
-            Retrying won&apos;t help here. Clearing this site&apos;s data starts a fresh log;
-            the previous runs stay locked to the old sign-in.
+            Retrying won&apos;t help here. Clearing this site&apos;s data starts a fresh log; the
+            previous data stays locked to the old sign-in.
           </p>
         ) : (
           <button
             type="button"
             onClick={() => {
               setRetried(true);
-              reloadRuns();
+              // Only the failed stores actually refetch: reload on a store
+              // that is already 'ready' or mid-flight coalesces.
+              if (runsStatus === 'error') reloadRuns();
+              if (profileStatus === 'error') reloadProfile();
+              if (goalStatus === 'error') reloadGoal();
             }}
             className="mt-[6px] flex items-center justify-center rounded-[12px] bg-accent px-[22px] py-[11px] text-[14px] font-semibold text-white hover:bg-accent-pressed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           >
@@ -103,7 +127,7 @@ export default function RunsBoundary({ children }: { children: React.ReactNode }
   }
 
   const storageWarning = sessionPersistenceDegraded()
-    ? 'This browser is blocking site storage, so this tab will lose access to its runs when it closes. The runs themselves are saved.'
+    ? 'This browser is blocking site storage, so this tab will lose access to its data when it closes. The data itself is saved.'
     : null;
 
   return (

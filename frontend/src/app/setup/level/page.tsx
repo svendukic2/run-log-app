@@ -1,38 +1,55 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import Badge from '@/components/Badge';
 import Brand from '@/components/Brand';
 import StepDots from '@/components/StepDots';
-import { markOnboardingComplete, saveLevel, type RunningLevel } from '@/lib/onboarding';
+import { ApiError } from '@/lib/session';
+import { finishOnboarding, type RunningLevel } from '@/lib/onboarding';
 import { ROUTES } from '@/lib/routes';
 
 const LEVELS: Array<{ value: RunningLevel; title: string; description: string }> = [
-  { value: 'beginner', title: 'Beginner', description: 'New to running or getting back into it' },
+  { value: 'Beginner', title: 'Beginner', description: 'New to running or getting back into it' },
   {
-    value: 'intermediate',
+    value: 'Intermediate',
     title: 'Intermediate',
     description: 'Run regularly, comfortable with 5-10K',
   },
   {
-    value: 'advanced',
+    value: 'Advanced',
     title: 'Advanced',
     description: 'Training consistently, chasing new PRs',
   },
 ];
 
 // 03 · Setup - Running level (Figma node 43:2). Beginner is preselected so
-// "Finish setup" is never invalid; finishing stores the level, marks
-// onboarding complete and opens the Dashboard.
+// "Finish setup" is never invalid; finishing writes the wizard's answers to
+// the account (RUN-50: the goal and profile PUTs that make onboarding
+// "complete" - complete IS the profile existing server-side) and opens the
+// Dashboard. Pessimistic like every write since RUN-48: the button disables
+// while saving and a failure keeps the wizard here with an inline line, so
+// the user is never told they finished when nothing was saved.
 export default function RunningLevelPage() {
   const router = useRouter();
-  const [level, setLevel] = useState<RunningLevel>('beginner');
+  const [level, setLevel] = useState<RunningLevel>('Beginner');
+  const [finishing, setFinishing] = useState(false);
+  const [finishError, setFinishError] = useState('');
 
-  const handleFinish = () => {
-    saveLevel(level);
-    markOnboardingComplete();
-    router.push(ROUTES.dashboard);
+  const handleFinish = async () => {
+    if (finishing) return;
+    setFinishing(true);
+    setFinishError('');
+    try {
+      await finishOnboarding(level);
+      router.push(ROUTES.dashboard);
+    } catch (error) {
+      setFinishError(
+        error instanceof ApiError ? error.message : 'Finishing the setup failed. Try again.',
+      );
+      setFinishing(false);
+    }
   };
 
   return (
@@ -92,6 +109,25 @@ export default function RunningLevelPage() {
               );
             })}
           </fieldset>
+          {finishError && (
+            <p role="alert" className="mt-[18px] w-full text-[13.5px] text-accent-pressed">
+              {finishError}
+              {/* "Start from the beginning" needs a road there: this screen's
+                  only other exit is Back, which stops one step short of the
+                  form that can fix missing first-step details. */}
+              {finishError.includes('first step') && (
+                <>
+                  {' '}
+                  <Link
+                    href={ROUTES.welcome}
+                    className="font-semibold underline underline-offset-2"
+                  >
+                    Go to the first step
+                  </Link>
+                </>
+              )}
+            </p>
+          )}
           <div className="mt-[30px] flex w-full items-center justify-between">
             <button
               type="button"
@@ -102,10 +138,11 @@ export default function RunningLevelPage() {
             </button>
             <button
               type="button"
-              onClick={handleFinish}
-              className="flex items-center justify-center gap-[9px] rounded-[14px] bg-accent px-7 py-4 font-semibold text-white hover:bg-accent-pressed"
+              onClick={() => void handleFinish()}
+              disabled={finishing}
+              className="flex items-center justify-center gap-[9px] rounded-[14px] bg-accent px-7 py-4 font-semibold text-white hover:bg-accent-pressed disabled:opacity-60"
             >
-              <span className="text-[16px]">Finish setup</span>
+              <span className="text-[16px]">{finishing ? 'Finishing…' : 'Finish setup'}</span>
               <span aria-hidden className="text-[17px]">
                 →
               </span>

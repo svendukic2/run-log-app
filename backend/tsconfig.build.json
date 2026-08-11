@@ -5,7 +5,12 @@
     // inference from the input file set: without this, any stray .ts at the
     // backend root (prisma.config.ts) silently relocates the output to
     // dist/src/ and breaks start:prod.
-    "rootDir": "src"
+    "rootDir": "src",
+    // The incremental state must die with the output it describes: left at
+    // the backend root (the default), it survives deleteOutDir and the next
+    // build "sees" everything as already emitted, producing an empty dist
+    // that start:prod cannot boot (RUN-51).
+    "tsBuildInfoFile": "./dist/tsconfig.build.tsbuildinfo"
   },
   "exclude": ["node_modules", "test", "dist", "**/*spec.ts", "prisma.config.ts"]
 }

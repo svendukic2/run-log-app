@@ -2,21 +2,30 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import AppDataBoundary from '@/components/AppDataBoundary';
 import Badge from '@/components/Badge';
 import Brand from '@/components/Brand';
 import TextField from '@/components/TextField';
-import { saveProfile, useLandingRoute } from '@/lib/onboarding';
+import { getOnboardingDraft, saveDraftProfile, useLandingRoute } from '@/lib/onboarding';
 import { validateProfileForm, type ProfileFormErrors } from '@/lib/profileValidation';
 import { ROUTES } from '@/lib/routes';
 
 // 01 · Welcome (Figma node 78:145). First-launch entry point only: once a
-// profile exists there is no way back to this screen.
-export default function WelcomePage() {
+// profile exists there is no way back to this screen. Submitting saves a
+// local wizard DRAFT, not the profile (RUN-50): no account exists until
+// "Finish setup" on the last step, so an abandoned wizard costs nothing
+// server-side.
+function WelcomeContent() {
   const router = useRouter();
   const landing = useLandingRoute();
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
-  const [email, setEmail] = useState('');
+  // Prefilled from the draft: a returning wizard walker (or a v1 user whose
+  // invalid profile the import salvaged here) edits their answers instead
+  // of retyping them - this form is the only place names and email are
+  // editable before onboarding finishes.
+  const [draft] = useState(() => getOnboardingDraft().profile);
+  const [firstName, setFirstName] = useState(draft?.firstName ?? '');
+  const [lastName, setLastName] = useState(draft?.lastName ?? '');
+  const [email, setEmail] = useState(draft?.email ?? '');
   const [errors, setErrors] = useState<ProfileFormErrors>({});
   const hasNavigated = useRef(false);
 
@@ -36,7 +45,7 @@ export default function WelcomePage() {
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
 
-    saveProfile({
+    saveDraftProfile({
       firstName: firstName.trim(),
       lastName: lastName.trim(),
       email: email.trim(),
@@ -112,5 +121,18 @@ export default function WelcomePage() {
         </div>
       </div>
     </main>
+  );
+}
+
+// The landing decision needs the profile store settled (an onboarded
+// device must redirect, not flash this form), so the page renders through
+// the app-data boundary like every store-reading screen. On a fresh device
+// all three stores settle instantly without a network call, so first
+// launches never see the spinner.
+export default function WelcomePage() {
+  return (
+    <AppDataBoundary>
+      <WelcomeContent />
+    </AppDataBoundary>
   );
 }

@@ -1,3 +1,4 @@
+import AppDataBoundary from '@/components/AppDataBoundary';
 import PageHeader from '@/components/PageHeader';
 import SettingsView from '@/components/SettingsView';
 
@@ -11,7 +12,11 @@ export default function SettingsPage() {
   return (
     <>
       <PageHeader overline="Manage your profile" title="Settings" />
-      <SettingsView />
+      {/* Behind the boundary since RUN-50: the form drafts from the
+          API-backed profile, so it must not mount until that store settled. */}
+      <AppDataBoundary>
+        <SettingsView />
+      </AppDataBoundary>
     </>
   );
 }

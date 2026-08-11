@@ -3,9 +3,10 @@
 import { useState } from 'react';
 import { ACCENT_PILL_CLASSES } from '@/components/accentPill';
 import TextField from '@/components/TextField';
-import { clampGoal, getDefaultGoalKm, GOAL_MAX_KM, GOAL_MIN_KM, saveDefaultGoal } from '@/lib/goal';
-import { profileInitials, saveProfile, useProfile, type Profile } from '@/lib/onboarding';
+import { clampGoal, GOAL_DEFAULT_KM, GOAL_MAX_KM, GOAL_MIN_KM } from '@/lib/goal';
+import { profileInitials, saveProfileSettings, useProfile, type Profile } from '@/lib/onboarding';
 import { validateProfileForm, type ProfileFormErrors } from '@/lib/profileValidation';
+import { ApiError } from '@/lib/session';
 import { useHydrated } from '@/lib/useHydrated';
 
 // Card shell shared by the two settings cards, matching the dashboard cards
@@ -58,19 +59,23 @@ const STEPPER_BUTTON_CLASSES =
 // single "Save changes" button (RUN-36): submit persists the profile (RUN-37)
 // and the Training default in one action (RUN-38, RUN-39).
 function SettingsForm() {
-  // Mounted only after hydration, so the stored profile is available to seed
-  // the draft synchronously - no effect, no controlled-input flicker.
+  // Mounted behind the app-data boundary (RUN-50), so the profile store has
+  // settled and the record is available to seed the draft synchronously -
+  // no effect, no controlled-input flicker.
   const profile = useProfile();
   const [firstName, setFirstName] = useState(profile?.firstName ?? '');
   const [lastName, setLastName] = useState(profile?.lastName ?? '');
   const [email, setEmail] = useState(profile?.email ?? '');
   // The stepper's draft, like the profile fields: seeded from the stored
-  // default and only persisted on Save. Nothing seeds weeks until then.
-  const [goalKm, setGoalKm] = useState(() => getDefaultGoalKm());
+  // default and only persisted on Save.
+  const [goalKm, setGoalKm] = useState(() => profile?.defaultWeeklyGoalKm ?? GOAL_DEFAULT_KM);
   const [errors, setErrors] = useState<ProfileFormErrors>({});
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
 
-  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (saving) return;
 
     const nextErrors = validateProfileForm({ firstName, lastName, email });
     setErrors(nextErrors);
@@ -83,18 +88,28 @@ function SettingsForm() {
       lastName: lastName.trim(),
       email: email.trim(),
     };
-    saveProfile(draft);
-    // The default seeds *future* weeks only: saveDefaultGoal stamps next
-    // Monday as its first week and freezes the current week's target (SET-6).
-    // An untouched stepper writes nothing: creating the record permanently
-    // switches week resolution away from the onboarding goal, which a
-    // profile-only edit has no business doing.
-    if (goalKm !== getDefaultGoalKm()) saveDefaultGoal(goalKm);
-    // The inputs adopt the trimmed values that were actually stored, so what
-    // the card shows is exactly what a reload would show.
-    setFirstName(draft.firstName);
-    setLastName(draft.lastName);
-    setEmail(draft.email);
+    setSaving(true);
+    setSaveError('');
+    try {
+      // One full-replace PUT carries the profile fields AND the default
+      // weekly goal (SET-3). SET-6 - a changed default leaves the running
+      // week's target alone - is the server's job now: it freezes the
+      // current week before the new default lands (RUN-49).
+      await saveProfileSettings({ ...draft, defaultWeeklyGoalKm: goalKm });
+      // The inputs adopt the trimmed values that were actually stored, so
+      // what the card shows is exactly what a reload would show.
+      setFirstName(draft.firstName);
+      setLastName(draft.lastName);
+      setEmail(draft.email);
+    } catch (error) {
+      // Pessimistic like every write since RUN-48: the failure stays on
+      // screen and nothing pretends to be saved.
+      setSaveError(
+        error instanceof ApiError ? error.message : 'Saving the changes failed. Try again.',
+      );
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -103,7 +118,7 @@ function SettingsForm() {
        inside the shared page padding. */
     <form
       noValidate
-      onSubmit={handleSubmit}
+      onSubmit={(event) => void handleSubmit(event)}
       data-testid="settings-body"
       className="flex max-w-[660px] flex-col gap-5"
     >
@@ -190,11 +205,16 @@ function SettingsForm() {
         </div>
       </SettingsCard>
 
+      {saveError && (
+        <p role="alert" className="text-[13px] leading-[1.5] text-accent-pressed">
+          {saveError}
+        </p>
+      )}
       {/* Right-aligned under the cards per the frame; full width below `sm`
           like every primary action (RUN-15, responsive addendum). */}
       <div className="flex justify-end">
-        <button type="submit" className={`${ACCENT_PILL_CLASSES} sm:w-auto`}>
-          Save changes
+        <button type="submit" disabled={saving} className={`${ACCENT_PILL_CLASSES} sm:w-auto`}>
+          {saving ? 'Saving…' : 'Save changes'}
           <span aria-hidden="true" className="text-[17px]">
             →
           </span>

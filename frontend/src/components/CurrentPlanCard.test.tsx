@@ -1,17 +1,11 @@
 import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderToString } from 'react-dom/server';
-import {
-  applyGoalTarget,
-  getAppliedGoal,
-  getDefaultGoal,
-  resolveGoalTarget,
-  saveDefaultGoal,
-  saveGoal,
-} from '@/lib/goal';
+import { applyGoalTarget } from '@/lib/goal';
+import { getProfileRecord } from '@/lib/onboarding';
 import { getPlanGeneratedAt, stampPlanGenerated } from '@/lib/plan';
 import { addRun, todayIso, type Run } from '@/lib/runs';
-import { seedRuns } from '@/test/runsApiMock';
+import { failWeekTargetApi, seedGoal, seedProfile, seedRuns } from '@/test/runsApiMock';
 import CurrentPlanCard from './CurrentPlanCard';
 import WeeklyGoalCard from './WeeklyGoalCard';
 
@@ -39,8 +33,17 @@ async function logRun(overrides: Partial<Omit<Run, 'id'>> = {}): Promise<void> {
   });
 }
 
+// Clicks "Apply to weekly goal" and lets the PUT settle: applying is async
+// since RUN-50, so assertions wait for the promise chain, not just the click.
+async function apply(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await user.click(screen.getByRole('button', { name: /apply to weekly goal/i }));
+  await act(async () => {});
+}
+
 describe('Current plan card (RUN-32)', () => {
   beforeEach(() => {
+    // The plan stamp still lives in localStorage (runlog.plan), and the
+    // apply tests mint a device session there.
     window.localStorage.clear();
   });
 
@@ -100,7 +103,7 @@ describe('Current plan card (RUN-32)', () => {
   });
 
   it('derives the first plan from the weekly goal (AC2)', () => {
-    saveGoal({ km: 20, startDate: todayIso(), endDate: null });
+    seedGoal({ km: 20, startDate: todayIso(), endDate: null });
     seedRun({ distanceKm: 5 });
 
     render(<CurrentPlanCard />);
@@ -169,11 +172,12 @@ describe('Current plan card (RUN-32)', () => {
       render(<CurrentPlanCard />);
       expect(screen.getByText('Aim for 22 km this week')).toBeInTheDocument();
 
-      await user.click(screen.getByRole('button', { name: /apply to weekly goal/i }));
+      await apply(user);
 
-      expect(resolveGoalTarget(null, getDefaultGoal(), todayIso(), getAppliedGoal())).toBe(22);
       // No navigation, no confirmation dialog (A15): the card is still here,
-      // with a status line acknowledging the click.
+      // with a status line acknowledging the click. The line only renders
+      // while the store's week target equals the applied km, so its presence
+      // is also the proof that this week's target moved to 22.
       expect(screen.getByRole('region', { name: "This week's plan" })).toBeInTheDocument();
       expect(screen.getByRole('status')).toHaveTextContent('Weekly goal set to 22 km.');
     });
@@ -183,7 +187,7 @@ describe('Current plan card (RUN-32)', () => {
       seedRun({ date: '2026-07-28' });
 
       render(<CurrentPlanCard />);
-      await user.click(screen.getByRole('button', { name: /apply to weekly goal/i }));
+      await apply(user);
       expect(screen.getByRole('status')).toHaveTextContent('Weekly goal set to 11 km.');
 
       // A second last-week run doubles the reference distance: new suggestion,
@@ -191,9 +195,8 @@ describe('Current plan card (RUN-32)', () => {
       await logRun({ date: '2026-07-30', routeName: 'River trail' });
       expect(screen.getByText('Aim for 22 km this week')).toBeInTheDocument();
 
-      await user.click(screen.getByRole('button', { name: /apply to weekly goal/i }));
+      await apply(user);
 
-      expect(getAppliedGoal()?.km).toBe(22);
       expect(screen.getByRole('status')).toHaveTextContent('Weekly goal set to 22 km.');
     });
 
@@ -203,30 +206,30 @@ describe('Current plan card (RUN-32)', () => {
       seedRun({ date: '2026-07-30', routeName: 'River trail' });
 
       render(<CurrentPlanCard />);
-      await user.click(screen.getByRole('button', { name: /apply to weekly goal/i }));
+      await apply(user);
       expect(screen.getByRole('status')).toHaveTextContent('Weekly goal set to 22 km.');
 
       // Another surface (say a second tab) moves this week's target: the
       // confirmation would now be a lie, so it vanishes.
-      act(() => {
-        applyGoalTarget(30);
+      await act(async () => {
+        await applyGoalTarget(30);
       });
 
       expect(screen.getByRole('status')).toHaveTextContent('');
     });
 
-    it('claims nothing when the write fails (quota, private browsing)', async () => {
+    it('claims nothing when the server rejects the apply', async () => {
       const user = clock();
       seedRun({ date: '2026-07-28' });
       render(<CurrentPlanCard />);
 
-      const setItem = jest.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
-        throw new Error('QuotaExceededError');
-      });
-      await user.click(screen.getByRole('button', { name: /apply to weekly goal/i }));
-      setItem.mockRestore();
+      failWeekTargetApi(500);
+      await apply(user);
 
-      expect(getAppliedGoal()).toBeNull();
+      // The card confirms only what the server accepted: no status line,
+      // just the server's own failure message inline (the app-wide write
+      // convention since RUN-48).
+      expect(screen.getByRole('alert')).toHaveTextContent('Applying the weekly goal failed (500).');
       expect(screen.getByRole('status')).toHaveTextContent('');
     });
 
@@ -242,7 +245,7 @@ describe('Current plan card (RUN-32)', () => {
         </>,
       );
 
-      await user.click(screen.getByRole('button', { name: /apply to weekly goal/i }));
+      await apply(user);
 
       // Both last-week runs sit outside the current week: 0 done of 22.
       const readout = within(screen.getByTestId('goal-readout'));
@@ -250,16 +253,23 @@ describe('Current plan card (RUN-32)', () => {
       expect(readout.getByText('/ 22 km')).toBeInTheDocument();
     });
 
-    it('does not disturb a pending Settings default for future weeks', async () => {
+    it('does not disturb the Settings default that seeds future weeks', async () => {
       const user = clock();
-      saveDefaultGoal(45, todayIso());
+      seedProfile({
+        firstName: 'Marko',
+        lastName: 'Kovač',
+        email: 'marko@email.com',
+        defaultWeeklyGoalKm: 45,
+      });
       seedRun({ date: '2026-07-28' });
 
       render(<CurrentPlanCard />);
-      await user.click(screen.getByRole('button', { name: /apply to weekly goal/i }));
+      await apply(user);
 
-      expect(resolveGoalTarget(null, getDefaultGoal(), todayIso(), getAppliedGoal())).toBe(11);
-      expect(resolveGoalTarget(null, getDefaultGoal(), '2026-08-10', getAppliedGoal())).toBe(45);
+      // The apply rewrote THIS week's target only; the profile default that
+      // seeds every not-yet-materialized week is untouched.
+      expect(screen.getByRole('status')).toHaveTextContent('Weekly goal set to 11 km.');
+      expect(getProfileRecord()?.defaultWeeklyGoalKm).toBe(45);
     });
   });
 
