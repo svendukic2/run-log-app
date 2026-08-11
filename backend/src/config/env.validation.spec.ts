@@ -39,6 +39,25 @@ describe('validateEnv', () => {
     );
   });
 
+  it('sits exactly on the documented 32-character boundary', () => {
+    // .env.example promises "minimum 32 characters": exactly 32 must pass,
+    // 31 must fail, or following the template's own instructions produces a
+    // rejected secret.
+    expect(() =>
+      validateEnv({ ...VALID, JWT_SECRET: 'x'.repeat(32) }),
+    ).not.toThrow();
+    expect(() => validateEnv({ ...VALID, JWT_SECRET: 'x'.repeat(31) })).toThrow(
+      /got 31/,
+    );
+  });
+
+  it('treats DATABASE_URL + JWT_SECRET as the complete boot-required set', () => {
+    // VALID above is exactly that minimal set; this test exists so that a
+    // future variable added to VALID without being consciously documented
+    // as boot-required has one place that fails and asks the question.
+    expect(Object.keys(VALID).sort()).toEqual(['DATABASE_URL', 'JWT_SECRET']);
+  });
+
   it('rejects a missing DATABASE_URL with the copy-the-template hint', () => {
     expect(() => validateEnv({})).toThrow(/DATABASE_URL is not set/);
     expect(() => validateEnv({})).toThrow(/\.env\.example/);
@@ -76,5 +95,9 @@ describe('validateEnv', () => {
     }
     expect(message).toContain('DATABASE_URL');
     expect(message).toContain('PORT');
+    // The JWT_SECRET checks must participate in the same aggregate rather
+    // than short-circuiting, or a fresh clone fixes one variable per boot
+    // attempt - the loop this test exists to prevent.
+    expect(message).toContain('JWT_SECRET');
   });
 });

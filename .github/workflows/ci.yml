@@ -42,6 +42,10 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/runlog
+      # Boot-required since RUN-56 (validateEnv). e2e sets its own value in
+      # test/e2e-env.ts; this one covers any unit spec that boots AppModule.
+      # Never a real secret - it is committed.
+      JWT_SECRET: ci-only-jwt-secret-000000000000000000
     steps:
       - uses: actions/checkout@v4
 

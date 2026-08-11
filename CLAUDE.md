@@ -128,11 +128,12 @@ Copy the templates, then fill in values. Both real files are gitignored.
 
 | App      | Template                | Real file             | Variables                                                                                                                     |
 | -------- | ----------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| Backend  | `backend/.env.example`  | `backend/.env`        | `PORT` (default 3000), `FRONTEND_URL` (CORS origin, default `http://localhost:4200`), `DATABASE_URL` (**required**, no default) |
+| Backend  | `backend/.env.example`  | `backend/.env`        | `PORT` (default 3000), `FRONTEND_URL` (CORS origin, default `http://localhost:4200`), `DATABASE_URL` (**required**, no default), `JWT_SECRET` (**required**, min 32 chars, generation one-liner in the template) |
 | Frontend | `frontend/.env.example` | `frontend/.env.local` | `BACKEND_URL` (default `http://localhost:3000`)                                                                                 |
 
 The frontend runs on its defaults with no `.env.local` at all. The backend **no longer
-does** (since RUN-46): `DATABASE_URL` is required and the boot fails without it, because
+does** (since RUN-46): `DATABASE_URL` and `JWT_SECRET` (since RUN-56) are required and
+the boot fails without either, because
 `PrismaService` connects at startup. See `docs/data-model.md` for the one-time database
 setup.
 

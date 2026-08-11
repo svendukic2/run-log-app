@@ -3,6 +3,7 @@ import {
   InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
+import { isPrismaError } from '../prisma/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
 import type { Run as RunRow } from '../generated/prisma/client';
 import {
@@ -52,18 +53,10 @@ function toEffort(rowId: string, value: string): Effort {
 }
 
 // P2025 = "record not found" on a mutation: the row vanished between the
-// request and the query (or never existed). Duck-typed rather than
-// instanceof on the generated error class, because instanceof breaks the
-// moment two copies of the client exist in a resolution graph - and the
-// Jest config already resolves modules under different rules than the
-// production build.
+// request and the query (or never existed). The duck-typing rationale lives
+// with the shared predicate in ../prisma/prisma-errors.ts.
 function isRecordNotFound(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    error.code === 'P2025'
-  );
+  return isPrismaError(error, 'P2025');
 }
 
 @Injectable()

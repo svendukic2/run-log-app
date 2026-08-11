@@ -57,6 +57,23 @@ describe('AuthService', () => {
   });
 
   describe('signup', () => {
+    beforeEach(() => {
+      // The fast-path duplicate check runs before every create; null means
+      // "email free" for the tests that exercise the paths after it.
+      prismaMock.user.findUnique.mockResolvedValue(null);
+    });
+
+    it('short-circuits a known duplicate email before paying for the hash (AC2)', async () => {
+      prismaMock.user.findUnique.mockResolvedValue({ id: 'user-1' });
+
+      await expect(service.signup(signupDto())).rejects.toThrow(
+        ConflictException,
+      );
+      // The whole point of the fast path: no bcrypt work and no insert
+      // attempt for a replayed duplicate.
+      expect(prismaMock.user.create).not.toHaveBeenCalled();
+    });
+
     it('stores a bcrypt hash with cost >= 10, never the password (AC1, AC4)', async () => {
       // Captured through the typed implementation rather than read back from
       // jest's untyped .mock.calls.
@@ -104,7 +121,9 @@ describe('AuthService', () => {
       expect(JSON.stringify(response).toLowerCase()).not.toContain('password');
     });
 
-    it('maps a unique violation to 409 Conflict (AC2)', async () => {
+    it('maps a unique violation to 409 Conflict when the fast path loses the race (AC2)', async () => {
+      // findUnique said the email was free (beforeEach), but a concurrent
+      // signup won the insert: the UNIQUE index is the arbiter.
       prismaMock.user.create.mockRejectedValue({ code: 'P2002' });
 
       await expect(service.signup(signupDto())).rejects.toThrow(

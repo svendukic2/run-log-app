@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
+import { isPrismaError } from '../prisma/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
 import type { User as UserRow } from '../generated/prisma/client';
 import { LoginDto } from './dto/login.dto';
@@ -34,19 +35,14 @@ export const BCRYPT_ROUNDS = 12;
 // enumerate registered emails.
 export const INVALID_CREDENTIALS_MESSAGE = 'Invalid email or password';
 
-// P2002 = unique constraint violation. Creating and catching, rather than
-// checking findUnique first, closes the race where two signups with the
-// same email pass the check simultaneously - the UNIQUE index is the only
-// arbiter that cannot lose that race. Duck-typed instead of instanceof for
-// the same module-resolution reason as isRecordNotFound in runs.service.ts.
+// P2002 = unique constraint violation (see ../prisma/prisma-errors.ts).
 function isUniqueViolation(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    error.code === 'P2002'
-  );
+  return isPrismaError(error, 'P2002');
 }
+
+// The clear-email-taken message shared by both places signup can detect the
+// duplicate (fast path and race arbiter, below).
+const DUPLICATE_EMAIL_MESSAGE = 'An account with this email already exists';
 
 @Injectable()
 export class AuthService {
@@ -54,12 +50,14 @@ export class AuthService {
   // one bcrypt comparison exactly like the known-email path does. Without
   // it, "unknown email" would answer visibly faster than "wrong password"
   // and the response timing would leak what AC3's single message hides.
-  // Computed once at class load; the hashed literal is irrelevant because
-  // nothing sensible can ever compare equal to it.
-  private static readonly dummyHash: string = bcrypt.hashSync(
-    'timing-equalizer-never-a-real-password',
-    BCRYPT_ROUNDS,
-  );
+  // A precomputed cost-12 hash of an irrelevant literal, checked in rather
+  // than computed at class load: hashSync here would block the event loop
+  // for ~300 ms on every boot and every test file that imports this module,
+  // and nothing sensible can ever compare equal to it either way. If
+  // BCRYPT_ROUNDS changes, regenerate to match the cost of freshly stored
+  // hashes: node -e "console.log(require('bcrypt').hashSync('x', ROUNDS))"
+  private static readonly dummyHash: string =
+    '$2b$12$PXo.8y/.eEkRDpcSE1LdwOh59PFNS1AnI6pEjOHcrzLEJ.WJHvH0u';
 
   constructor(
     private readonly prisma: PrismaService,
@@ -82,9 +80,29 @@ export class AuthService {
   }
 
   async signup(dto: SignupDto): Promise<AuthResponse> {
+    // Fast path on the unique email index BEFORE the expensive hash, so a
+    // replayed duplicate signup costs a sub-millisecond indexed read instead
+    // of ~300 ms of bcrypt CPU per attempt (an unauthenticated caller could
+    // otherwise pin a core and starve the libuv threadpool). 409 with a
+    // clear message (AC2): signup necessarily reveals that an email is
+    // taken - that is inherent to signup everywhere; login is where the
+    // generic message matters.
+    const existing = await this.prisma.user.findUnique({
+      where: { email: dto.email },
+      select: { id: true },
+    });
+    if (existing) throw new ConflictException(DUPLICATE_EMAIL_MESSAGE);
+
     const passwordHash = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
+
+    // The try covers ONLY the insert: the fast path above can lose the race
+    // where two signups pass it simultaneously, and the UNIQUE index is the
+    // arbiter that cannot. Token signing stays outside - a signing failure
+    // after a committed row must surface as what it is, not funnel through
+    // the P2002 mapping.
+    let row: UserRow;
     try {
-      const row = await this.prisma.user.create({
+      row = await this.prisma.user.create({
         data: {
           email: dto.email,
           passwordHash,
@@ -92,18 +110,13 @@ export class AuthService {
           lastName: dto.lastName,
         },
       });
-      return await this.toAuthResponse(row);
     } catch (error) {
       if (isUniqueViolation(error)) {
-        // 409 with a clear message (AC2). Signup necessarily reveals that an
-        // email is taken - that is inherent to signup everywhere; login is
-        // where the generic message matters.
-        throw new ConflictException(
-          'An account with this email already exists',
-        );
+        throw new ConflictException(DUPLICATE_EMAIL_MESSAGE);
       }
       throw error;
     }
+    return this.toAuthResponse(row);
   }
 
   async login(dto: LoginDto): Promise<AuthResponse> {

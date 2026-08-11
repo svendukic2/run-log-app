@@ -123,6 +123,32 @@ describe('Auth API (e2e)', () => {
       .expect(200);
   });
 
+  it('accepts a decomposed (NFD) password at signup and the composed (NFC) form at login', async () => {
+    // 'a' + U+0308 combining diaeresis vs precomposed U+00E4: different
+    // bytes, same characters on screen. macOS text stacks routinely send
+    // the former; without NFC canonicalization this login would 401.
+    const nfdPassword = 'pa\u0308ssword-dovoljno-duga';
+    const nfcPassword = 'p\u00e4ssword-dovoljno-duga';
+
+    await request(app.getHttpServer())
+      .post('/api/auth/signup')
+      .send({ ...validSignup(), password: nfdPassword })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ email: 'ana@example.com', password: nfcPassword })
+      .expect(200);
+  });
+
+  it('rejects a password over 72 UTF-8 bytes even when it is 72 characters (bcrypt cap)', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/api/auth/signup')
+      .send({ ...validSignup(), password: '\u0107'.repeat(72) }) // 144 bytes
+      .expect(400);
+
+    expect(errorMessages(response).join(' ')).toContain('72 bytes');
+  });
+
   it('409s on a duplicate email with a clear message and creates no user (AC2)', async () => {
     await request(app.getHttpServer())
       .post('/api/auth/signup')
