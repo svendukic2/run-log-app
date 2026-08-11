@@ -40,6 +40,19 @@ export class PaginationQueryDto {
   pageSize?: number;
 }
 
+// Deterministic newest-first ordering for every offset-paginated list: the
+// id tiebreak keeps the order stable within one snapshot of the data, which
+// is what stops rows from straddling a page boundary nondeterministically
+// (offset pages can still shift when rows land between two requests; cursor
+// pagination is the upgrade if that ever matters). A function so every call
+// site gets a fresh mutable array, which is the shape Prisma's orderBy
+// expects.
+export function newestFirstOrder(): Array<
+  { createdAt: 'desc' } | { id: 'desc' }
+> {
+  return [{ createdAt: 'desc' }, { id: 'desc' }];
+}
+
 // The one place the query's optionals become concrete numbers and a skip.
 // Validation already bounded page and pageSize, so the arithmetic here can
 // never overflow what Prisma accepts.

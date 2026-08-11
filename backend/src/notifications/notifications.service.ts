@@ -1,13 +1,13 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import {
+  newestFirstOrder,
   PaginationQueryDto,
   resolvePagination,
 } from '../common/pagination-query.dto';
 import { PrismaService } from '../prisma/prisma.service';
-import type {
-  Notification as NotificationRow,
-  Prisma,
-} from '../generated/prisma/client';
+// Value import, not type-only: TransactionIsolationLevel is read at runtime.
+import { Prisma } from '../generated/prisma/client';
+import type { Notification as NotificationRow } from '../generated/prisma/client';
 
 // The notification vocabulary (RUN-65). 'event-joined' is defined now so the
 // payload contract exists before events do; nothing writes it until events
@@ -103,6 +103,22 @@ export class NotificationsService {
     followeeId: string,
     followerId: string,
   ): Promise<void> {
+    // Bounds the follow/unfollow spam loop: while the followee still has an
+    // UNREAD new-follower from this same actor, a fresh edge writes nothing,
+    // so churning the endpoint cannot grow the bell by more than one row per
+    // actor. Reading the old notification re-arms it, which keeps a genuine
+    // re-follow months later visible.
+    const alreadyPending = await db.notification.findFirst({
+      where: {
+        userId: followeeId,
+        type: 'new-follower' satisfies NotificationType,
+        readAt: null,
+        payload: { path: ['followerId'], equals: followerId },
+      },
+      select: { id: true },
+    });
+    if (alreadyPending) return;
+
     // The follow row's FK just verified the follower exists, so inside this
     // transaction the name lookup cannot miss; OrThrow turns the impossible
     // case into a loud error instead of a nameless notification.
@@ -116,7 +132,11 @@ export class NotificationsService {
       lastName: follower.lastName,
     };
     await db.notification.create({
-      data: { userId: followeeId, type: 'new-follower', payload },
+      data: {
+        userId: followeeId,
+        type: 'new-follower' satisfies NotificationType,
+        payload,
+      },
     });
   }
 
@@ -160,7 +180,7 @@ export class NotificationsService {
       await db.notification.createMany({
         data: chunk.map(({ followerId }) => ({
           userId: followerId,
-          type: 'followed-ran' as const,
+          type: 'followed-ran' satisfies NotificationType,
           payload,
         })),
       });
@@ -174,16 +194,24 @@ export class NotificationsService {
   ): Promise<NotificationListResponse> {
     const { page, pageSize, skip } = resolvePagination(query);
 
-    const [rows, total, unreadCount] = await Promise.all([
-      this.prisma.notification.findMany({
-        where: { userId },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-        skip,
-        take: pageSize,
-      }),
-      this.prisma.notification.count({ where: { userId } }),
-      this.prisma.notification.count({ where: { userId, readAt: null } }),
-    ]);
+    const [rows, total, unreadCount] = await this.prisma.$transaction(
+      [
+        this.prisma.notification.findMany({
+          where: { userId },
+          orderBy: newestFirstOrder(),
+          skip,
+          take: pageSize,
+        }),
+        this.prisma.notification.count({ where: { userId } }),
+        this.prisma.notification.count({ where: { userId, readAt: null } }),
+      ],
+      // One snapshot for all three: under the default READ COMMITTED each
+      // statement sees its own state, so a read-all or an incoming follow
+      // committing between them could make items and counts disagree
+      // inside a single response (unread rows shown while unreadCount says
+      // 0). RepeatableRead pins the batch to one snapshot.
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
 
     return {
       items: rows.map((row) => this.toResponse(row)),
@@ -226,7 +254,7 @@ export class NotificationsService {
       type: row.type,
       // Stored once at write time and passed through untouched: rendering
       // never depends on the actor or run still existing (AC4).
-      payload: row.payload as unknown as NotificationPayload,
+      payload: row.payload as NotificationPayload,
       readAt: row.readAt ? row.readAt.toISOString() : null,
       createdAt: row.createdAt.toISOString(),
     };

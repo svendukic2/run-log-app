@@ -234,6 +234,33 @@ describe('Notifications API (e2e)', () => {
     expect((ran?.payload as FollowedRanPayload).runId).toBe(anaRunId);
   });
 
+  it('re-follow after reading notifies again, but churning cannot spam an unread bell', async () => {
+    // Ana read everything (read-all above) and bruno unfollowed, so a
+    // genuine re-follow lands one fresh notification...
+    await request(app.getHttpServer())
+      .post(`/api/users/${ana.id}/follow`)
+      .set(bruno.auth)
+      .expect(200);
+    let bell = (await notificationsOf(ana)).body as NotificationListResponse;
+    expect(bell.total).toBe(3);
+    expect(bell.unreadCount).toBe(1);
+
+    // ...while follow/unfollow churn against the still-unread bell adds
+    // nothing: the unread row from the same actor suppresses the write.
+    await request(app.getHttpServer())
+      .delete(`/api/users/${ana.id}/follow`)
+      .set(bruno.auth)
+      .expect(204);
+    await request(app.getHttpServer())
+      .post(`/api/users/${ana.id}/follow`)
+      .set(bruno.auth)
+      .expect(200);
+
+    bell = (await notificationsOf(ana)).body as NotificationListResponse;
+    expect(bell.total).toBe(3);
+    expect(bell.unreadCount).toBe(1);
+  });
+
   it('deletes the bell with its owner (cascade), not with the actors', async () => {
     // Carla still has one followed-ran row from ana; deleting CARLA removes
     // it, proving the rows hang off the recipient.
