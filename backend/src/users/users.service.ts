@@ -37,9 +37,10 @@ export interface PublicProfileResponse {
   counts: { followers: number; following: number };
   // Whether the body below was served. False means gated, never "empty".
   visible: boolean;
-  // Whether route maps may be rendered for these runs (RUN-72 draws them;
-  // no route data exists to send yet, which is why this is a permission and
-  // not a payload).
+  // Whether route maps may be rendered for these runs. Since RUN-54 there is
+  // real route data behind this, so it is BOTH a permission and a promise
+  // about the payload: when it is false, every run below arrives with
+  // `route: null` regardless of what is stored.
   showRoutes: boolean;
   runs: RunResponse[] | null;
 }
@@ -160,6 +161,11 @@ export class UsersService {
         : Promise.resolve(null),
     ]);
 
+    // Computed once and used twice on purpose: the flag the page reads and
+    // the gate the payload is built with have to be the same answer, or the
+    // profile would advertise routes it did not send (or worse, the reverse).
+    const withRoute = canViewRoutes(user, viewerId, id);
+
     return {
       id,
       firstName: user.firstName,
@@ -170,8 +176,15 @@ export class UsersService {
       following: edge !== null,
       counts: { followers, following },
       visible,
-      showRoutes: canViewRoutes(user, viewerId, id),
-      runs: runs === null ? null : runs.map(toRunResponse),
+      showRoutes: withRoute,
+      // Routes are private by default (RUN-64), so they are dropped from the
+      // payload rather than hidden by the client: data the viewer may not see
+      // must not be in the response for a devtools tab to un-hide (RUN-54,
+      // extending the rule RUN-63 already applies to the whole body).
+      runs:
+        runs === null
+          ? null
+          : runs.map((row) => toRunResponse(row, { withRoute })),
     };
   }
 

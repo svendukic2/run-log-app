@@ -1,11 +1,29 @@
+// @Type on the nested route waypoints (RUN-54) needs Reflect.getMetadata,
+// which Nest's bootstrap provides in production. This file bootstraps
+// nothing, so it says so itself - without this line the suite fails to load,
+// not just to pass. Same note as plan-route.dto.spec.ts.
+import 'reflect-metadata';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import {
   CreateRunDto,
+  MAX_ROUTE_POINTS,
   NOTE_MAX_LENGTH,
   ROUTE_NAME_MAX_LENGTH,
+  ROUTE_POLYLINE_MAX_LENGTH,
 } from './create-run.dto';
 import { UpdateRunDto } from './update-run.dto';
+
+// One tapped point and the smallest complete route: start and finish only.
+const POINT = { lat: 52.516275, lng: 13.377704 };
+
+function route(overrides: Record<string, unknown> = {}) {
+  return {
+    polyline: 'wap_IsyspAsFgc@cG{h@qFe{A',
+    waypoints: [POINT, { lat: 52.520008, lng: 13.404954 }],
+    ...overrides,
+  };
+}
 
 // Direct class-validator runs against the DTOs: the trickiest logic in the
 // module is the date validator, and it needs no HTTP server to be proven.
@@ -136,6 +154,41 @@ describe('CreateRunDto', () => {
         note: 'x'.repeat(NOTE_MAX_LENGTH + 1),
       });
       expect(errors).toHaveLength(1);
+    });
+  });
+
+  // The optional route (RUN-54). null is legal here and nowhere else in this
+  // DTO: the run form always submits its complete shape, so "the map is
+  // empty" has to be sayable.
+  describe('route', () => {
+    it('accepts omitted, null, and a complete route alike', async () => {
+      expect(await createErrors({})).toHaveLength(0);
+      expect(await createErrors({ route: null })).toHaveLength(0);
+      expect(await createErrors({ route: route() })).toHaveLength(0);
+    });
+
+    it.each([
+      ['fewer points than start and finish', { waypoints: [POINT] }],
+      [
+        'more points than the picker offers',
+        {
+          waypoints: Array.from({ length: MAX_ROUTE_POINTS + 1 }, () => POINT),
+        },
+      ],
+      ['an off-globe latitude', { waypoints: [POINT, { lat: 91, lng: 13 }] }],
+      // An array is an object to @ValidateNested but not to us: without the
+      // per-element @IsObject this validates clean and a nested array reaches
+      // the JSONB column as a "waypoint".
+      ['an array-shaped point', { waypoints: [POINT, []] }],
+      ['an empty polyline', { polyline: '' }],
+      [
+        'a polyline over the documented bound',
+        { polyline: 'x'.repeat(ROUTE_POLYLINE_MAX_LENGTH + 1) },
+      ],
+    ])('rejects a route with %s', async (_case, overrides) => {
+      const errors = await createErrors({ route: route(overrides) });
+      expect(errors).toHaveLength(1);
+      expect(errors[0].property).toBe('route');
     });
   });
 });

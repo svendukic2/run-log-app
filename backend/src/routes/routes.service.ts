@@ -1,6 +1,7 @@
 import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { PlanRouteDto } from './dto/plan-route.dto';
+import { ROUTE_SOURCE_OPENROUTESERVICE } from './route-sources';
 
 // ---------------------------------------------------------------------------
 // Provider choice (RUN-53 spike, AC3)
@@ -28,9 +29,11 @@ import type { PlanRouteDto } from './dto/plan-route.dto';
 // road-running log wants.
 export const ROUTING_PROFILE = 'foot-walking';
 
-// Echoed to the client and destined for the routeSource column RUN-54 adds,
-// so a stored route records which provider drew it.
-export const ROUTING_SOURCE = 'openrouteservice';
+// Echoed to the client and stored in Run.routeSource by RUN-54, so a stored
+// route records which provider drew it. The value itself moved to
+// route-sources.ts once the runs module needed it too; re-exported here so
+// the provider-shaped constants still read as one group.
+export const ROUTING_SOURCE = ROUTE_SOURCE_OPENROUTESERVICE;
 
 // Overridable via ROUTING_BASE_URL for a self-hosted ORS instance.
 export const DEFAULT_ROUTING_BASE_URL = 'https://api.openrouteservice.org';

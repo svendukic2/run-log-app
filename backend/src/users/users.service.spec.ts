@@ -12,6 +12,17 @@ import { UsersService } from './users.service';
 const OWNER = 'user-owner';
 const VISITOR = 'user-visitor';
 
+// A run WITH a route (RUN-54), because that is the interesting row here: the
+// profile must serve it or drop it depending on the owner's showRoutes.
+const RUN_ROUTE = {
+  routePolyline: 'wap_IsyspAsFgc@cG{h@qFe{A',
+  routeWaypoints: [
+    { lat: 52.516275, lng: 13.377704 },
+    { lat: 52.520008, lng: 13.404954 },
+  ],
+  routeSource: 'openrouteservice',
+};
+
 const RUN_ROW = {
   id: 'run-1',
   routeName: 'Riverside loop',
@@ -20,6 +31,7 @@ const RUN_ROW = {
   date: toDbDate('2026-08-01'),
   effort: 'Medium',
   note: 'Felt good',
+  ...RUN_ROUTE,
   userId: OWNER,
 };
 
@@ -185,7 +197,10 @@ describe('UsersService.findPublicProfile', () => {
   });
 
   // showRoutes is strictly narrower than profilePublic: a public profile
-  // that has not opted into routes serves its runs without them.
+  // that has not opted into routes serves its runs without them. Since RUN-54
+  // there is real route data to withhold, so the assertion is on the PAYLOAD,
+  // not just the flag - a flag the client is trusted to honour is not a
+  // privacy control.
   it('serves a public profile without routes when showRoutes is off', async () => {
     const { service } = makeService({ profilePublic: true, showRoutes: false });
 
@@ -193,6 +208,35 @@ describe('UsersService.findPublicProfile', () => {
 
     expect(profile.visible).toBe(true);
     expect(profile.showRoutes).toBe(false);
+    expect(profile.runs?.[0]).toMatchObject({ id: 'run-1', route: null });
+  });
+
+  it('serves the route itself once the owner opted in (RUN-54)', async () => {
+    const { service } = makeService({ profilePublic: true, showRoutes: true });
+
+    const profile = await service.findPublicProfile(VISITOR, OWNER);
+
+    expect(profile.showRoutes).toBe(true);
+    expect(profile.runs?.[0].route).toEqual({
+      polyline: RUN_ROUTE.routePolyline,
+      waypoints: RUN_ROUTE.routeWaypoints,
+      source: RUN_ROUTE.routeSource,
+    });
+  });
+
+  // The owner's own profile ignores the toggles entirely (AC3), routes
+  // included: showRoutes gates what OTHERS see.
+  it('serves the owner their own route even with showRoutes off', async () => {
+    const { service } = makeService({
+      profilePublic: false,
+      showRoutes: false,
+    });
+
+    const profile = await service.findPublicProfile(OWNER, OWNER);
+
+    expect(profile.runs?.[0].route).toMatchObject({
+      polyline: RUN_ROUTE.routePolyline,
+    });
   });
 
   // AC5: only an id that matches nothing is 404. A private account is a 200

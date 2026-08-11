@@ -1,5 +1,6 @@
 import { NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { Prisma } from '../generated/prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RunsService } from './runs.service';
@@ -10,7 +11,7 @@ const USER_ID = 'user-1';
 // A stored row as Prisma returns it: the DATE column comes back as a JS Date
 // pinned to UTC midnight.
 function row(overrides: Partial<Record<string, unknown>> = {}) {
-  return {
+  const merged = {
     id: 'run-1',
     routeName: 'Morning loop',
     distanceKm: 8.2,
@@ -18,10 +19,43 @@ function row(overrides: Partial<Record<string, unknown>> = {}) {
     date: new Date('2026-07-14T00:00:00.000Z'),
     effort: 'Medium',
     note: '',
+    // A run with no route: all three columns NULL, which is what every run
+    // stored before RUN-54 looks like too.
+    routePolyline: null,
+    routeWaypoints: null,
+    routeSource: null,
     userId: USER_ID,
     ...overrides,
   };
+  return {
+    ...merged,
+    // The create/update tests build their expected row by spreading the
+    // `data` the service passed to Prisma, and a cleared route carries
+    // Prisma.DbNull there - a WRITE sentinel. The database turns it into a
+    // plain NULL, so a fixture standing in for a stored row has to do the
+    // same translation or it stops resembling one.
+    routeWaypoints: Array.isArray(merged.routeWaypoints)
+      ? merged.routeWaypoints
+      : null,
+  };
 }
+
+// A row for a run saved WITH a route, and the response object it must
+// produce. Kept together so the two cannot drift.
+const STORED_ROUTE = {
+  routePolyline: 'wap_IsyspAsFgc@cG{h@qFe{A',
+  routeWaypoints: [
+    { lat: 52.516275, lng: 13.377704 },
+    { lat: 52.520008, lng: 13.404954 },
+  ],
+  routeSource: 'openrouteservice',
+};
+
+const ROUTE_RESPONSE = {
+  polyline: STORED_ROUTE.routePolyline,
+  waypoints: STORED_ROUTE.routeWaypoints,
+  source: STORED_ROUTE.routeSource,
+};
 
 describe('RunsService', () => {
   let service: RunsService;
@@ -95,6 +129,9 @@ describe('RunsService', () => {
         date: '2026-07-14',
         effort: 'Medium',
         note: '',
+        // Every run carries the route key; null is a run with no route
+        // (RUN-54 AC3), which is what the list looked like before it existed.
+        route: null,
       },
     ]);
   });
@@ -311,6 +348,81 @@ describe('RunsService', () => {
     await expect(
       service.update(USER_ID, 'run-1', { distanceKm: 9 }),
     ).rejects.toThrow('connection reset');
+  });
+
+  /* The optional route (RUN-54) ------------------------------------------- */
+
+  it('stores a drawn route and stamps the source itself (AC4)', async () => {
+    prisma.run.create.mockImplementation(
+      ({ data }: { data: Record<string, unknown> }) =>
+        Promise.resolve(row({ ...data, id: 'run-6' })),
+    );
+
+    const created = await service.create(USER_ID, {
+      routeName: 'Routed run',
+      distanceKm: 5,
+      durationSeconds: 1500,
+      date: '2026-08-03',
+      route: {
+        polyline: STORED_ROUTE.routePolyline,
+        waypoints: STORED_ROUTE.routeWaypoints,
+      },
+    });
+
+    expect(prisma.run.create).toHaveBeenCalledWith({
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining is typed any
+      data: expect.objectContaining(STORED_ROUTE),
+    });
+    // The client never sends a source and could not be trusted with one: the
+    // polyline can only have come from our own routing proxy, so the server
+    // knows who drew it.
+    expect(created.route).toEqual(ROUTE_RESPONSE);
+  });
+
+  it('clears the route on an explicit null and leaves it alone when absent (AC5)', async () => {
+    prisma.run.update.mockImplementation(
+      ({ data }: { data: Record<string, unknown> }) =>
+        Promise.resolve(row({ ...STORED_ROUTE, ...data })),
+    );
+
+    await service.update(USER_ID, 'run-1', { route: null });
+    // DbNull, not null: Prisma needs the sentinel to put SQL NULL into a
+    // nullable Json column.
+    expect(prisma.run.update).toHaveBeenCalledWith({
+      where: { id: 'run-1', userId: USER_ID },
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining is typed any
+      data: expect.objectContaining({
+        routePolyline: null,
+        routeWaypoints: Prisma.DbNull,
+        routeSource: null,
+      }),
+    });
+
+    // An edit that never opened the Route step must not wipe the route it
+    // never saw, which is why the three cases (absent / null / object) are
+    // distinguished rather than collapsed into "falsy".
+    const kept = await service.update(USER_ID, 'run-1', { distanceKm: 9 });
+    expect(prisma.run.update).toHaveBeenLastCalledWith({
+      where: { id: 'run-1', userId: USER_ID },
+      data: { distanceKm: 9 },
+    });
+    expect(kept.route).toEqual(ROUTE_RESPONSE);
+  });
+
+  it('fails loudly on a half-written route rather than serving one the picker cannot restore', async () => {
+    // Only reachable by editing the row outside the API - the database CHECK
+    // rejects this combination - but a polyline with no waypoints would leave
+    // Edit unable to restore or move anything, silently.
+    prisma.run.findFirst.mockResolvedValue(
+      row({
+        routePolyline: 'wap_IsyspAsFgc@cG{h@qFe{A',
+        routeSource: 'openrouteservice',
+      }),
+    );
+
+    await expect(service.findOne(USER_ID, 'run-1')).rejects.toThrow(
+      /Run run-1 has an unreadable route/,
+    );
   });
 
   it('deletes scoped to the owner and 404s when nothing matched', async () => {

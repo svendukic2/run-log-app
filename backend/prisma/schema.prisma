@@ -73,6 +73,26 @@ model Run {
   date            DateTime @db.Date
   effort          String // Easy | Medium | Hard
   note            String   @default("")
+
+  // The optional route (RUN-54), the columns RUN-53 deliberately left to
+  // this ticket. All three are written together or not at all - a database
+  // CHECK enforces that, see the migration - because two of them without
+  // the third is not a partial route, it is an unreadable one:
+  //   routePolyline  the provider's encoded polyline, precision 5
+  //   routeWaypoints the points the runner tapped, [{lat, lng}, ...], 2-5 of
+  //                  them: index 0 is Start, the last is Finish, the rest
+  //                  are the numbered waypoints. Kept (rather than derived
+  //                  from the polyline, which has hundreds of points) so
+  //                  Edit can restore the picker and re-plan (AC5)
+  //   routeSource    WHICH provider drew it. That is also what marks the
+  //                  line as a reconstruction rather than GPS truth, so
+  //                  RUN-55 knows to draw it dashed
+  // A run with no route leaves all three NULL and behaves exactly as it did
+  // before this ticket (AC3), which is why nothing here has a default.
+  routePolyline   String?
+  routeWaypoints  Json?
+  routeSource     String?
+
   userId          String
   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 

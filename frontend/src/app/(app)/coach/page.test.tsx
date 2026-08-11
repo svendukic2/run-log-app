@@ -87,7 +87,9 @@ describe('AI Coach page (RUN-31)', () => {
     await user.type(screen.getByLabelText('Route name'), 'Morning loop');
     await user.type(screen.getByLabelText('Distance (km)'), '8.2');
     await user.type(screen.getByLabelText('Duration'), '42:15');
-    await user.click(screen.getByRole('button', { name: /save run/i }));
+    // The modal is two steps since RUN-54; Save run is on the second.
+    await user.click(screen.getByRole('button', { name: /^next$/i }));
+    await user.click(screen.getByRole('button', { name: /^save run$/i }));
 
     // The save round-trips through /api/runs (RUN-48), so the swap lands
     // asynchronously after the click.

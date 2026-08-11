@@ -17,9 +17,16 @@ import { __resetAccountStoreForTests } from '@/lib/account';
 import { __resetGoalStoreForTests, todayIso, type Goal } from '@/lib/goal';
 import { __resetProfileStoreForTests } from '@/lib/onboarding';
 import { __resetPrivacyStoreForTests, PRIVACY_DEFAULTS } from '@/lib/privacy';
-import { __resetRunsStoreForTests, startOfWeek, type Run } from '@/lib/runs';
+import {
+  __resetRunsStoreForTests,
+  startOfWeek,
+  type Run,
+  type RouteWaypoint,
+  type RunDraft,
+} from '@/lib/runs';
 import { __resetSessionForTests, __setHardNavigateForTests, hasStoredSession } from '@/lib/session';
 import { jsonResponse } from './apiMockShared';
+import { resetLeafletMock } from './leafletMock';
 import { handleEventsRequest } from './eventsApiMock';
 import { handleLeaderboardRequest } from './leaderboardApiMock';
 import { handleNotificationsRequest } from './notificationsApiMock';
@@ -62,6 +69,42 @@ let goalFailure: number | null = null;
 // the pessimistic-save error paths in Settings and on the plan card.
 let profilePutFailure: number | null = null;
 let weekTargetPutFailure: number | null = null;
+
+/* The routing proxy (RUN-53 endpoint, RUN-54 consumer) ---------------------- */
+
+// The provider the real endpoint echoes and the server stores in
+// Run.routeSource.
+const ROUTE_PLAN_SOURCE = 'openrouteservice';
+
+// What POST /api/routes/plan answers with, and every point list it was asked
+// about (in order), so a test can assert the start/waypoints/finish split the
+// endpoint's request shape needs.
+let routePlanResult = { polyline: 'wap_IsyspAsFgc@cG{h@qFe{A', distanceKm: 5.1, durationSeconds: 3800 };
+let routePlanRequests: RouteWaypoint[][] = [];
+let routePlanFailure: { status: number; code: string; message: string } | null = null;
+// When set, plan requests wait on this before answering (holdRoutePlan below).
+let routePlanGate: Promise<void> | null = null;
+
+// The real API's whitelist pipe (forbidNonWhitelisted) rejects any property a
+// DTO does not declare, NESTED ONES INCLUDED - and RunRouteDto deliberately
+// declares no `source`, because provenance is the server's to stamp. Mirroring
+// that here is not pedantry: a mock that accepts whatever the client sends
+// turns "every save of a routed run is a 400" into a green test suite.
+function routeRejection(route: RunDraft['route']): Response | null {
+  if (!route) return null;
+  const unknown = Object.keys(route).filter((key) => key !== 'polyline' && key !== 'waypoints');
+  if (unknown.length === 0) return null;
+  return jsonResponse(400, {
+    message: unknown.map((key) => `property route.${key} should not exist`),
+  });
+}
+
+// What the server stores and echoes for a submitted route: the two accepted
+// fields plus its own source.
+function storedRoute(route: RunDraft['route']): Run['route'] {
+  if (!route) return null;
+  return { polyline: route.polyline, waypoints: route.waypoints, source: ROUTE_PLAN_SOURCE };
+}
 
 function nextId(): string {
   idCounter += 1;
@@ -284,18 +327,58 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
   }
 
   if (url === '/api/runs' && method === 'POST') {
-    const draft = JSON.parse(String(init.body)) as Omit<Run, 'id'>;
+    const draft = JSON.parse(String(init.body)) as RunDraft;
     if (rejectedNames.has(draft.routeName)) {
       return Promise.resolve(jsonResponse(400, { message: ['routeName rejected'] }));
     }
+    const rejection = routeRejection(draft.route);
+    if (rejection) return Promise.resolve(rejection);
     const run: Run = {
       ...draft,
       effort: draft.effort ?? 'Medium',
       note: draft.note ?? '',
+      // The real server stamps the source itself and answers with the key
+      // present, null included (RUN-54). Mirroring that here is what keeps a
+      // frontend test from passing against a shape the API never sends.
+      route: storedRoute(draft.route),
       id: nextId(),
     };
     db.push(run);
     return Promise.resolve(jsonResponse(201, run));
+  }
+
+  // The routing proxy (RUN-53), consumed by the Route step (RUN-54). Answers
+  // with the same typed error body the real endpoint uses, so the step's
+  // switch on `code` is exercised rather than assumed.
+  if (url === '/api/routes/plan') {
+    if (!authorized(init)) {
+      return Promise.resolve(jsonResponse(401, { message: 'Missing bearer token' }));
+    }
+    if (routePlanFailure) {
+      return Promise.resolve(
+        jsonResponse(routePlanFailure.status, {
+          statusCode: routePlanFailure.status,
+          code: routePlanFailure.code,
+          message: routePlanFailure.message,
+        }),
+      );
+    }
+    const body = JSON.parse(String(init.body)) as {
+      start: RouteWaypoint;
+      waypoints?: RouteWaypoint[];
+      finish: RouteWaypoint;
+    };
+    routePlanRequests.push([body.start, ...(body.waypoints ?? []), body.finish]);
+    const answer = () =>
+      jsonResponse(200, {
+        ...routePlanResult,
+        profile: 'foot-walking',
+        source: ROUTE_PLAN_SOURCE,
+      });
+    // Held requests answer only when the test says so, which is how the
+    // in-flight cases (save blocked, a superseded plan landing late) become
+    // testable at all.
+    return routePlanGate ? routePlanGate.then(answer) : Promise.resolve(answer());
   }
 
   // The events API (RUN-68) lives in its own module but shares this fetch
@@ -350,7 +433,19 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
     }
     if (method === 'PATCH') {
       if (index === -1) return Promise.resolve(jsonResponse(404, { message: 'Not found' }));
-      db[index] = { ...db[index], ...(JSON.parse(String(init.body)) as Partial<Run>) };
+      const patch = JSON.parse(String(init.body)) as Partial<RunDraft>;
+      const rejection = routeRejection(patch.route);
+      if (rejection) return Promise.resolve(rejection);
+      // The route is pulled out of the spread because the submitted shape and
+      // the stored one differ (no client-supplied source), and because absent /
+      // null / object are three different PATCH outcomes: leave it alone, clear
+      // it, replace it - exactly what the real service distinguishes.
+      const { route: patchedRoute, ...fields } = patch;
+      db[index] = {
+        ...db[index],
+        ...fields,
+        ...(patchedRoute === undefined ? {} : { route: storedRoute(patchedRoute) }),
+      };
       return Promise.resolve(jsonResponse(200, db[index]));
     }
     if (method === 'DELETE') {
@@ -391,6 +486,11 @@ export function installRunsApiMock(): void {
   weekTargetPutFailure = null;
   privacyDb = { ...PRIVACY_DEFAULTS };
   privacyPutFailure = null;
+  routePlanResult = { polyline: 'wap_IsyspAsFgc@cG{h@qFe{A', distanceKm: 5.1, durationSeconds: 3800 };
+  routePlanRequests = [];
+  routePlanFailure = null;
+  routePlanGate = null;
+  resetLeafletMock();
   signInRedirects = 0;
   hardNavigations = [];
   // jsdom cannot navigate; the session layer's full-load navigations become
@@ -647,4 +747,48 @@ export function failGoalApi(status = 500): void {
 
 export function restoreGoalApi(): void {
   goalFailure = null;
+}
+
+/* The routing proxy (RUN-54) ------------------------------------------------ */
+
+// Overrides what a plan comes back with, so a test can set a routed distance
+// that does (or does not) trip the 20% mismatch hint.
+export function seedRoutePlan(plan: Partial<typeof routePlanResult>): void {
+  routePlanResult = { ...routePlanResult, ...plan };
+}
+
+// Every point list POST /api/routes/plan was asked about, flattened back to
+// start-first order: the step is expected to send the ends as start/finish and
+// only the middle as waypoints.
+export function routePlanRequestsMade(): RouteWaypoint[][] {
+  return routePlanRequests.map((points) => [...points]);
+}
+
+// Makes planning fail with one of the endpoint's typed codes (RUN-53's
+// ROUTE_PLAN_ERRORS), which is what the step switches on to decide whether
+// retrying could ever help.
+export function failRoutePlan(
+  code = 'ROUTING_PROVIDER_UNAVAILABLE',
+  status = 503,
+  message = 'The routing provider could not be reached.',
+): void {
+  routePlanFailure = { code, status, message };
+}
+
+export function restoreRoutePlan(): void {
+  routePlanFailure = null;
+}
+
+// Holds every subsequent plan request open until the returned function is
+// called: the only way to observe the in-flight window, where a save must be
+// refused and a superseded answer must be ignored.
+export function holdRoutePlan(): () => void {
+  let release = (): void => undefined;
+  routePlanGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return () => {
+    routePlanGate = null;
+    release();
+  };
 }
