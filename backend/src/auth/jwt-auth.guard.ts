@@ -10,11 +10,13 @@ import type { Request } from 'express';
 import { IS_PUBLIC_KEY } from './public.decorator';
 
 // What the guard attaches to the request and @CurrentUser() hands to
-// controllers: the verified token claims, nothing fetched from the
-// database. Handlers that need more than id/email load it themselves.
+// controllers: the verified subject, nothing fetched from the database.
+// Deliberately ONLY the id - the token also carries an email claim, but
+// exposing it here before anything consumes it would just be a second,
+// possibly stale copy of what the User row already holds. Handlers that
+// need more load it themselves.
 export interface AuthenticatedUser {
   id: string;
-  email: string;
 }
 
 // Express's Request with the property this guard adds.
@@ -42,12 +44,16 @@ export class JwtAuthGuard implements CanActivate {
     if (isPublic) return true;
 
     const request = context.switchToHttp().getRequest<Request>();
-    const [scheme, token] = (request.headers.authorization ?? '').split(' ');
-    if (scheme !== 'Bearer' || !token) {
+    // RFC 9110 makes the auth-scheme case-insensitive and RFC 6750 allows
+    // any amount of whitespace between scheme and token, so match the
+    // grammar rather than one exact spelling.
+    const match = /^Bearer\s+(\S+)$/i.exec(request.headers.authorization ?? '');
+    if (!match) {
       throw new UnauthorizedException('Missing bearer token');
     }
+    const token = match[1];
 
-    let payload: { sub?: unknown; email?: unknown };
+    let payload: { sub?: unknown };
     try {
       payload = await this.jwt.verifyAsync(token);
     } catch {
@@ -64,10 +70,7 @@ export class JwtAuthGuard implements CanActivate {
       throw new UnauthorizedException('Invalid or expired token');
     }
 
-    (request as AuthenticatedRequest).user = {
-      id: payload.sub,
-      email: typeof payload.email === 'string' ? payload.email : '',
-    };
+    (request as AuthenticatedRequest).user = { id: payload.sub };
     return true;
   }
 }

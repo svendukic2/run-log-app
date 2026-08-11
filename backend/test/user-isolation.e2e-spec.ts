@@ -1,11 +1,9 @@
-import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
-import { AppModule } from './../src/app.module';
 import { PrismaService } from './../src/prisma/prisma.service';
 import type { RunResponse } from './../src/runs/runs.service';
-import type { AuthResponse } from './../src/auth/auth.service';
+import { createE2eApp, E2E_PASSWORD, signupUser } from './create-test-app';
 
 // RUN-57 AC5: two registered users, complete data isolation between them.
 // This spec is the proof the whole task exists for, so it exercises every
@@ -17,15 +15,6 @@ describe('User data isolation (e2e)', () => {
   let authB: { Authorization: string };
   let runOfB: string;
 
-  function signupPayload(name: string) {
-    return {
-      email: `${name}@example.com`,
-      password: 'correct horse battery staple',
-      firstName: name,
-      lastName: 'Tester',
-    };
-  }
-
   function run(routeName: string) {
     return {
       routeName,
@@ -35,32 +24,13 @@ describe('User data isolation (e2e)', () => {
     };
   }
 
-  async function signup(name: string): Promise<{ Authorization: string }> {
-    const response = await request(app.getHttpServer())
-      .post('/api/auth/signup')
-      .send(signupPayload(name))
-      .expect(201);
-    return {
-      Authorization: `Bearer ${(response.body as AuthResponse).token}`,
-    };
-  }
-
   beforeAll(async () => {
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication();
-    // Mirror the global 'api' prefix configured in main.ts so e2e routes
-    // match production.
-    app.setGlobalPrefix('api');
-    await app.init();
-    prisma = app.get(PrismaService);
+    ({ app, prisma } = await createE2eApp());
 
     // Users cascade to runs (schema-level), so this clears everything.
     await prisma.user.deleteMany();
-    authA = await signup('ana');
-    authB = await signup('bruno');
+    authA = await signupUser(app, 'ana');
+    authB = await signupUser(app, 'bruno');
 
     // A owns two runs, B owns one: the fixture every test reads.
     await request(app.getHttpServer())
@@ -139,16 +109,13 @@ describe('User data isolation (e2e)', () => {
     await request(app.getHttpServer()).get('/api/hello').expect(200);
     await request(app.getHttpServer())
       .post('/api/auth/login')
-      .send({
-        email: 'ana@example.com',
-        password: 'correct horse battery staple',
-      })
+      .send({ email: 'ana@example.com', password: E2E_PASSWORD })
       .expect(200);
     await request(app.getHttpServer()).get('/api/runs').expect(401);
   });
 
   it('a token from a deleted user is rejected by scoping, not trusted (defense in depth)', async () => {
-    const authC = await signup('casper');
+    const authC = await signupUser(app, 'casper');
     await prisma.user.delete({ where: { email: 'casper@example.com' } });
 
     // The JWT itself still verifies (it is signed and unexpired), but every
@@ -163,5 +130,13 @@ describe('User data isolation (e2e)', () => {
       .get(`/api/runs/${runOfB}`)
       .set(authC)
       .expect(404);
+
+    // Writes hit the userId foreign key instead of inventing orphan rows:
+    // a dead session answers 401, not a 500 (P2003 mapping in create).
+    await request(app.getHttpServer())
+      .post('/api/runs')
+      .set(authC)
+      .send(run('ghost run'))
+      .expect(401);
   });
 });

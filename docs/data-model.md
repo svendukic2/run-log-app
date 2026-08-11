@@ -82,7 +82,7 @@ stored hash's preimage was random and discarded), and simply holds pre-account d
 until someone claims or deletes it. Response shapes are unchanged: `userId` never
 appears in API responses, the owner is implicit in the token.
 
-### Profile (single record)
+### Profile (one per user since RUN-57)
 
 | Field | Type | Notes |
 | --- | --- | --- |
@@ -95,7 +95,7 @@ appears in API responses, the owner is implicit in the token.
 `runningLevel` and `defaultWeeklyGoalKm` are not in `onboarding.ts` yet; RUN-11 and
 RUN-38 add them to this same interface rather than creating new stores.
 
-### Goal (single record) + WeekTarget (one per week)
+### Goal (one per user since RUN-57) + WeekTarget (one per user per week)
 
 This resolves the one question the spec leaves open. SET-6 says the default target is
 "applied to each new week", and the coach's previous plans show "Target 20 km · ran
@@ -104,8 +104,8 @@ reproduce that history, so the target is **snapshotted per week**:
 
 - **Goal** is the onboarding record (RUN-10): `{ km, startDate, endDate | null }`, bounds
   0-60 km (GOAL-2, A17).
-- **WeekTarget** is `{ weekStart, targetKm }`, at most one per week (`weekStart` unique,
-  Monday ISO date). The first time a week is displayed or evaluated, its row is created
+- **WeekTarget** is `{ weekStart, targetKm }`, at most one per user per week
+  (`(userId, weekStart)` unique since RUN-57, Monday ISO date). The first time a week is displayed or evaluated, its row is created
   from the goal's current km. After that the row is the truth for that week.
 - "Apply to weekly goal" (AIC-5, A15) updates the **current week's** WeekTarget only.
 - Changing the Settings default (SET-6) changes what **future** weeks snapshot; existing

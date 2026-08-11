@@ -1,10 +1,9 @@
-import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
-import { AppModule } from './../src/app.module';
 import { PrismaService } from './../src/prisma/prisma.service';
 import type { AuthResponse } from './../src/auth/auth.service';
+import { createE2eApp } from './create-test-app';
 
 function authBody(response: request.Response): AuthResponse {
   return response.body as AuthResponse;
@@ -37,16 +36,7 @@ describe('Auth API (e2e)', () => {
   }
 
   beforeAll(async () => {
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication();
-    // Mirror the global 'api' prefix configured in main.ts so e2e routes
-    // match production.
-    app.setGlobalPrefix('api');
-    await app.init();
-    prisma = app.get(PrismaService);
+    ({ app, prisma } = await createE2eApp());
   });
 
   beforeEach(async () => {
