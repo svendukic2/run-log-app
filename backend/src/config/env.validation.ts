@@ -50,6 +50,34 @@ export function validateEnv(
     );
   }
 
+  // Route planning (RUN-53) is deliberately NOT boot-required, unlike the two
+  // above. A clone with no routing key runs the whole app; only
+  // POST /api/routes/plan answers 503 with a typed body the modal can show.
+  // Making it required would break every contributor's boot for one optional
+  // feature. What is checked is a value that is *present but obviously wrong*,
+  // because that fails at the provider with a 403 the operator then has to go
+  // hunting for.
+  if (config.ROUTING_API_KEY !== undefined) {
+    const key = asString(config.ROUTING_API_KEY);
+    if (key.includes('<')) {
+      errors.push(
+        'ROUTING_API_KEY still contains a "<...>" placeholder from .env.example. Paste a real key or remove the line entirely.',
+      );
+    }
+  }
+
+  // Only needed to point at a self-hosted openrouteservice; the default in
+  // routes.service.ts is the hosted API. A typo'd URL here would otherwise
+  // surface as an unreachable-provider error on every plan request.
+  if (config.ROUTING_BASE_URL !== undefined) {
+    const baseUrl = asString(config.ROUTING_BASE_URL);
+    if (baseUrl !== '' && !/^https?:\/\/\S+$/.test(baseUrl)) {
+      errors.push(
+        `ROUTING_BASE_URL must be an http(s) URL (got "${baseUrl}"). Remove the line to use the hosted provider.`,
+      );
+    }
+  }
+
   // Optional with a default, but a present-and-garbage value should fail
   // here rather than as EADDRINUSE-style noise later.
   if (config.PORT !== undefined) {
