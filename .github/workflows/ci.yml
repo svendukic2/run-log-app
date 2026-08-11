@@ -168,8 +168,10 @@ jobs:
 
       - name: Typecheck the specs
         # Playwright transpiles without typechecking, so this is the only
-        # gate that catches type drift in the e2e package.
-        run: npx tsc -p .
+        # gate that catches type drift in the e2e package. The script, not a
+        # bare `npx tsc`: without typescript in the package, npx silently
+        # installs the unrelated `tsc` npm package and fails.
+        run: npm run typecheck
         working-directory: e2e
 
       - name: Playwright tests
