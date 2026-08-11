@@ -61,13 +61,17 @@ export class WeekTargetsService {
   }
 
   // What a brand-new week snapshots. The data model's shorthand is "the
-  // goal's current km", but the precise order mirrors the frontend's
-  // resolveGoalTarget: the Settings default wins when a profile exists
-  // (SET-6 "applied to each new week"; RUN-50 initializes it from the
-  // onboarding goal, so it is always the fresher of the two), else the
-  // onboarding goal, else the 20 km fallback. Reading prisma.profile from
-  // the goal module is deliberate: the seed rule spans both entities and
-  // PrismaService is the app's single database entry point.
+  // goal's current km", but the precise order is: the Settings default
+  // when a profile exists (SET-6 "applied to each new week"; RUN-50
+  // initializes it from the onboarding goal, so it is always the fresher
+  // of the two), else the onboarding goal, else the 20 km fallback.
+  // TRIPWIRE: frontend/src/lib/goal.ts#fallbackSeedKm hand-mirrors this
+  // exact chain - it is what the cards display while this row is still in
+  // flight, and the two being identical is why the number on screen never
+  // jumps when the row lands. Change the order here and you change it
+  // there, in the same commit. Reading prisma.profile from this module is
+  // deliberate: the seed rule spans both entities and PrismaService is the
+  // app's single database entry point.
   private async snapshotKm(userId: string): Promise<number> {
     const [profile, goal] = await Promise.all([
       this.prisma.profile.findUnique({

@@ -6,30 +6,24 @@ import Badge from '@/components/Badge';
 import Brand from '@/components/Brand';
 import DateField from '@/components/DateField';
 import StepDots from '@/components/StepDots';
-import {
-  clampGoal,
-  getGoal,
-  GOAL_DEFAULT_KM,
-  GOAL_MAX_KM,
-  GOAL_MIN_KM,
-  saveGoal,
-  todayIso,
-} from '@/lib/goal';
-import { useProfile } from '@/lib/onboarding';
+import { clampGoal, GOAL_DEFAULT_KM, GOAL_MAX_KM, GOAL_MIN_KM, todayIso } from '@/lib/goal';
+import { getOnboardingDraft, saveDraftGoal } from '@/lib/onboarding';
 import { ROUTES } from '@/lib/routes';
 import { useHydrated } from '@/lib/useHydrated';
 
 // 02 · Setup - Weekly goal (Figma node 5:2). Stepper and slider edit the same
-// clamped value; start/end dates and both continue actions save the goal and
-// open Setup - Running level (03). A goal already stored (e.g. after coming
-// Back from step 03) refills the controls so entered values are kept (RUN-11).
+// clamped value; start/end dates and both continue actions save the goal into
+// the wizard DRAFT (RUN-50: nothing reaches the server until "Finish setup")
+// and open Setup - Running level (03). A goal already drafted (e.g. after
+// coming Back from step 03) refills the controls so entered values are kept
+// (RUN-11).
 export default function WeeklyGoalPage() {
   const router = useRouter();
-  const profile = useProfile();
   const hydrated = useHydrated();
-  const [km, setKm] = useState(() => getGoal()?.km ?? GOAL_DEFAULT_KM);
-  const [startDate, setStartDate] = useState(() => getGoal()?.startDate ?? todayIso());
-  const [endDate, setEndDate] = useState(() => getGoal()?.endDate ?? '');
+  const [draft] = useState(() => getOnboardingDraft());
+  const [km, setKm] = useState(() => draft.goal?.km ?? GOAL_DEFAULT_KM);
+  const [startDate, setStartDate] = useState(() => draft.goal?.startDate ?? todayIso());
+  const [endDate, setEndDate] = useState(() => draft.goal?.endDate ?? '');
   const [dateError, setDateError] = useState('');
 
   const handleStartTracking = () => {
@@ -39,13 +33,13 @@ export default function WeeklyGoalPage() {
       return;
     }
     setDateError('');
-    saveGoal({ km, startDate, endDate: endDate || null });
+    saveDraftGoal({ km, startDate, endDate: endDate || null });
     router.push(ROUTES.setupLevel);
   };
 
   const handleSkip = () => {
     // Skipping keeps the shown default of 20 km (assumption A2).
-    saveGoal({ km: GOAL_DEFAULT_KM, startDate: todayIso(), endDate: null });
+    saveDraftGoal({ km: GOAL_DEFAULT_KM, startDate: todayIso(), endDate: null });
     router.push(ROUTES.setupLevel);
   };
 
@@ -62,7 +56,7 @@ export default function WeeklyGoalPage() {
         <div className="flex w-full max-w-[600px] flex-col items-center">
           <StepDots step={1} label="Step 1 of 2" />
           <div className="mt-[26px]">
-            <Badge>{profile ? `Welcome, ${profile.firstName}` : 'Welcome'}</Badge>
+            <Badge>{draft.profile ? `Welcome, ${draft.profile.firstName}` : 'Welcome'}</Badge>
           </div>
           <h1 className="mt-[22px] text-center font-display text-[32px] leading-[1.08] font-bold tracking-[-0.8px] text-ink md:text-[40px]">
             How far do you want

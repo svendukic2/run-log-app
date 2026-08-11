@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import SparkleIcon from '@/components/SparkleIcon';
 import { applyGoalTarget, useGoalTarget } from '@/lib/goal';
+import { ApiError } from '@/lib/session';
 import { derivePlan, formatUpdatedAgo, stampPlanGenerated, usePlanGeneratedAt } from '@/lib/plan';
 import { useRuns } from '@/lib/runs';
 import { useToday } from '@/lib/useToday';
@@ -48,6 +49,10 @@ export default function CurrentPlanCard({ onRegenerate }: { onRegenerate?: () =>
   // The km the runner last applied, feeding the status line: A15 designs no
   // confirmation step, but a click with zero acknowledgement reads as broken.
   const [appliedKm, setAppliedKm] = useState<number | null>(null);
+  // Applying is a PUT since RUN-50: pessimistic like every write, the
+  // button disables while in flight and a failure says so inline.
+  const [applying, setApplying] = useState(false);
+  const [applyError, setApplyError] = useState('');
 
   const hasRuns = runs.length > 0;
 
@@ -158,13 +163,29 @@ export default function CurrentPlanCard({ onRegenerate }: { onRegenerate?: () =>
       <div className="mt-[26px] flex flex-wrap items-center gap-x-[24px] gap-y-3">
         <button
           type="button"
+          disabled={applying}
           onClick={() => {
-            // No `today` argument: the click decides which week it lands in.
-            if (applyGoalTarget(plan.targetKm)) setAppliedKm(plan.targetKm);
+            if (applying) return;
+            setApplying(true);
+            setApplyError('');
+            // The click decides which week it lands in (applyGoalTarget
+            // resolves "today" itself); the card only confirms what the
+            // server accepted, and a failure shows the server's own
+            // message like every other write in the app.
+            void applyGoalTarget(plan.targetKm)
+              .then(() => setAppliedKm(plan.targetKm))
+              .catch((error: unknown) => {
+                setApplyError(
+                  error instanceof ApiError
+                    ? error.message
+                    : "The goal couldn't be applied. Try again.",
+                );
+              })
+              .finally(() => setApplying(false));
           }}
-          className="flex items-center gap-[9px] rounded-[12px] bg-accent px-[22px] py-[12px] text-[14px] font-semibold text-white hover:bg-accent-pressed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+          className="flex items-center gap-[9px] rounded-[12px] bg-accent px-[22px] py-[12px] text-[14px] font-semibold text-white hover:bg-accent-pressed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white disabled:opacity-60"
         >
-          Apply to weekly goal
+          {applying ? 'Applying…' : 'Apply to weekly goal'}
           <span aria-hidden="true" className="text-[15px]">
             →
           </span>
@@ -190,6 +211,11 @@ export default function CurrentPlanCard({ onRegenerate }: { onRegenerate?: () =>
             appliedKm === goalTargetKm &&
             `Weekly goal set to ${appliedKm} km.`}
         </p>
+        {applyError && (
+          <p role="alert" className="text-[13px] text-white/80">
+            {applyError}
+          </p>
+        )}
       </div>
     </section>
   );

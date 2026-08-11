@@ -1,3 +1,6 @@
+// Importing the onboarding module also registers the signup-names source
+// the tests below exercise; session.ts deliberately cannot import it back.
+import { saveDraftProfile } from './onboarding';
 import { apiFetch, ApiError, sessionPersistenceDegraded } from './session';
 
 // These tests hand-roll their own fetch mock instead of using
@@ -75,11 +78,10 @@ describe('device session (RUN-48)', () => {
     expect(runsCall?.headers.Authorization).toBe('Bearer fresh-token');
   });
 
-  it('signs up with the onboarding profile names when they exist', async () => {
-    window.localStorage.setItem(
-      'runlog.profile',
-      JSON.stringify({ firstName: 'Ana', lastName: 'Anić', email: 'ana@example.com' }),
-    );
+  it('signs up with the onboarding draft names when a wizard is underway', async () => {
+    // The names source reads the wizard draft first: finishing onboarding is
+    // the common moment the device account gets minted (RUN-50).
+    saveDraftProfile({ firstName: 'Ana', lastName: 'Anić', email: 'ana@example.com' });
     installFetch((call) => {
       if (call.url === '/api/auth/login') return { status: 401 };
       if (call.url === '/api/auth/signup') return { status: 201, body: { token: 't' } };
@@ -93,6 +95,27 @@ describe('device session (RUN-48)', () => {
     expect(signup.lastName).toBe('Anić');
     // The human email stays a profile field; the account is the device.
     expect(signup.email).not.toBe('ana@example.com');
+  });
+
+  it('signs up with not-yet-imported v1 profile names when no draft exists', async () => {
+    // A v1 device can mint its account before the one-time import has moved
+    // runlog.profile to the server; the names source falls back to reading
+    // that key directly so the signup still carries the real names.
+    window.localStorage.setItem(
+      'runlog.profile',
+      JSON.stringify({ firstName: 'Ana', lastName: 'Anić', email: 'ana@example.com' }),
+    );
+    installFetch((call) => {
+      if (call.url === '/api/auth/login') return { status: 401 };
+      if (call.url === '/api/auth/signup') return { status: 201, body: { token: 't' } };
+      return { status: 200, body: [] };
+    });
+
+    await apiFetch('/api/runs');
+
+    const signup = authCalls()[1].body as { firstName: string; lastName: string };
+    expect(signup.firstName).toBe('Ana');
+    expect(signup.lastName).toBe('Anić');
   });
 
   it('reuses a stored token without touching the auth endpoints', async () => {

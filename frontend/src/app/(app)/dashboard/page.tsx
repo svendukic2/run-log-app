@@ -4,7 +4,7 @@ import DashboardGreeting from '@/components/DashboardGreeting';
 import DashboardRunsSection from '@/components/DashboardRunsSection';
 import PageHeader from '@/components/PageHeader';
 import PersonalRecordsCard from '@/components/PersonalRecordsCard';
-import RunsBoundary from '@/components/RunsBoundary';
+import AppDataBoundary from '@/components/AppDataBoundary';
 import WeeklyGoalCard from '@/components/WeeklyGoalCard';
 
 // 05 · Dashboard. The header is rendered by the page itself, above the body, so
@@ -20,7 +20,7 @@ export default function DashboardPage() {
           behind the one screen-level gate (RUN-48): nothing renders until the
           store settles, and a failed load shows a single retry card instead of
           four half-empty ones. */}
-      <RunsBoundary>
+      <AppDataBoundary>
         {/* 04/05 use the same two-column shape: main content left, the coach
             card right, stacking on narrow screens. The right column renders in
             both dashboard states. */}
@@ -37,7 +37,7 @@ export default function DashboardPage() {
             <PersonalRecordsCard />
           </div>
         </div>
-      </RunsBoundary>
+      </AppDataBoundary>
     </>
   );
 }

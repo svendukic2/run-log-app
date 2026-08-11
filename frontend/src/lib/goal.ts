@@ -1,301 +1,370 @@
-import { useSyncExternalStore } from 'react';
-import { fromIsoDate, startOfWeek, toIsoDate } from './runs';
+'use client';
 
-// Weekly goal range shown on the slider scale (0 / 30 / 60 km).
-export const GOAL_MIN_KM = 0;
-export const GOAL_MAX_KM = 60;
-export const GOAL_DEFAULT_KM = 20;
+// The goal store (RUN-10 semantics, RUN-50 persistence). The onboarding
+// goal and the per-week targets live in PostgreSQL behind /api/goal and
+// /api/week-targets; this module caches the goal record plus the CURRENT
+// week's target, which is the only week any card asks about. Pure helpers
+// live in goalMath.ts and are re-exported here, so components import from
+// '@/lib/goal' as always.
+//
+// What DIED with RUN-50: the client-side week resolution (DefaultGoal,
+// AppliedGoal, resolveGoalTarget and their localStorage keys). The server's
+// week snapshots replaced all of it - a week's target is materialized from
+// the account's goal state on first use and frozen after (RUN-49,
+// docs/data-model.md), so the client just reads the answer instead of
+// re-deriving history rules. "Apply to weekly goal" is now a PUT on the
+// current week; the Settings default is profile.defaultWeeklyGoalKm and
+// SET-6 freezing happens server-side.
+//
+// CONTRACT this store leans on (backend snapshotKm, RUN-49): the server
+// mints a new week's target from profile.defaultWeeklyGoalKm, else goal.km,
+// else 20 - and GETting the current week ALWAYS materializes it for an
+// authenticated account. Every migrated or onboarded account has a profile
+// (with a default), so an account without a goal row still gets real server
+// rows; fallbackSeedKm below mirrors the same order for the moments before
+// the row is cached. The goal RECORD itself has no rendering consumer today:
+// it is fetched as the seed's second tier, which matters exactly for an
+// account in the repairable half-onboarded state (goal row landed, profile
+// PUT failed) where it is the only number the server would mint from.
+//
+// Module-level mutable state is safe here for the same reason as in
+// runs.ts: every write goes through publish() (touches window) and the
+// server snapshot is the frozen initial object.
+import { useEffect, useSyncExternalStore } from 'react';
+import { fetchGoal, fetchWeekTarget, putWeekTarget, type WeekTarget } from './accountApi';
+import { GOAL_DEFAULT_KM, todayIso, WEEK_TARGET_MAX_KM, type Goal } from './goalMath';
+import {
+  ACCOUNT_RECORDS_CHANGED_EVENT,
+  ensureLegacyImport,
+  getAccountGeneration,
+  hasLegacyOnboardingData,
+  useProfile,
+} from './onboarding';
+import { startOfWeek } from './runMath';
+import { ApiError, hasStoredSession } from './session';
 
-export function clampGoal(value: number): number {
-  return Math.min(GOAL_MAX_KM, Math.max(GOAL_MIN_KM, value));
-}
+export * from './goalMath';
 
-// Stored weekly goal. Dates are local-time ISO day strings (yyyy-mm-dd) so
-// they compare chronologically as plain strings; endDate null = "No end date".
-export interface Goal {
-  km: number;
-  startDate: string;
-  endDate: string | null;
-}
+/* Store -------------------------------------------------------------------- */
 
-const GOAL_KEY = 'runlog.goal';
-
-export function getGoal(): Goal | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const raw = window.localStorage.getItem(GOAL_KEY);
-    return raw ? (JSON.parse(raw) as Goal) : null;
-  } catch {
-    return null;
-  }
-}
-
-// No same-tab announcement here, unlike saveDefaultGoal: the onboarding flow
-// navigates away on save, so nothing in this tab is watching yet.
-export function saveGoal(goal: Goal): void {
-  window.localStorage.setItem(GOAL_KEY, JSON.stringify(goal));
-}
-
-// localStorage is user-writable, so km is verified before consumers do
-// arithmetic with it: a string would crash `.toFixed()`, and 0 or a negative
-// would render "14 / 0 km". Anything malformed reads as "no goal".
-function parseGoal(raw: string): Goal | null {
-  try {
-    const parsed = JSON.parse(raw) as Goal;
-    if (typeof parsed?.km !== 'number' || !Number.isFinite(parsed.km) || parsed.km <= 0) {
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-// `storage` only fires in *other* tabs, so Settings saves of the default goal
-// announce themselves in this one too - the same pattern runs.ts and
-// onboarding.ts use (RUN-38).
 const GOAL_CHANGED_EVENT = 'runlog:goal-changed';
 
-// Storage-backed hook, SSR-safe the same way useProfile is: the server
-// snapshot is null and clients pick up the stored goal right after hydration.
-// All the callbacks live at module scope; a fresh getSnapshot closure per
-// render would make React re-read the store on every render.
-function subscribeToStorage(onStoreChange: () => void): () => void {
-  window.addEventListener('storage', onStoreChange);
-  window.addEventListener(GOAL_CHANGED_EVENT, onStoreChange);
-  return () => {
-    window.removeEventListener('storage', onStoreChange);
-    window.removeEventListener(GOAL_CHANGED_EVENT, onStoreChange);
+export type GoalStoreStatus = 'loading' | 'ready' | 'error';
+
+export interface GoalStoreError {
+  message: string;
+  terminal: boolean;
+}
+
+interface GoalSnapshot {
+  status: GoalStoreStatus;
+  // null + 'ready' = no goal set yet (a fresh account, or none at all).
+  // On 'error' both data fields keep their last good values.
+  goal: Goal | null;
+  // The current week's materialized target; null until fetched, or when the
+  // device has no account (the fallback seed answers then).
+  weekTarget: WeekTarget | null;
+  error: GoalStoreError | null;
+}
+
+const INITIAL_SNAPSHOT: GoalSnapshot = Object.freeze({
+  status: 'loading' as const,
+  goal: null,
+  weekTarget: null,
+  error: null,
+});
+
+let snapshot: GoalSnapshot = INITIAL_SNAPSHOT;
+let loadStarted = false;
+let loadInFlight = false;
+// A reload that arrived while one was in flight: run it after, never drop
+// it - with the generation mechanism below, a dropped reload would leave
+// the store stale until some later mount happened to notice. The queued
+// run is always SILENT, which is safe today because a loud reload can only
+// come from the boundary's retry button and the boundary never shows that
+// button while a load is in flight (loading is checked before error). If a
+// per-store retry ever exists, store the requested mode here too.
+let reloadRequested = false;
+// The account generation (onboarding.ts) this store last loaded under,
+// captured BEFORE the fetches so a bump landing mid-flight stays visible
+// as a mismatch. When onboarding finishes while nothing here is mounted,
+// the next subscribe sees the mismatch and reloads - the
+// ACCOUNT_RECORDS_CHANGED_EVENT alone would vanish into a window with no
+// listeners. This is the only store that needs the generation: the profile
+// store is primed directly by every bumper, and the runs store's data is
+// only ever added to, never changed wholesale, by these events.
+let loadedGeneration = 0;
+
+function publish(next: GoalSnapshot): void {
+  snapshot = next;
+  window.dispatchEvent(new Event(GOAL_CHANGED_EVENT));
+}
+
+function toGoalError(error: unknown): GoalStoreError {
+  if (error instanceof ApiError) {
+    return { message: error.message, terminal: error.terminal };
+  }
+  return { message: 'Something went wrong loading your goal.', terminal: false };
+}
+
+// `silent` reloads keep the current snapshot on screen while fresh data is
+// fetched, instead of bouncing the boundary through a spinner: they are
+// used when the ACCOUNT's records changed (onboarding finished, settings
+// saved) and the stale numbers on screen are the correct fallback seeds
+// anyway. A silent FAILURE also stays off the error card - nobody asked
+// for this fetch, the shown data is still the last good snapshot - it just
+// marks the store stale so the next subscribe retries. The initial load
+// and the boundary's retry stay loud on both counts.
+async function loadGoalData(silent = false): Promise<void> {
+  if (loadInFlight) {
+    reloadRequested = true;
+    return;
+  }
+  loadInFlight = true;
+  loadedGeneration = getAccountGeneration();
+  if (!silent) publish({ ...snapshot, status: 'loading', error: null });
+  try {
+    // Same lazy rule as the runs and profile stores: no account and no v1
+    // data means no goal by definition, answered without the network.
+    if (!hasStoredSession() && !hasLegacyOnboardingData()) {
+      publish({ status: 'ready', goal: null, weekTarget: null, error: null });
+      return;
+    }
+    // The import (owned by onboarding.ts) must finish before the first
+    // read, or this store would cache a pre-import 404.
+    await ensureLegacyImport();
+    if (!hasStoredSession()) {
+      publish({ status: 'ready', goal: null, weekTarget: null, error: null });
+      return;
+    }
+    // Reading the current week is what materializes it server-side (the
+    // RUN-49 snapshot rule) - this GET is the moment a fresh week gets its
+    // target frozen.
+    const [goal, weekTarget] = await Promise.all([
+      fetchGoal(),
+      fetchWeekTarget(startOfWeek(todayIso())),
+    ]);
+    publish({ status: 'ready', goal, weekTarget, error: null });
+  } catch (error) {
+    if (process.env.NODE_ENV !== 'production') {
+      console.error('Loading the goal failed', error);
+    }
+    if (silent) {
+      // Mark stale so the next subscribe retries; the last good snapshot
+      // stays on screen.
+      loadedGeneration = -1;
+    } else {
+      publish({
+        status: 'error',
+        goal: snapshot.goal,
+        weekTarget: snapshot.weekTarget,
+        error: toGoalError(error),
+      });
+    }
+  } finally {
+    loadInFlight = false;
+    if (reloadRequested) {
+      // A reload arrived mid-flight (a generation bump raced this load):
+      // run it now rather than dropping it, or the store would stay stale
+      // until some later mount noticed. Silent: whatever is on screen came
+      // from this just-finished load.
+      reloadRequested = false;
+      void loadGoalData(true);
+    }
+  }
+}
+
+// The retry handle for the boundary's "Try again".
+export function reloadGoal(): void {
+  void loadGoalData();
+}
+
+function ensureLoaded(): void {
+  if (!loadStarted) {
+    loadStarted = true;
+    void loadGoalData();
+    return;
+  }
+  // Loaded, but under an older account generation: the records were
+  // replaced while nothing here was mounted (the wizard finished). Reload
+  // silently - the stale snapshot's fallback seeds are already the right
+  // numbers, so no spinner is owed.
+  if (loadedGeneration !== getAccountGeneration()) void loadGoalData(true);
+}
+
+function subscribeToGoal(onStoreChange: () => void): () => void {
+  ensureLoaded();
+  // For subscribers already MOUNTED when the account's records change; the
+  // generation check in ensureLoaded covers everything else.
+  const reload = () => {
+    void loadGoalData(true);
   };
-}
-
-function getGoalSnapshot(): string | null {
-  return window.localStorage.getItem(GOAL_KEY);
-}
-
-function getServerSnapshot(): null {
-  return null;
+  window.addEventListener(GOAL_CHANGED_EVENT, onStoreChange);
+  window.addEventListener(ACCOUNT_RECORDS_CHANGED_EVENT, reload);
+  return () => {
+    window.removeEventListener(GOAL_CHANGED_EVENT, onStoreChange);
+    window.removeEventListener(ACCOUNT_RECORDS_CHANGED_EVENT, reload);
+  };
 }
 
 export function useGoal(): Goal | null {
-  const raw = useSyncExternalStore(subscribeToStorage, getGoalSnapshot, getServerSnapshot);
-  return raw ? parseGoal(raw) : null;
+  return useSyncExternalStore(
+    subscribeToGoal,
+    () => snapshot,
+    () => INITIAL_SNAPSHOT,
+  ).goal;
 }
 
-export function todayIso(): string {
-  const now = new Date();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${now.getFullYear()}-${month}-${day}`;
+export function useGoalStoreStatus(): GoalStoreStatus {
+  return useSyncExternalStore(
+    subscribeToGoal,
+    () => snapshot,
+    () => INITIAL_SNAPSHOT,
+  ).status;
 }
 
-const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-// "2026-07-14" -> "Tue, 14 Jul 2026", the date format the design shows.
-export function formatGoalDate(iso: string): string {
-  const date = new Date(`${iso}T00:00:00`);
-  return `${WEEKDAYS[date.getDay()]}, ${date.getDate()} ${MONTHS[date.getMonth()]} ${date.getFullYear()}`;
+export function useGoalStoreError(): GoalStoreError | null {
+  return useSyncExternalStore(
+    subscribeToGoal,
+    () => snapshot,
+    () => INITIAL_SNAPSHOT,
+  ).error;
 }
 
-/* Default weekly goal (RUN-38) ---------------------------------------------- */
+/* The weekly target ----------------------------------------------------------- */
 
-// The Settings default seeds each *new* week and leaves the running week
-// alone (SET-6): `km` applies from `effectiveFromWeek` (an ISO Monday) on,
-// and `previousKm` freezes the target the week of the save already had, so
-// saving - or re-saving - can never retroactively move it.
-export interface DefaultGoal {
-  km: number;
-  effectiveFromWeek: string;
-  previousKm: number;
+// A fresh week target may only merge into a cache that is 'ready';
+// anything else reloads instead, so a stale error can never shadow fresh
+// data and fresh data can never dress up an errored snapshot (the same
+// rule as the runs store's mergeAfterMutation).
+function mergeWeekTarget(weekTarget: WeekTarget): void {
+  if (snapshot.status === 'ready') {
+    publish({ status: 'ready', goal: snapshot.goal, weekTarget, error: null });
+  } else {
+    // Silent: the write that produced this target was user-initiated, and
+    // flashing a spinner over the page that just took the click would make
+    // a successful apply look like a failure.
+    void loadGoalData(true);
+  }
 }
 
-const DEFAULT_GOAL_KEY = 'runlog.defaultGoal';
+let weekRefreshInFlight = false;
+// The week a refresh already ran for (successfully or not): without this,
+// a week the server answers 404 for would re-trigger the effect's fetch on
+// every render forever.
+let refreshAttemptedWeek: string | null = null;
 
-const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
-
-// localStorage is user-writable, so both km fields are verified as finite
-// numbers before consumers do arithmetic with them. Unlike the onboarding
-// goal, 0 is legal here: the stepper's bounds are 0-60 (A17). Out-of-range
-// values clamp and a hand-edited mid-week date snaps back to its Monday,
-// instead of reading as "no default".
-function parseDefaultGoal(raw: string): DefaultGoal | null {
+// Re-fetches the current week's target when the cached one is for another
+// week (the page stayed open across a Monday midnight). Only the current
+// week: the server 404s everything else by design. A real failure lands
+// the store in 'error' - LOUDLY, unlike a silent reload's failure, because
+// here the number on screen is last WEEK'S target dressed up as this
+// week's; keeping it would be showing wrong data, not stale-but-right
+// data. The boundary's retry is the recovery path.
+async function refreshWeekTarget(weekStart: string): Promise<void> {
+  if (weekRefreshInFlight || refreshAttemptedWeek === weekStart) return;
+  if (!hasStoredSession() || weekStart !== startOfWeek(todayIso())) return;
+  weekRefreshInFlight = true;
+  refreshAttemptedWeek = weekStart;
   try {
-    const parsed = JSON.parse(raw) as DefaultGoal;
-    if (
-      typeof parsed?.km !== 'number' ||
-      !Number.isFinite(parsed.km) ||
-      typeof parsed.previousKm !== 'number' ||
-      !Number.isFinite(parsed.previousKm) ||
-      typeof parsed.effectiveFromWeek !== 'string' ||
-      !ISO_DAY.test(parsed.effectiveFromWeek)
-    ) {
-      return null;
+    const weekTarget = await fetchWeekTarget(weekStart);
+    // null cannot happen for the current week of a live account (the GET
+    // materializes it); kept as a guard so a contract change surfaces as a
+    // stale-looking number instead of a crash.
+    if (weekTarget) mergeWeekTarget(weekTarget);
+  } catch (error) {
+    if (process.env.NODE_ENV !== 'production') {
+      console.error('Refreshing the week target failed', error);
     }
-    return {
-      km: clampGoal(parsed.km),
-      effectiveFromWeek: startOfWeek(parsed.effectiveFromWeek),
-      previousKm: clampGoal(parsed.previousKm),
-    };
-  } catch {
-    return null;
+    publish({
+      status: 'error',
+      goal: snapshot.goal,
+      weekTarget: snapshot.weekTarget,
+      error: toGoalError(error),
+    });
+    // Let the boundary's reload retry this week again.
+    refreshAttemptedWeek = null;
+  } finally {
+    weekRefreshInFlight = false;
   }
 }
 
-export function getDefaultGoal(): DefaultGoal | null {
-  if (typeof window === 'undefined') return null;
-  const raw = window.localStorage.getItem(DEFAULT_GOAL_KEY);
-  return raw ? parseDefaultGoal(raw) : null;
-}
+// The weekly target the cards render (dashboard goal card, coach cards).
+// The argument MUST be today (every consumer passes useToday()); it exists
+// as a parameter because the ticking `today` is what re-renders the cards
+// across a midnight week rollover. Until the week's row is cached the
+// fallback seed answers: the same resolution the server mints from
+// (profile default, else goal km, else 20 - backend snapshotKm), so the
+// number on screen never changes when the row lands.
+export function useGoalTarget(todayIsoDate: string): number {
+  const current = useSyncExternalStore(
+    subscribeToGoal,
+    () => snapshot,
+    () => INITIAL_SNAPSHOT,
+  );
+  // Subscribed (not getProfileRecord()) so a settings save that changes
+  // the default re-renders a card still showing the fallback seed.
+  const profile = useProfile();
+  const weekStart = startOfWeek(todayIsoDate);
+  const matched = current.weekTarget?.weekStart === weekStart ? current.weekTarget : null;
 
-// The onboarding goal through the same validation useGoal applies, so the
-// default-goal logic never does arithmetic with a malformed stored km.
-function getValidGoal(): Goal | null {
-  if (typeof window === 'undefined') return null;
-  const raw = window.localStorage.getItem(GOAL_KEY);
-  return raw ? parseGoal(raw) : null;
-}
-
-// ISO Monday of the week after the one `isoDate` falls in: the first week a
-// freshly saved default applies to.
-export function nextWeekStart(isoDate: string): string {
-  const monday = fromIsoDate(startOfWeek(isoDate));
-  monday.setDate(monday.getDate() + 7);
-  return toIsoDate(monday);
-}
-
-// The goal target for the week `isoDate` falls in. A coach target applied to
-// that exact week (RUN-33) wins outright; otherwise, with no saved default
-// the onboarding goal (or the 20 km fallback) applies to every week, and once
-// one is saved, weeks from its Monday on use it and earlier weeks keep the
-// frozen previous target. ISO day strings compare chronologically as plain
-// strings. Only two levels of history exist, so this is valid for the current
-// week onward; asking about weeks before the latest save would get that
-// save's frozen target, not what those weeks actually showed at the time.
-export function resolveGoalTarget(
-  goal: Goal | null,
-  defaultGoal: DefaultGoal | null,
-  isoDate: string,
-  appliedGoal: AppliedGoal | null = null,
-): number {
-  if (appliedGoal && startOfWeek(isoDate) === appliedGoal.weekStart) return appliedGoal.km;
-  if (!defaultGoal) return goal?.km ?? GOAL_DEFAULT_KM;
-  return startOfWeek(isoDate) >= defaultGoal.effectiveFromWeek
-    ? defaultGoal.km
-    : defaultGoal.previousKm;
-}
-
-// What the Settings stepper shows: the latest saved default - even one not
-// effective yet - else the onboarding goal, else the 20 km fallback.
-export function getDefaultGoalKm(): number {
-  return getDefaultGoal()?.km ?? getValidGoal()?.km ?? GOAL_DEFAULT_KM;
-}
-
-// Saving records the *next* Monday as the first week the new default applies
-// to and freezes the current week's target as previousKm, so "applied to each
-// new week" is literal: the running week keeps the target it started with
-// (AC4) and every later week starts from the new default (AC3). Freezing the
-// *resolved* current target also makes re-saving safe: a default that already
-// took effect stays this week's target instead of falling back to the
-// onboarding goal.
-export function saveDefaultGoal(km: number, today: string = todayIso()): void {
-  const defaultGoal: DefaultGoal = {
-    km: clampGoal(km),
-    effectiveFromWeek: nextWeekStart(today),
-    previousKm: resolveGoalTarget(getValidGoal(), getDefaultGoal(), today, getAppliedGoal()),
-  };
-  window.localStorage.setItem(DEFAULT_GOAL_KEY, JSON.stringify(defaultGoal));
-  window.dispatchEvent(new Event(GOAL_CHANGED_EVENT));
-}
-
-/* Apply to weekly goal (RUN-33) --------------------------------------------- */
-
-// "Apply to weekly goal" on the coach's plan card (AIC-5, A15): the suggested
-// target becomes this week's goal immediately. It lives under its own key,
-// scoped to the ISO week of the click, so it can never masquerade as a
-// Settings default: the default keeps seeding future weeks (SET-6) and, with
-// no default saved, next week simply falls back to the onboarding goal until
-// the runner applies again. Unlike the slider-backed goals there is no 0-60
-// clamp - the coach can legitimately suggest more than the sliders offer, and
-// the goal must honour the number the runner accepted.
-export interface AppliedGoal {
-  km: number;
-  weekStart: string;
-}
-
-const APPLIED_GOAL_KEY = 'runlog.appliedGoal';
-
-// Validated like the other stored goals: a malformed record reads as "never
-// applied" and a hand-edited mid-week start snaps back to its Monday.
-function parseAppliedGoal(raw: string): AppliedGoal | null {
-  try {
-    const parsed = JSON.parse(raw) as AppliedGoal;
-    if (
-      typeof parsed?.km !== 'number' ||
-      !Number.isFinite(parsed.km) ||
-      parsed.km <= 0 ||
-      typeof parsed.weekStart !== 'string' ||
-      !ISO_DAY.test(parsed.weekStart)
-    ) {
-      return null;
-    }
-    return { km: parsed.km, weekStart: startOfWeek(parsed.weekStart) };
-  } catch {
-    return null;
+  if (process.env.NODE_ENV !== 'production' && weekStart !== startOfWeek(todayIso())) {
+    throw new Error(
+      'useGoalTarget() was asked about a week other than the current one. It only ever answers for the running week (past weeks would get a fabricated number); pass useToday().',
+    );
   }
+
+  // In an effect, not in render: kicking a fetch during render is a side
+  // effect React may replay arbitrarily.
+  useEffect(() => {
+    if (!matched && current.status === 'ready') void refreshWeekTarget(weekStart);
+  }, [matched, current.status, weekStart]);
+
+  return matched ? matched.targetKm : (profile?.defaultWeeklyGoalKm ?? current.goal?.km ?? GOAL_DEFAULT_KM);
 }
 
-export function getAppliedGoal(): AppliedGoal | null {
-  if (typeof window === 'undefined') return null;
-  const raw = window.localStorage.getItem(APPLIED_GOAL_KEY);
-  return raw ? parseAppliedGoal(raw) : null;
-}
-
-// Re-applying overwrites - one applied record exists, so only the latest
-// application's week carries an override. `today` deliberately defaults at
-// call time: a card mounted before midnight must apply to the week the click
-// lands in, not the week the page opened in. Returns whether the write stuck
-// (quota, private browsing) so callers only ever confirm what is stored.
-export function applyGoalTarget(km: number, today: string = todayIso()): boolean {
-  if (!Number.isFinite(km) || km <= 0) return false;
-  const applied: AppliedGoal = { km, weekStart: startOfWeek(today) };
-  try {
-    window.localStorage.setItem(APPLIED_GOAL_KEY, JSON.stringify(applied));
-  } catch {
-    return false;
+// "Apply to weekly goal" on the coach's plan card (AIC-5, A15): the
+// suggested target becomes this week's goal through the API. Async since
+// RUN-50 and throws ApiError like every other write path, so the card
+// shows the server's own message. Clamped to the same ceiling the server
+// enforces; deliberately NOT clamped to the 0-60 slider - the coach can
+// legitimately suggest more.
+export async function applyGoalTarget(km: number): Promise<void> {
+  if (!Number.isFinite(km) || km <= 0) {
+    throw new ApiError('The suggested target is not a usable number.');
   }
-  window.dispatchEvent(new Event(GOAL_CHANGED_EVENT));
-  return true;
+  // Refused, not clamped: silently storing a different number than the one
+  // the runner accepted, then confirming "applied", would be lying twice.
+  if (km > WEEK_TARGET_MAX_KM) {
+    throw new ApiError(
+      `That weekly target is above the maximum of ${WEEK_TARGET_MAX_KM} km.`,
+    );
+  }
+  const weekTarget = await putWeekTarget(startOfWeek(todayIso()), Math.round(km));
+  mergeWeekTarget(weekTarget);
 }
 
-function getDefaultGoalSnapshot(): string | null {
-  return window.localStorage.getItem(DEFAULT_GOAL_KEY);
-}
+/* Test hook --------------------------------------------------------------------- */
 
-function getAppliedGoalSnapshot(): string | null {
-  return window.localStorage.getItem(APPLIED_GOAL_KEY);
-}
-
-// The weekly target the cards render (dashboard goal card, coach cards):
-// storage-backed like useGoal and resolved per week, so a freshly saved
-// default only shows up once its week arrives. SSR-safe the same way: both
-// server snapshots are null, which resolves to the 20 km fallback.
-export function useGoalTarget(isoDate: string): number {
-  const rawGoal = useSyncExternalStore(subscribeToStorage, getGoalSnapshot, getServerSnapshot);
-  const rawDefault = useSyncExternalStore(
-    subscribeToStorage,
-    getDefaultGoalSnapshot,
-    getServerSnapshot,
-  );
-  const rawApplied = useSyncExternalStore(
-    subscribeToStorage,
-    getAppliedGoalSnapshot,
-    getServerSnapshot,
-  );
-  return resolveGoalTarget(
-    rawGoal ? parseGoal(rawGoal) : null,
-    rawDefault ? parseDefaultGoal(rawDefault) : null,
-    isoDate,
-    rawApplied ? parseAppliedGoal(rawApplied) : null,
-  );
+// Test-only: puts the module-level cache into a known state without a
+// fetch (jest.setup.ts wires this up through src/test/runsApiMock.ts).
+// Passing undefined re-arms the initial load.
+export function __resetGoalStoreForTests(state?: {
+  goal: Goal | null;
+  weekTarget: WeekTarget | null;
+}): void {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('__resetGoalStoreForTests is not available in production');
+  }
+  loadInFlight = false;
+  weekRefreshInFlight = false;
+  refreshAttemptedWeek = null;
+  loadedGeneration = 0;
+  if (state === undefined) {
+    loadStarted = false;
+    snapshot = INITIAL_SNAPSHOT;
+  } else {
+    loadStarted = true;
+    snapshot = { status: 'ready', goal: state.goal, weekTarget: state.weekTarget, error: null };
+  }
 }

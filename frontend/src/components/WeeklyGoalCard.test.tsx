@@ -1,7 +1,7 @@
-import { act, render, screen, within } from '@testing-library/react';
-import { saveDefaultGoal, saveGoal } from '@/lib/goal';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { saveProfileSettings } from '@/lib/onboarding';
 import { addRun } from '@/lib/runs';
-import { seedRuns } from '@/test/runsApiMock';
+import { seedGoal, seedProfile, seedRuns } from '@/test/runsApiMock';
 import WeeklyGoalCard from './WeeklyGoalCard';
 
 function runOn(date: string, distanceKm: number, durationSeconds: number) {
@@ -14,6 +14,8 @@ function runOn(date: string, distanceKm: number, durationSeconds: number) {
     note: '',
   };
 }
+
+const PROFILE = { firstName: 'Marko', lastName: 'Kovač', email: 'marko@email.com' };
 
 // Only Date is faked; real timers stay in place so React's scheduler and
 // anything async keep working.
@@ -55,6 +57,8 @@ function progressFill(): HTMLElement {
 
 describe('WeeklyGoalCard (RUN-17)', () => {
   beforeEach(() => {
+    // The SET-6 test's save mints a device session into localStorage; left
+    // behind, later tests would kick background week-target fetches.
     window.localStorage.clear();
   });
 
@@ -134,26 +138,13 @@ describe('WeeklyGoalCard (RUN-17)', () => {
 
   it('reads the target from the stored goal instead of the default', () => {
     freezeDateAt(FRIDAY);
-    saveGoal({ km: 30, startDate: '2026-08-03', endDate: null });
+    seedGoal({ km: 30, startDate: '2026-08-03', endDate: null });
     seedRuns([runOn('2026-08-05', 14, 4200)]);
 
     render(<WeeklyGoalCard />);
 
     expect(within(readout()).getByText('/ 30 km')).toBeInTheDocument();
     expect(screen.getByText('16 km to go')).toBeInTheDocument();
-  });
-
-  it.each([
-    ['a stringly km', '{"km":"20","startDate":"2026-08-03","endDate":null}'],
-    ['a zero km', '{"km":0,"startDate":"2026-08-03","endDate":null}'],
-    ['plain junk', '{ not json'],
-  ])('falls back to the default target when the stored goal has %s', (_label, raw) => {
-    freezeDateAt(FRIDAY);
-    window.localStorage.setItem('runlog.goal', raw);
-
-    render(<WeeklyGoalCard />);
-
-    expect(within(readout()).getByText('/ 20 km')).toBeInTheDocument();
   });
 
   it('ignores runs dated outside the current week', () => {
@@ -181,25 +172,33 @@ describe('WeeklyGoalCard (RUN-17)', () => {
     expect(progressFill()).toHaveStyle({ width: '25%' });
   });
 
-  it('keeps the current week on its target when a new default is saved (RUN-38 AC4)', () => {
+  it('keeps the current week on its target when a new default is saved (RUN-38 AC4)', async () => {
     freezeDateAt(FRIDAY);
-    render(<WeeklyGoalCard />);
+    seedProfile(PROFILE); // default weekly goal 20
+    const { unmount } = render(<WeeklyGoalCard />);
 
-    // Saved mid-week from Settings while the card is mounted: the running
-    // week must not move (SET-6).
-    act(() => {
-      saveDefaultGoal(35, '2026-08-07');
+    // Saved mid-week from Settings while the card is mounted: the server
+    // freezes the running week under the old default before the new one
+    // lands (SET-6), and the save silently reloads the goal store, so the
+    // card settles on the frozen 20, never the new 35.
+    await act(async () => {
+      await saveProfileSettings({ ...PROFILE, defaultWeeklyGoalKm: 35 });
     });
+    await waitFor(() => expect(within(readout()).getByText('/ 20 km')).toBeInTheDocument());
 
-    expect(within(readout()).getByText('/ 20 km')).toBeInTheDocument();
+    // A fresh mount re-reads the week's row from the server: still the
+    // frozen 20, not the 35 the fallback seed would now guess.
+    unmount();
+    render(<WeeklyGoalCard />);
+    await waitFor(() => expect(within(readout()).getByText('/ 20 km')).toBeInTheDocument());
   });
 
-  it('uses the new default once the next week starts (RUN-38 AC3)', () => {
-    freezeDateAt(FRIDAY);
-    saveDefaultGoal(35, '2026-08-07');
+  it('seeds a fresh week from the profile default (RUN-38 AC3)', () => {
+    // The next Monday arrives with no target row yet; the week seeds from
+    // profile.defaultWeeklyGoalKm, exactly what the server would snapshot.
+    seedProfile({ ...PROFILE, defaultWeeklyGoalKm: 35 });
+    freezeDateAt(new Date(2026, 7, 10, 9, 0, 0));
 
-    // The next Monday arrives; the fresh week seeds from the new default.
-    jest.setSystemTime(new Date(2026, 7, 10, 9, 0, 0));
     render(<WeeklyGoalCard />);
 
     expect(within(readout()).getByText('/ 35 km')).toBeInTheDocument();

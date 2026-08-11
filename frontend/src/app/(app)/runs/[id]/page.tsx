@@ -1,5 +1,5 @@
 import RunDetailView from '@/components/RunDetailView';
-import RunsBoundary from '@/components/RunsBoundary';
+import AppDataBoundary from '@/components/AppDataBoundary';
 
 // 09 · Run detail (RUN-27). The run lives behind the API (RUN-48), so this
 // server shell only unwraps the id; everything visible renders client-side.
@@ -8,8 +8,8 @@ import RunsBoundary from '@/components/RunsBoundary';
 export default async function RunDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   return (
-    <RunsBoundary>
+    <AppDataBoundary>
       <RunDetailView runId={id} />
-    </RunsBoundary>
+    </AppDataBoundary>
   );
 }

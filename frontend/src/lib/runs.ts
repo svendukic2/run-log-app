@@ -368,7 +368,7 @@ export function useRuns(): Run[] {
   useEffect(() => {
     if (process.env.NODE_ENV !== 'production' && !gated && status === 'loading') {
       throw new Error(
-        'useRuns() read while the store is still loading, outside a RunsBoundary: this screen would flash its empty state. Wrap it in <RunsBoundary> (see docs/data-model.md, "The frontend API pattern").',
+        'useRuns() read while the store is still loading, outside an AppDataBoundary: this screen would flash its empty state. Wrap it in <AppDataBoundary> (see docs/data-model.md, "The frontend API pattern").',
       );
     }
   }, [gated, status]);

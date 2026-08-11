@@ -1,16 +1,18 @@
-import { render, screen, within } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { saveProfile, type Profile } from '@/lib/onboarding';
+import { type Profile } from '@/lib/onboarding';
+import { seedProfile } from '@/test/runsApiMock';
 import DashboardGreeting from './DashboardGreeting';
 import SettingsView from './SettingsView';
 import Sidebar from './Sidebar';
 
 // Integration coverage for RUN-40: a profile edit saved on 17 · Settings must
 // reach every identity surface - the sidebar footer (name, initials, email)
-// and the dashboard greeting - through the real save flow, not through a
-// direct store write. The single-component suites (Sidebar RUN-14,
-// DashboardGreeting RUN-16, SettingsView RUN-37/39) each check their own
-// surface in isolation; this one checks the propagation between them.
+// and the dashboard greeting - through the real save flow (the async PUT and
+// the profile store's publish since RUN-50), not through a direct store
+// write. The single-component suites (Sidebar RUN-14, DashboardGreeting
+// RUN-16, SettingsView RUN-37/39) each check their own surface in isolation;
+// this one checks the propagation between them.
 
 // The edits happen on Settings, so that is the pathname the sidebar sees.
 jest.mock('next/navigation', () => ({
@@ -37,8 +39,11 @@ async function replaceValue(
   await user.type(input, value);
 }
 
-function save(user: ReturnType<typeof userEvent.setup>) {
-  return user.click(screen.getByRole('button', { name: /save changes/i }));
+// The save is a PUT since RUN-50: click, then let the promise chain settle
+// so the store has published before anything asserts what propagated.
+async function save(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole('button', { name: /save changes/i }));
+  await act(async () => {});
 }
 
 // Sidebar and Settings are mounted together in the real (app) layout, so the
@@ -54,8 +59,10 @@ function renderSettingsScreen() {
 
 describe('Profile propagation (RUN-40)', () => {
   beforeEach(() => {
+    // Each save mints a device session into localStorage; wipe it so no
+    // test inherits the previous one's stale token.
     window.localStorage.clear();
-    saveProfile(STORED);
+    seedProfile(STORED);
   });
 
   it('updates the sidebar footer name and initials after a saved name change (AC1)', async () => {
