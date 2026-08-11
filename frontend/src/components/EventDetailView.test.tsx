@@ -7,6 +7,7 @@ import {
   seedParticipants,
 } from '@/test/eventsApiMock';
 import { __resetEventsStoreForTests } from '@/lib/events';
+import { __resetEventParticipantsForTests } from '@/lib/eventParticipants';
 import EventDetailView from './EventDetailView';
 
 function seedEvent(overrides: Parameters<typeof seedEvents>[0][number]) {
@@ -95,6 +96,33 @@ describe('EventDetailView (RUN-69)', () => {
 
     const roster = await screen.findByRole('region', { name: /Participants/ });
     expect(within(roster).getByRole('link', { name: /Ana Tester/ })).toBeInTheDocument();
+  });
+
+  it('re-reads the roster on a revisit, keeping the known rows on screen (review fix)', async () => {
+    const event = seedEvent({ name: 'Summer 100k' });
+    const before = seedParticipants(event.id, [{ firstName: 'Ana', rank: 1 }]);
+
+    const first = render(<EventDetailView eventId={event.id} />);
+    const roster = await screen.findByRole('region', { name: /Participants/ });
+    expect(within(roster).getByRole('link', { name: /Ana Tester/ })).toBeInTheDocument();
+    first.unmount();
+
+    // Someone joined while the page was closed: the backend has two
+    // runners, the cache still holds the one it read. A cache that skipped
+    // the second read would serve that stale roster for the rest of the
+    // tab's life.
+    seedParticipants(event.id, [
+      { firstName: 'Ana', rank: 1 },
+      { firstName: 'Bruno', rank: 2 },
+    ]);
+    __resetEventParticipantsForTests(event.id, before);
+
+    render(<EventDetailView eventId={event.id} />);
+
+    // The known row stays put while the re-read runs: no spinner blink.
+    const revisited = within(screen.getByRole('region', { name: /Participants/ }));
+    expect(revisited.getByRole('link', { name: /Ana Tester/ })).toBeInTheDocument();
+    expect(await revisited.findByRole('link', { name: /Bruno Tester/ })).toBeInTheDocument();
   });
 
   it('never shows the previously opened event’s runners', async () => {

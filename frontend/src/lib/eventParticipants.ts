@@ -7,9 +7,16 @@
 // One deliberate difference from events.ts, runs.ts and the rest: this is
 // per-event data, not app-wide data, so the cache is a SINGLE SLOT holding
 // whichever event is currently open rather than a map keyed by id. One
-// detail page is open at a time; a map would grow for the lifetime of the
-// tab and serve a stale board the moment someone logs a run. Switching
-// events therefore reloads, which is exactly what a visitor expects.
+// detail page is open at a time, and a map would only grow for the
+// lifetime of the tab.
+//
+// The slot is a render cache, not a source of truth: it is re-read on
+// every visit to the page and after every membership change, because
+// neither this module nor the events store can know that a run was logged
+// (or that Join was clicked from the list, which invalidates nothing here)
+// since it filled. What the cards show is therefore the last SUCCESSFUL
+// read of the open event - the rows stay put while the next read runs, so
+// the refresh costs no spinner.
 //
 // Nothing here is gated by a screen-level boundary either: the two lists
 // are cards INSIDE the detail page, so their loading and error states are
@@ -39,9 +46,15 @@ const INITIAL_SNAPSHOT: ParticipantsSnapshot = Object.freeze({
 });
 
 let snapshot: ParticipantsSnapshot = INITIAL_SNAPSHOT;
-// The id of the load currently in flight, so a slower answer for a
-// previously open event cannot overwrite the one the user is looking at.
+// The event a load is currently running for, or null when none is. Read
+// only to collapse React's double effect in development, never to decide
+// whether a read is still needed.
 let inFlightFor: string | null = null;
+// Bumped by every load, so a resolving answer can tell whether it is still
+// the newest one. An id is not enough (review fix): two loads of the SAME
+// event race after a join, and without this the slower - pre-join - answer
+// wins simply by landing last.
+let loadToken = 0;
 
 function publish(next: ParticipantsSnapshot): void {
   snapshot = next;
@@ -63,17 +76,29 @@ async function fetchParticipants(eventId: string): Promise<EventParticipant[]> {
 }
 
 async function load(eventId: string): Promise<void> {
+  const token = (loadToken += 1);
   inFlightFor = eventId;
-  publish({ eventId, status: 'loading', participants: [], error: null });
+  // Re-reading the event already on screen keeps its rows visible while
+  // the fresh ones arrive: the same list, seconds older. Only a first
+  // read, a different event, or a retry after failure blanks to
+  // 'loading'. The rule this buys, in one sentence: the cards show the
+  // last SUCCESSFUL read of this event, re-read on every visit and after
+  // every membership change.
+  const refreshingInPlace = snapshot.eventId === eventId && snapshot.status === 'ready';
+  if (!refreshingInPlace) {
+    publish({ eventId, status: 'loading', participants: [], error: null });
+  }
   try {
     const participants = await fetchParticipants(eventId);
-    if (inFlightFor !== eventId) return;
+    if (token !== loadToken) return;
     publish({ eventId, status: 'ready', participants, error: null });
   } catch (error) {
     if (process.env.NODE_ENV !== 'production') {
       console.error('Loading event participants failed', error);
     }
-    if (inFlightFor !== eventId) return;
+    // A failed refresh must not throw away rows that were true a moment
+    // ago; the next visit or the next membership change corrects them.
+    if (token !== loadToken || refreshingInPlace) return;
     publish({
       eventId,
       status: 'error',
@@ -83,13 +108,21 @@ async function load(eventId: string): Promise<void> {
           ? error.message
           : 'Something went wrong loading the participants.',
     });
+  } finally {
+    if (token === loadToken) inFlightFor = null;
   }
 }
 
-// Loads this event's participants unless the cache already describes it.
-// Called from an effect, never during render.
+// Reads this event's participants, from an effect and never during render.
+// Deliberately NOT "unless the cache already holds this event" (review
+// fix): a cache that skipped the read would keep serving the board from
+// the first visit, so a run logged in between - or a Join clicked on the
+// list page, which does not invalidate anything - would never show up.
+// One read per page visit is the honest refresh, and it costs nothing
+// visible because the rows stay on screen while it runs. The guard below
+// only collapses React's double effect.
 function ensureLoaded(eventId: string): void {
-  if (snapshot.eventId === eventId || inFlightFor === eventId) return;
+  if (inFlightFor === eventId) return;
   void load(eventId);
 }
 
@@ -146,6 +179,7 @@ export function __resetEventParticipantsForTests(
     throw new Error('__resetEventParticipantsForTests is not available in production');
   }
   inFlightFor = null;
+  loadToken += 1;
   snapshot =
     eventId === null ? INITIAL_SNAPSHOT : { eventId, status: 'ready', participants, error: null };
 }
