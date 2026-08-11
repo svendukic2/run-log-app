@@ -124,7 +124,11 @@ Two deliberate variations exist. `frontend/src/lib/eventParticipants.ts`
 (RUN-69) holds **per-event** data, not app-wide data, so its cache is a single
 slot for whichever event is open rather than a map, and its loading/error states
 live in the cards themselves instead of a screen-level boundary. Copy that shape
-for the next per-entity store, and the app-wide one for everything else.
+for the next per-entity store, and the app-wide one for everything else. It is
+the shape the later per-entity stores did copy: `publicProfile.ts` (RUN-63, one
+open profile), `leaderboard.ts` (RUN-70, one open week) and `userSearch.ts`
+(RUN-62, one open search query, whose load token is what stops a slow "an" from
+landing on top of "ana").
 
 `frontend/src/lib/notifications.ts` (RUN-66) is app-wide but **ungated**: the
 bell it feeds is rendered by `PageHeader`, so it sits on every sidebar-reachable

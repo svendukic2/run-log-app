@@ -12,6 +12,7 @@
 // prove the gate by seeding an already-gated payload.
 import { __resetPublicProfileForTests, type PublicProfile } from '@/lib/publicProfile';
 import { type Run } from '@/lib/runs';
+import { __resetUserSearchForTests, type UserSearchResult } from '@/lib/userSearch';
 import { jsonResponse } from './apiMockShared';
 
 // One seeded account, as the backend stores it: identity, privacy settings,
@@ -33,6 +34,13 @@ let db = new Map<string, SeededUser>();
 // When set, matching /api/users requests fail with the given status before
 // reaching the in-memory backend (failUsersApi below).
 let failure: { method: string; status: number } | null = null;
+// The caller's own follower count, which no seeded row implies (seeding
+// someone does not make them follow you). seedRunners sets it.
+let myFollowerCount = 0;
+// When set, the NEXT search request is parked until the test lets it go
+// (holdNextSearch below), so an out-of-order answer can be staged.
+let holdNextSearch_ = false;
+let releaseHeld: (() => void) | null = null;
 
 // The server-side gate, mirrored: a private profile answers 200 with no
 // body below the header, and only the owner overrides it.
@@ -51,12 +59,68 @@ function toResponse(user: SeededUser): PublicProfile {
   };
 }
 
+// The caller's own follow counts, as the search envelope carries them. The
+// "following" half is DERIVED from the seeded rows rather than stored, so a
+// follow issued through the mock moves it exactly like the real one does.
+function myCounts(): { followers: number; following: number } {
+  return {
+    followers: myFollowerCount,
+    following: [...db.values()].filter((user) => !user.me && user.following).length,
+  };
+}
+
+// The server-side search (RUN-62), mirrored: every whitespace-separated
+// term must appear in one half of the name or the other, case-insensitively,
+// and the caller is never a row.
+function searchRows(rawQuery: string): UserSearchResult['items'] {
+  const terms = rawQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return [];
+  return [...db.values()]
+    .filter((user) => !user.me)
+    .filter((user) =>
+      terms.every((term) =>
+        [user.firstName, user.lastName].some((name) => name.toLowerCase().includes(term)),
+      ),
+    )
+    .sort((a, b) => a.firstName.localeCompare(b.firstName) || a.id.localeCompare(b.id))
+    .map((user) => ({
+      id: user.id,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      following: user.following,
+    }));
+}
+
 // Everything /api/users, called by runsApiMock's shared fetch handler AFTER
 // the Bearer check passed. Unknown shapes fall through to the caller's loud
 // throw.
 export function handleUsersRequest(url: string, method: string): Promise<Response> | null {
   if (failure && failure.method === method) {
     return Promise.resolve(jsonResponse(failure.status, { message: 'Simulated failure' }));
+  }
+
+  // The search, before the /:id match below: '/api/users?search=' is the
+  // collection, not a user whose id starts with a question mark.
+  if (url.startsWith('/api/users?') && method === 'GET') {
+    const search = new URLSearchParams(url.split('?')[1] ?? '').get('search') ?? '';
+    const items = searchRows(search);
+    const body: UserSearchResult = {
+      items,
+      total: items.length,
+      page: 1,
+      pageSize: 20,
+      counts: myCounts(),
+    };
+    // A held request answers only when the test releases it, with the body
+    // as it was AT REQUEST TIME - which is what makes a released answer a
+    // genuinely stale one. One shot: everything after it is served normally.
+    if (holdNextSearch_) {
+      holdNextSearch_ = false;
+      return new Promise<Response>((resolve) => {
+        releaseHeld = () => resolve(jsonResponse(200, body));
+      });
+    }
+    return Promise.resolve(jsonResponse(200, body));
   }
 
   const follow = url.match(/^\/api\/users\/([^/]+)\/follow$/);
@@ -87,11 +151,53 @@ export function handleUsersRequest(url: string, method: string): Promise<Respons
   return null;
 }
 
-// Called from jest.setup.ts before every test: fresh backend, store re-armed.
+// Called from jest.setup.ts before every test: fresh backend, both stores
+// re-armed (the profile's and the People search's).
 export function installUsersApiMock(): void {
   db = new Map();
   failure = null;
+  myFollowerCount = 0;
+  holdNextSearch_ = false;
+  releaseHeld = null;
   __resetPublicProfileForTests(null);
+  __resetUserSearchForTests(null);
+}
+
+// Parks the next search response and hands back its release, so a test can
+// let a SLOW answer land after a newer one and prove the store's load token
+// discards it.
+export function holdNextSearch(): () => void {
+  holdNextSearch_ = true;
+  return () => {
+    releaseHeld?.();
+    releaseHeld = null;
+  };
+}
+
+// Seeds runners the People search can find (RUN-62). Unlike
+// seedPublicProfile it primes no store cache: the search always runs
+// through a real request, because the debounce and the query are what the
+// tests are watching.
+export function seedRunners(
+  drafts: Array<Partial<SeededUser> & { firstName: string }>,
+  options: { myFollowers?: number } = {},
+): void {
+  for (const draft of drafts) {
+    const user: SeededUser = {
+      id: `user-${draft.firstName.toLowerCase()}`,
+      lastName: 'Tester',
+      profilePublic: false,
+      showRoutes: false,
+      me: false,
+      following: false,
+      followers: 0,
+      followingCount: 0,
+      runs: [],
+      ...draft,
+    };
+    db.set(user.id, user);
+  }
+  myFollowerCount = options.myFollowers ?? myFollowerCount;
 }
 
 // Seeds one runner in the mock backend AND primes the store cache, so the

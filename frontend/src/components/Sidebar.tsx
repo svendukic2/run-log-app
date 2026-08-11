@@ -41,6 +41,36 @@ function CoachIcon() {
   );
 }
 
+// Three ranked bars, tallest in the middle: the podium the leaderboard is.
+function LeaderboardIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <rect y="9" width="5" height="10" rx="1.5" fill="currentColor" />
+      <rect x="7.5" y="3" width="5" height="16" rx="1.5" fill="currentColor" />
+      <rect x="15" y="12" width="5" height="7" rx="1.5" fill="currentColor" />
+    </svg>
+  );
+}
+
+// Two runners, one behind the other: the same head-and-shoulders the
+// profile footer's avatar implies, doubled.
+function PeopleIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <circle cx="7.5" cy="5.5" r="3.5" fill="currentColor" />
+      <path d="M1 18C1 14.686 3.91 12 7.5 12C11.09 12 14 14.686 14 18H1Z" fill="currentColor" />
+      <path
+        d="M14.5 4C16.157 4 17.5 5.343 17.5 7C17.5 8.657 16.157 10 14.5 10C13.9 10 13.34 9.824 12.87 9.52C13.57 8.79 14 7.795 14 6.7C14 5.9 13.77 5.153 13.37 4.522C13.71 4.19 14.09 4 14.5 4Z"
+        fill="currentColor"
+      />
+      <path
+        d="M15.5 11.5C17.985 11.5 20 13.75 20 16.5V18H15.7C15.63 15.9 14.7 14.02 13.26 12.74C13.93 12.02 14.66 11.5 15.5 11.5Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
 function EventsIcon() {
   return (
     <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -98,11 +128,14 @@ const NAV_SECTIONS: NavSection[] = [
     items: [{ label: 'AI Coach', href: ROUTES.coach, icon: <CoachIcon /> }],
   },
   {
-    // The COMMUNITY section formally belongs to RUN-62 (People), which adds
-    // Leaderboard and People here; only Events lands now (RUN-68) so the
-    // sidebar never links to routes that do not exist yet.
+    // Complete since RUN-62, which owns this section: all three community
+    // pages exist now, so all three are linked, in the Figma order.
     label: 'COMMUNITY',
-    items: [{ label: 'Events', href: ROUTES.events, icon: <EventsIcon /> }],
+    items: [
+      { label: 'Leaderboard', href: ROUTES.leaderboard, icon: <LeaderboardIcon /> },
+      { label: 'Events', href: ROUTES.events, icon: <EventsIcon /> },
+      { label: 'People', href: ROUTES.people, icon: <PeopleIcon /> },
+    ],
   },
   {
     label: 'ACCOUNT',

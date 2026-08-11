@@ -48,6 +48,108 @@ function makeService(
   };
 }
 
+// The search (RUN-62). Mocked for the same reason as above and one more:
+// what matters is the WHERE this builds - the caller's exclusion and the
+// case-insensitive match across both names - which a round trip can only
+// observe indirectly through whichever rows a seeded database happens to
+// hold.
+type SearchRow = { id: string; firstName: string; lastName: string };
+
+// The one argument the assertions read back, typed so reaching into the
+// recorded call is not an `any` walk.
+interface FindManyArgs {
+  where: { id: { not: string }; AND: unknown[] };
+}
+
+function makeSearchService(rows: SearchRow[]) {
+  const prisma = {
+    user: {
+      findMany: jest
+        .fn<Promise<SearchRow[]>, [FindManyArgs]>()
+        .mockResolvedValue(rows),
+      count: jest.fn().mockResolvedValue(rows.length),
+    },
+    follow: {
+      count: jest.fn().mockResolvedValue(2),
+      findMany: jest.fn().mockResolvedValue([{ followeeId: 'user-ana' }]),
+    },
+  };
+  return {
+    prisma,
+    service: new UsersService(prisma as unknown as PrismaService),
+  };
+}
+
+const ANA = { id: 'user-ana', firstName: 'Ana', lastName: 'Tester' };
+
+describe('UsersService.searchUsers (RUN-62)', () => {
+  // AC1 in one table: one term or two, either order, any casing, all of it
+  // reaching the same runner. The assertion is on the WHERE rather than on
+  // the mocked rows, because the mock would return Ana for any query at all.
+  it.each([['ana'], ['ANA'], ['ana tes'], ['tes ana']])(
+    'matches %s case-insensitively across both names, never the caller',
+    async (search) => {
+      const { prisma, service } = makeSearchService([ANA]);
+
+      const result = await service.searchUsers(VISITOR, { search });
+
+      const { where } = prisma.user.findMany.mock.calls[0][0];
+      expect(where.id).toEqual({ not: VISITOR });
+      expect(where.AND).toEqual(
+        search.split(' ').map((term) => ({
+          OR: [
+            { firstName: { contains: term, mode: 'insensitive' } },
+            { lastName: { contains: term, mode: 'insensitive' } },
+          ],
+        })),
+      );
+      // The row carries the caller's follow state, so the button renders
+      // right on the first paint, and nothing the account has not shared.
+      expect(result.items).toEqual([{ ...ANA, following: true }]);
+      expect(result.counts).toEqual({ followers: 2, following: 2 });
+    },
+  );
+
+  it('serves an empty list when nothing matches', async () => {
+    const { service } = makeSearchService([]);
+
+    const result = await service.searchUsers(VISITOR, { search: 'zzz' });
+
+    expect(result.items).toEqual([]);
+    expect(result.total).toBe(0);
+    // The counts are the no-results state's whole content, so they are
+    // served even when the list is empty.
+    expect(result.counts).toEqual({ followers: 2, following: 2 });
+  });
+
+  // No query means the People page's opening state: the caller's counts and
+  // nothing else. A LIKE '%%' over every account would be the one query that
+  // gets slower forever, so it is never issued.
+  //
+  // A bare wildcard is the same request wearing a disguise (review fix):
+  // Prisma does not escape LIKE's metacharacters inside `contains`, so '%'
+  // would otherwise match everyone. It is stripped, which leaves no terms,
+  // which lands in exactly this short-circuit.
+  it.each([{}, { search: '%' }, { search: '_ \\' }])(
+    'never scans the user table for %s',
+    async (query) => {
+      const { prisma, service } = makeSearchService([ANA]);
+
+      const result = await service.searchUsers(VISITOR, query);
+
+      expect(prisma.user.findMany).not.toHaveBeenCalled();
+      expect(prisma.user.count).not.toHaveBeenCalled();
+      // The counts are still the answer: they are what the page shows
+      // before anything worth searching for has been typed.
+      expect(result).toMatchObject({
+        items: [],
+        total: 0,
+        counts: { followers: 2, following: 2 },
+      });
+    },
+  );
+});
+
 describe('UsersService.findPublicProfile', () => {
   // The gate, in one table. Each row is one AC: a public profile serves its
   // body (AC1), a private one omits it (AC2), and the owner sees their own

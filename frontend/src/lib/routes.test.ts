@@ -1,4 +1,4 @@
-import { APP_ROUTES, DEFAULT_APP_ROUTE, ROUTES, isActiveRoute } from './routes';
+import { APP_ROUTES, DEFAULT_APP_ROUTE, ROUTES, isActiveRoute, personRoute } from './routes';
 
 describe('app routes (RUN-13)', () => {
   it('opens on the Dashboard by default (AC1)', () => {
@@ -6,7 +6,15 @@ describe('app routes (RUN-13)', () => {
   });
 
   it('lists exactly the views that live behind the shell, in sidebar order', () => {
-    expect(APP_ROUTES).toEqual(['/dashboard', '/runs', '/coach', '/events', '/settings']);
+    expect(APP_ROUTES).toEqual([
+      '/dashboard',
+      '/runs',
+      '/coach',
+      '/leaderboard',
+      '/events',
+      '/people',
+      '/settings',
+    ]);
   });
 
   it('keeps onboarding outside the shell routes (AC4)', () => {
@@ -28,6 +36,9 @@ describe('isActiveRoute (RUN-13 AC3)', () => {
 
   it('keeps a nested route inside its section', () => {
     expect(isActiveRoute('/runs/42', ROUTES.runs)).toBe(true);
+    // A public profile sits under People, so the sidebar keeps that entry
+    // lit while one is open (RUN-62).
+    expect(isActiveRoute(personRoute('user-1'), ROUTES.people)).toBe(true);
   });
 
   it('does not match a route that merely shares a prefix', () => {
