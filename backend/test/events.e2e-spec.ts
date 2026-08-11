@@ -9,6 +9,7 @@ import type {
 import { PrismaService } from './../src/prisma/prisma.service';
 import type {
   EventListResponse,
+  EventParticipantListResponse,
   EventResponse,
 } from './../src/events/events.service';
 import { createE2eApp, signupTestUser, TestUser } from './create-test-app';
@@ -314,6 +315,97 @@ describe('Events API (e2e)', () => {
       .post(`/api/events/${eventId}/join`)
       .set(bruno.auth)
       .expect(200);
+  });
+
+  // RUN-69: the detail page's participant list and leaderboard, against a
+  // real database. The window is deliberately in the past - the runs API
+  // accepts at most tomorrow, so a finished event is the only shape whose
+  // day-after boundary can carry a run at all.
+  it('ranks participants by km inside the inclusive window and honours the leaderboard opt-out (RUN-69 AC2, AC3, AC6)', async () => {
+    const carla = await signupTestUser(app, 'event-carla');
+    const start = addDaysIso(today, -5);
+    const end = addDaysIso(today, -3);
+
+    const created = (
+      await createEvent(ana, {
+        name: 'Boundary week',
+        startDate: start,
+        endDate: end,
+      }).expect(201)
+    ).body as EventResponse;
+    for (const user of [bruno, carla]) {
+      await request(app.getHttpServer())
+        .post(`/api/events/${created.id}/join`)
+        .set(user.auth)
+        .expect(200);
+    }
+
+    // Every account starts opted OUT (the RUN-64 default), so opting in is
+    // an explicit write. There is no API for it until RUN-64 ships the
+    // Settings toggle, hence the direct update.
+    await prisma.user.updateMany({
+      where: { id: { in: [ana.id, bruno.id] } },
+      data: { showOnLeaderboard: true },
+    });
+
+    const logRun = (user: TestUser, date: string, distanceKm: number) =>
+      request(app.getHttpServer())
+        .post('/api/runs')
+        .set(user.auth)
+        .send({ routeName: 'Loop', distanceKm, durationSeconds: 1800, date })
+        .expect(201);
+
+    // ana runs on both boundary days (counted) and on the days just
+    // outside them (not counted): 5 + 3 = 8 km over 2 runs.
+    await logRun(ana, addDaysIso(start, -1), 10);
+    await logRun(ana, start, 5);
+    await logRun(ana, end, 3);
+    await logRun(ana, addDaysIso(end, 1), 20);
+    await logRun(bruno, addDaysIso(start, 1), 12);
+    // carla out-runs everyone and still must not appear on the board.
+    await logRun(carla, addDaysIso(start, 1), 50);
+
+    const body = (
+      await request(app.getHttpServer())
+        .get(`/api/events/${created.id}/participants`)
+        .set(ana.auth)
+        .expect(200)
+    ).body as EventParticipantListResponse;
+
+    expect(body.total).toBe(3);
+    // Join order (AC1), each carrying its global rank (AC2).
+    expect(body.items).toEqual([
+      expect.objectContaining({
+        id: ana.id,
+        me: true,
+        rank: 2,
+        totalKm: 8,
+        runCount: 2,
+      }),
+      expect.objectContaining({
+        id: bruno.id,
+        me: false,
+        rank: 1,
+        totalKm: 12,
+        runCount: 1,
+      }),
+      // Opted out: in the list, off the board, and none of her numbers
+      // leave the server (AC3).
+      expect.objectContaining({
+        id: carla.id,
+        rank: null,
+        totalKm: null,
+        runCount: null,
+      }),
+    ]);
+
+    await request(app.getHttpServer())
+      .get('/api/events/nonexistent/participants')
+      .set(ana.auth)
+      .expect(404);
+    await request(app.getHttpServer())
+      .get(`/api/events/${created.id}/participants`)
+      .expect(401);
   });
 
   it('PATCH updates the owner event; non-owners get 404, never 403 (AC5)', async () => {

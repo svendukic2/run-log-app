@@ -83,15 +83,22 @@ model Run {
 // community phase. Deliberately standalone: the single-row Profile above
 // stays untouched until the phase B per-user-scoping tasks decide how v1
 // data attaches to accounts. passwordHash is a bcrypt hash and must never
-// leave the auth service in any response or log line (RUN-56 AC4). The
-// privacy toggles (profilePublic, showOnLeaderboard, showRoutes) arrive
-// additively in RUN-64.
+// leave the auth service in any response or log line (RUN-56 AC4).
+//
+// showOnLeaderboard is the first of the three privacy toggles to land,
+// pulled forward from RUN-64 because RUN-69's event leaderboard has to
+// respect it to exist at all (AC3). It carries the roadmap's decided
+// default - false, opt-in - so RUN-64 adds the remaining two (profilePublic,
+// showRoutes) plus the Settings UI without revisiting this one. Consequence
+// worth knowing: until that toggle ships, every leaderboard is empty by
+// design, and the pages say so rather than looking broken.
 model User {
   id                  String             @id @default(cuid())
   email               String             @unique
   passwordHash        String
   firstName           String
   lastName            String
+  showOnLeaderboard   Boolean            @default(false)
   createdAt           DateTime           @default(now())
   profile             Profile?
   goal                Goal?

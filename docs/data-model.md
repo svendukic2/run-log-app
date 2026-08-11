@@ -125,13 +125,18 @@ data attaches to accounts. Community tasks (follow, notifications, events) hang 
 | passwordHash | string | bcrypt, cost 12; never leaves the auth service in any response or log (RUN-56 AC4) |
 | firstName | string | Non-empty, mirrors WEL-5 rules |
 | lastName | string | Non-empty, mirrors WEL-5 rules |
+| showOnLeaderboard | boolean, default false | Opt-in to every leaderboard, global and per event. Pulled forward from RUN-64 by RUN-69, which cannot honour its own AC3 without it |
 | createdAt | timestamp | Audit field (the `updatedAt` convention above extends to `createdAt` here) |
 
 The API endpoints are `POST /api/auth/signup` and `POST /api/auth/login`, both
 returning `{ token, user }` with the JWT subject = user id. Passwords are capped at
 72 UTF-8 **bytes** (not characters) because bcrypt silently truncates beyond that.
-The privacy toggles (`profilePublic`, `showOnLeaderboard`, `showRoutes`) arrive
-additively in RUN-64.
+Of the three privacy toggles, `showOnLeaderboard` landed early with RUN-69 (the
+event leaderboard has to honour it to exist); `profilePublic` and `showRoutes`
+arrive additively in RUN-64, which also ships the Settings card that flips all
+three. Until then every account carries the decided default - **false, opt-in** -
+so leaderboards render their "nobody is on leaderboards yet" state rather than
+looking broken, and RUN-71's seeder opts its demo users in explicitly.
 
 **Ownership (RUN-57).** Every other entity in this document carries a required
 `userId` foreign key (cascade on user delete), with one structural exception:
@@ -255,6 +260,24 @@ changed. Leaving an event never joined is an idempotent 200; an unknown event
 is 404 for both verbs. A join
 notifies the owner (`event-joined`, see Notification above) in the same
 transaction; the owner joining their own event and repeat joins never notify.
+
+**The detail page's one read (RUN-69).** `GET /api/events/:id/participants`
+answers `{ items, total }` with one row per member: `{ id, firstName, lastName,
+joinedAt, me, rank, totalKm, runCount }`, in join order, where `id` is the
+**user's** id. The participant list and the leaderboard are the same set of
+people counted two ways, so they travel together rather than as two endpoints.
+This list is deliberately **not paginated**, unlike every other list in the API:
+a leaderboard is only correct as a whole, and the set is bounded by one event's
+membership rather than by the database.
+
+`rank`, `totalKm` and `runCount` are one decision, not three - all three are
+`null` exactly when that runner has `showOnLeaderboard` false. The numbers are
+withheld rather than flagged, so an opted-out runner appears in the participant
+list and no client can reconstruct their standing. `totalKm` is the sum of that
+runner's run distances inside the event's **inclusive** window (a run on the
+start or end day counts), computed by one `GROUP BY` at read time and never
+stored, the same rule the event's own derived state follows. Ties share a rank
+and the next distinct distance skips the places they consumed (1, 1, 3).
 
 ### Profile (one per user since RUN-57)
 

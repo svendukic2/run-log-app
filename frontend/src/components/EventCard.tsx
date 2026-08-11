@@ -1,18 +1,15 @@
 'use client';
 
-import { useState } from 'react';
 import Link from 'next/link';
 import EventStateChips from '@/components/EventStateChips';
+import JoinEventButton from '@/components/JoinEventButton';
 import {
   formatEventWindow,
   formatKm,
   formatParticipantCount,
-  joinEvent,
-  leaveEvent,
   type CommunityEvent,
 } from '@/lib/events';
 import { ROUTES } from '@/lib/routes';
-import { mutationErrorMessage } from '@/lib/session';
 
 interface EventCardProps {
   event: CommunityEvent;
@@ -20,39 +17,12 @@ interface EventCardProps {
 
 // One event on the Events page (RUN-68): state chip, name, date window,
 // owner, participant count, target when set, and the Join/Joined action
-// (AC1). The whole card is a link to the event detail (AC5) via a
-// stretched-link overlay, so the card stays one tab stop for its
-// navigation while the button keeps its own; the button sits above the
-// overlay (z-index), which is what keeps a Join click from also
-// navigating.
+// (AC1, shared with the detail header since RUN-69). The whole card is a
+// link to the event detail (AC5) via a stretched-link overlay, so the card
+// stays one tab stop for its navigation while the button keeps its own;
+// the button sits above the overlay (z-index), which is what keeps a Join
+// click from also navigating.
 export default function EventCard({ event }: EventCardProps) {
-  // The membership round-trips to the API (AC2): `busy` guards the double
-  // click, `error` is the inline role="alert" line the app-wide pattern
-  // prescribes.
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const toggleMembership = async () => {
-    if (busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      if (event.joined) {
-        await leaveEvent(event.id);
-      } else {
-        await joinEvent(event.id);
-      }
-      // The mutation's own response updated the cache, re-rendering this
-      // card with the flipped flag and the fresh count; nothing to set
-      // here. (A deleted event unmounts the card instead - the row leaves
-      // the cache, which is the whole story.)
-      setBusy(false);
-    } catch (cause) {
-      setBusy(false);
-      setError(mutationErrorMessage(cause));
-    }
-  };
-
   return (
     <article
       data-testid="event-card"
@@ -87,30 +57,14 @@ export default function EventCard({ event }: EventCardProps) {
           )}
         </p>
 
-        {/* The owner participates structurally (they cannot leave), so
-            their card offers no membership action; the chip above already
-            says why. */}
-        {!event.mine && (
-          <button
-            type="button"
-            onClick={toggleMembership}
-            disabled={busy}
-            className={`relative z-10 shrink-0 rounded-full px-[18px] py-[8px] text-[13px] font-semibold disabled:cursor-default disabled:opacity-60 ${
-              event.joined
-                ? 'border border-line-strong bg-white text-text-primary hover:bg-muted'
-                : 'bg-accent text-white hover:bg-accent-pressed'
-            }`}
-          >
-            {busy ? 'Saving…' : event.joined ? 'Joined' : 'Join'}
-          </button>
-        )}
+        {/* Renders nothing on the owner's own card; the chip above already
+            says why (a deleted event unmounts the card instead - the row
+            leaves the cache, which is the whole story). */}
+        <JoinEventButton
+          event={event}
+          className="flex shrink-0 flex-col items-end gap-[2px] text-right"
+        />
       </div>
-
-      {error && (
-        <p role="alert" className="text-[12.5px] leading-[1.5] text-accent-pressed">
-          {error}
-        </p>
-      )}
     </article>
   );
 }
