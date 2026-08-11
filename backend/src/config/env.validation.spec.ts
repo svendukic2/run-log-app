@@ -3,6 +3,7 @@ import { validateEnv } from './env.validation';
 describe('validateEnv', () => {
   const VALID = {
     DATABASE_URL: 'postgresql://postgres:postgres@localhost:5432/runlog',
+    JWT_SECRET: 'a-perfectly-fine-test-secret-32-chars-long',
   };
 
   it('passes a valid environment through unchanged', () => {
@@ -11,9 +12,31 @@ describe('validateEnv', () => {
 
   it('accepts both postgres:// and postgresql:// schemes and a valid PORT', () => {
     expect(() =>
-      validateEnv({ DATABASE_URL: 'postgres://u:p@host:5432/db' }),
+      validateEnv({ ...VALID, DATABASE_URL: 'postgres://u:p@host:5432/db' }),
     ).not.toThrow();
     expect(() => validateEnv({ ...VALID, PORT: '3000' })).not.toThrow();
+  });
+
+  it('rejects a missing JWT_SECRET with the copy-the-template hint (RUN-56)', () => {
+    const { JWT_SECRET, ...withoutSecret } = VALID;
+    void JWT_SECRET;
+    expect(() => validateEnv(withoutSecret)).toThrow(/JWT_SECRET is not set/);
+    expect(() => validateEnv(withoutSecret)).toThrow(/\.env\.example/);
+  });
+
+  it('rejects the unedited JWT_SECRET placeholder specifically', () => {
+    expect(() =>
+      validateEnv({
+        ...VALID,
+        JWT_SECRET: '<generate-a-random-secret-at-least-32-chars>',
+      }),
+    ).toThrow(/placeholder from \.env\.example/);
+  });
+
+  it('rejects a JWT_SECRET shorter than 32 characters by its length', () => {
+    expect(() => validateEnv({ ...VALID, JWT_SECRET: 'secret123' })).toThrow(
+      /JWT_SECRET must be at least 32 characters, got 9/,
+    );
   });
 
   it('rejects a missing DATABASE_URL with the copy-the-template hint', () => {

@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { APP_PIPE } from '@nestjs/core';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { AuthModule } from './auth/auth.module';
 import { validateEnv } from './config/env.validation';
 import { PrismaModule } from './prisma/prisma.module';
 import { RunsModule } from './runs/runs.module';
@@ -20,6 +21,7 @@ import { RunsModule } from './runs/runs.module';
     // PrismaModule themselves - it is deliberately not @Global.
     PrismaModule,
     RunsModule,
+    AuthModule,
   ],
   controllers: [AppController],
   providers: [
