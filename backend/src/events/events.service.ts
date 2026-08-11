@@ -121,11 +121,17 @@ export function rankByDistance(
 }
 
 // Distances are Floats, so summing them accumulates binary-fraction noise
-// (0.1 + 0.2 = 0.30000000000000004). Rounding to the same two decimals the
-// UI renders keeps a leaderboard from ordering two genuinely equal totals -
-// and from printing one of them as 30.000000000000004 km.
+// (0.1 + 0.2 = 0.30000000000000004), which would both print as
+// 30.000000000000004 km and order two genuinely equal totals.
+//
+// One decimal, not two (review fix): the app renders distances to one
+// decimal everywhere (frontend formatKm), so ranking on a finer number
+// than the one on screen produces a leaderboard that reads as a bug -
+// 12.34 km above 12.29 km, both printed "12.3 km". Rounding here makes the
+// order and the rendered number agree, and two runners the UI shows as
+// equal genuinely tie.
 function roundKm(km: number): number {
-  return Math.round(km * 100) / 100;
+  return Math.round(km * 10) / 10;
 }
 
 // AC3's lifecycle, on inclusive dates: the event is active on its start and
