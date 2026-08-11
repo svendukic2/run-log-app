@@ -119,11 +119,20 @@ server-side), not stored. In Jest, `jest.setup.ts` installs an in-memory `/api/*
 before every test; `seedRuns()`/`seedProfile()`/`seedGoal()` from
 `src/test/runsApiMock.ts` replace localStorage seeding.
 
-One deliberate variation exists: `frontend/src/lib/eventParticipants.ts`
+Two deliberate variations exist. `frontend/src/lib/eventParticipants.ts`
 (RUN-69) holds **per-event** data, not app-wide data, so its cache is a single
 slot for whichever event is open rather than a map, and its loading/error states
 live in the cards themselves instead of a screen-level boundary. Copy that shape
 for the next per-entity store, and the app-wide one for everything else.
+
+`frontend/src/lib/notifications.ts` (RUN-66) is app-wide but **ungated**: the
+bell it feeds is rendered by `PageHeader`, so it sits on every sidebar-reachable
+screen, and it is nobody's reason for visiting any of them. A failed read
+therefore means no unread indicator, never a blocked screen. It loads
+only the newest page (the panel is a dropdown, not a list screen), takes its
+badge count from the server envelope, and re-reads whenever the panel opens
+without blanking the rows already on screen. Put a store behind `AppDataBoundary`
+unless, like this one, it decorates every screen rather than being one.
 
 **Configuration goes through ConfigService.** `ConfigModule.forRoot({ isGlobal: true })`
 is registered in `backend/src/app.module.ts`, so it reads `backend/.env` at startup and
