@@ -10,6 +10,7 @@ import { validateEnv } from './config/env.validation';
 import { EventsModule } from './events/events.module';
 import { FollowModule } from './follow/follow.module';
 import { GoalModule } from './goal/goal.module';
+import { LeaderboardModule } from './leaderboard/leaderboard.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { PrivacyModule } from './privacy/privacy.module';
@@ -33,6 +34,7 @@ import { WeekTargetsModule } from './week-targets/week-targets.module';
     RunsModule,
     AuthModule,
     EventsModule,
+    LeaderboardModule,
     FollowModule,
     AccountModule,
     ProfileModule,
