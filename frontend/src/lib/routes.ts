@@ -11,26 +11,30 @@ export const ROUTES = {
   coach: '/coach',
   events: '/events',
   leaderboard: '/leaderboard',
+  people: '/people',
   settings: '/settings',
 } as const;
 
-// The views that live behind the shared shell, in sidebar order (Events
-// joined with the COMMUNITY section, RUN-68).
-//
-// The global leaderboard (RUN-70) is deliberately NOT here yet: RUN-62 owns
-// the sidebar's COMMUNITY section and adds the link there, so the page is
-// reachable by URL (and from wherever a row links to it) until that lands.
+// The views that live behind the shared shell, in sidebar order. RUN-62
+// completed the COMMUNITY section it owns, so Leaderboard (RUN-70) and
+// People join Events here and every community page is now reachable from
+// the sidebar rather than by URL alone.
 export const APP_ROUTES = [
   ROUTES.dashboard,
   ROUTES.runs,
   ROUTES.coach,
+  ROUTES.leaderboard,
   ROUTES.events,
+  ROUTES.people,
   ROUTES.settings,
 ] as const;
 
 // One runner's public profile (RUN-63 builds the page; RUN-69's
-// participant and leaderboard rows are its first callers). Not in
-// APP_ROUTES: it is reached from a row, never from the sidebar.
+// participant and leaderboard rows are its first callers, RUN-62's search
+// results the newest). Not in APP_ROUTES itself: the sidebar links the
+// People page above it, and a profile is reached from a row. It does sit
+// UNDER that path, so isActiveRoute keeps People highlighted while one is
+// open, which is where the reader came from.
 export function personRoute(id: string): string {
   return `/people/${id}`;
 }
