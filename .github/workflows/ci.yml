@@ -23,6 +23,29 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    # The e2e suite boots the real AppModule, which connects to PostgreSQL
+    # at startup (RUN-46), so CI provides one as a service container.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: runlog
+        ports:
+          - 5432:5432
+        # Wait until the server actually accepts connections; without this
+        # the migrate step races the container boot.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/runlog
+      # Boot-required since RUN-56 (validateEnv). e2e sets its own value in
+      # test/e2e-env.ts; this one covers any unit spec that boots AppModule.
+      # Never a real secret - it is committed.
+      JWT_SECRET: ci-only-jwt-secret-000000000000000000
     steps:
       - uses: actions/checkout@v4
 
@@ -32,7 +55,14 @@ jobs:
           cache: npm
           cache-dependency-path: backend/package-lock.json
 
+      # postinstall runs `prisma generate`, so the client exists before
+      # lint/build/tests.
       - run: npm ci
+
+      - name: Apply database migrations
+        # deploy, not dev: applies the committed migrations verbatim and
+        # fails loudly if the database is unreachable or drifted.
+        run: npx prisma migrate deploy
 
       - name: Lint
         # The local script passes --fix; in CI we only want to be told, never
@@ -75,6 +105,86 @@ jobs:
         # BACKEND_URL is not needed to build: page.tsx falls back to
         # http://localhost:3000 and the fetch only runs at request time.
         run: npm run build
+
+  # The Playwright acceptance suite (e2e/) against the real stack: Postgres
+  # service container, backend on :3000, frontend on :4200 (both started by
+  # Playwright's webServer). A red database fails loudly twice over: migrate
+  # deploy errors out here, and the backend refuses to boot without its
+  # database (PrismaService connects at startup), so the job can never
+  # silently skip the database path (RUN-51 AC3).
+  e2e:
+    name: e2e (Playwright)
+    runs-on: ubuntu-latest
+    # Two servers plus a browser: a hang should fail in minutes, not sit on
+    # GitHub's 6-hour default.
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: runlog
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/runlog
+      # Never a real secret - it is committed (same as the backend job).
+      JWT_SECRET: ci-only-jwt-secret-000000000000000000
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+            e2e/package-lock.json
+
+      # Three independent npm projects, three installs (see CLAUDE.md,
+      # "Repository layout").
+      - run: npm ci
+        working-directory: backend
+
+      - name: Apply database migrations
+        run: npx prisma migrate deploy
+        working-directory: backend
+
+      - run: npm ci
+        working-directory: frontend
+
+      - run: npm ci
+        working-directory: e2e
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+        working-directory: e2e
+
+      - name: Typecheck the specs
+        # Playwright transpiles without typechecking, so this is the only
+        # gate that catches type drift in the e2e package. The script, not a
+        # bare `npx tsc`: without typescript in the package, npx silently
+        # installs the unrelated `tsc` npm package and fails.
+        run: npm run typecheck
+        working-directory: e2e
+
+      - name: Playwright tests
+        run: npm test
+        working-directory: e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: e2e/playwright-report
+          retention-days: 7
 
   # Repo-wide checks that belong to neither app.
   conventions:

@@ -1,6 +1,8 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { todayIso } from '@/lib/goal';
+import { getOnboardingDraft, saveDraftGoal } from '@/lib/onboarding';
+import { seedAccount } from '@/test/runsApiMock';
 import WeeklyGoalPage from './page';
 
 const push = jest.fn();
@@ -17,15 +19,10 @@ function isoDaysFromToday(days: number): string {
   return `${date.getFullYear()}-${month}-${day}`;
 }
 
-function storedGoal() {
-  return JSON.parse(window.localStorage.getItem('runlog.goal') ?? 'null');
-}
-
-function storedProfile() {
-  window.localStorage.setItem(
-    'runlog.profile',
-    JSON.stringify({ firstName: 'Marko', lastName: 'Horvat', email: 'marko@email.com' }),
-  );
+// The step's output is the wizard DRAFT since RUN-50: nothing reaches the
+// server until "Finish setup" on the next step.
+function draftGoal() {
+  return getOnboardingDraft().goal;
 }
 
 describe('Weekly goal step (RUN-8 / RUN-9)', () => {
@@ -33,8 +30,10 @@ describe('Weekly goal step (RUN-8 / RUN-9)', () => {
     window.localStorage.clear();
   });
 
-  it('shows Step 1 of 2, the Welcome badge with the first name and the heading', () => {
-    storedProfile();
+  it("shows Step 1 of 2, the Welcome badge with the account's first name and the heading", () => {
+    // The badge greets from the ACCOUNT since RUN-59, so setup resumed on
+    // another device still knows the runner's name.
+    seedAccount({ firstName: 'Marko', lastName: 'Horvat', email: 'marko@email.com' });
 
     render(<WeeklyGoalPage />);
 
@@ -130,11 +129,11 @@ describe('Goal dates and step navigation (RUN-10)', () => {
     await user.click(screen.getByRole('button', { name: /start tracking/i }));
 
     expect(screen.getByText('End date must be on or after the start date')).toBeInTheDocument();
-    expect(storedGoal()).toBeNull();
+    expect(draftGoal()).toBeUndefined();
     expect(push).not.toHaveBeenCalled();
   });
 
-  it('saves the goal and opens Setup - Running level on Start tracking', async () => {
+  it('drafts the goal and opens Setup - Running level on Start tracking', async () => {
     const user = userEvent.setup();
     render(<WeeklyGoalPage />);
 
@@ -144,7 +143,7 @@ describe('Goal dates and step navigation (RUN-10)', () => {
     });
     await user.click(screen.getByRole('button', { name: /start tracking/i }));
 
-    expect(storedGoal()).toEqual({
+    expect(draftGoal()).toEqual({
       km: 35,
       startDate: todayIso(),
       endDate: isoDaysFromToday(14),
@@ -159,19 +158,16 @@ describe('Goal dates and step navigation (RUN-10)', () => {
     fireEvent.change(screen.getByRole('slider'), { target: { value: '33' } });
     await user.click(screen.getByRole('button', { name: 'Skip for now' }));
 
-    expect(storedGoal()).toEqual({ km: 20, startDate: todayIso(), endDate: null });
+    expect(draftGoal()).toEqual({ km: 20, startDate: todayIso(), endDate: null });
     expect(push).toHaveBeenCalledWith('/setup/level');
   });
 
   it('keeps values entered earlier when returning from step 03 (RUN-11 AC4)', () => {
-    window.localStorage.setItem(
-      'runlog.goal',
-      JSON.stringify({
-        km: 42,
-        startDate: isoDaysFromToday(1),
-        endDate: isoDaysFromToday(21),
-      }),
-    );
+    saveDraftGoal({
+      km: 42,
+      startDate: isoDaysFromToday(1),
+      endDate: isoDaysFromToday(21),
+    });
 
     render(<WeeklyGoalPage />);
 

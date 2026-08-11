@@ -1,5 +1,6 @@
 import { render, screen, within } from '@testing-library/react';
-import { addRun, formatDateShort, fromIsoDate, toIsoDate, todayIso, type Run } from '@/lib/runs';
+import { formatDateShort, fromIsoDate, toIsoDate, todayIso, type Run } from '@/lib/runs';
+import { seedRuns } from '@/test/runsApiMock';
 import DistanceChartCard from './DistanceChartCard';
 
 function isoDaysAgo(days: number): string {
@@ -8,23 +9,22 @@ function isoDaysAgo(days: number): string {
   return toIsoDate(date);
 }
 
+// Before render only: seeds the backend and primes the store cache.
 function seedRun(overrides: Partial<Omit<Run, 'id'>> = {}): Run {
-  return addRun({
-    routeName: 'Morning loop',
-    distanceKm: 8,
-    durationSeconds: 2400,
-    date: todayIso(),
-    effort: 'Medium',
-    note: '',
-    ...overrides,
-  });
+  return seedRuns([
+    {
+      routeName: 'Morning loop',
+      distanceKm: 8,
+      durationSeconds: 2400,
+      date: todayIso(),
+      effort: 'Medium',
+      note: '',
+      ...overrides,
+    },
+  ])[0];
 }
 
 describe('Distance chart card (RUN-19, daily redesign)', () => {
-  beforeEach(() => {
-    window.localStorage.clear();
-  });
-
   it('shows the Distance heading, the caption and 14 daily bars', () => {
     seedRun();
 

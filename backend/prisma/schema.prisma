@@ -1,53 +1,70 @@
-// Run Log Tracker - future database shape. Inert until Prisma is installed and
-// migrated (see docs/data-model.md, "Adopting the database"). Mirrors the
-// TypeScript types in frontend/src/lib/ and must stay in sync with them:
-// string ids, calendar-day dates, durations in seconds, capitalized enums as
-// plain strings, derived data (records, totals, pace) never stored.
+// Run Log Tracker - database shape, live since RUN-46 (see docs/data-model.md,
+// "Adopting the database"). Mirrors the TypeScript types in frontend/src/lib/
+// and must stay in sync with them: string ids, calendar-day dates, durations
+// in seconds, capitalized enums as plain strings, derived data (records,
+// totals, pace) never stored.
 
+// Prisma 7: the client is generated TypeScript compiled with the rest of the
+// app, and the connection URL lives in prisma.config.ts (CLI) and
+// PrismaService (runtime), not here.
 generator client {
-  provider = "prisma-client-js"
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  // The backend emits CommonJS: tsconfig is "module": "nodenext" and
+  // package.json has no "type": "module", which under nodenext means CJS
+  // output. The default ESM generator output (import.meta) does not survive
+  // that, hence cjs here.
+  moduleFormat = "cjs"
 }
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
-// Single row: Run Log has no accounts (WEL-4). runningLevel is one of
-// Beginner | Intermediate | Advanced (LVL-2); defaultWeeklyGoalKm seeds
-// future weeks only (SET-3, SET-6).
+// One row per user since RUN-57 (was single-row in v1, WEL-4). runningLevel
+// is one of Beginner | Intermediate | Advanced (LVL-2); defaultWeeklyGoalKm
+// seeds future weeks only (SET-3, SET-6).
+// The setup answers only, since RUN-59: the runner's name and email live on
+// the User row, which every social surface already reads, so keeping copies
+// here only created two truths for one fact.
 model Profile {
   id                  String @id @default(cuid())
-  firstName           String
-  lastName            String
-  email               String
   runningLevel        String
   defaultWeeklyGoalKm Int
+  userId              String @unique
+  user                User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
-// Single row: the onboarding goal period (GOAL-2..4). km stays within 0-60
-// (A17); endDate null renders as "No end date".
+// One row per user since RUN-57: the onboarding goal period (GOAL-2..4).
+// km stays within 0-60 (A17); endDate null renders as "No end date".
 model Goal {
   id        String    @id @default(cuid())
   km        Int
   startDate DateTime  @db.Date
   endDate   DateTime? @db.Date
+  userId    String    @unique
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
-// At most one row per week, keyed by the Monday of that week. Snapshotted from
-// the goal's km the first time a week is used, then only changed by the
-// coach's "Apply to weekly goal" for the current week (AIC-5, A15). Past rows
-// never change, which is what makes Hit/Missed history possible (AIC-7).
+// At most one row per user per week, keyed by the Monday of that week.
+// Snapshotted from the goal's km the first time a week is used, then only
+// changed by the coach's "Apply to weekly goal" for the current week
+// (AIC-5, A15). Past rows never change, which is what makes Hit/Missed
+// history possible (AIC-7).
 model WeekTarget {
   id        String   @id @default(cuid())
-  weekStart DateTime @unique @db.Date
+  weekStart DateTime @db.Date
   targetKm  Int
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, weekStart])
 }
 
-// One row per logged run (ADD-1..8). Pace is durationSeconds / distanceKm,
-// derived everywhere and stored nowhere (ADD-4). Start time, elevation and
-// route type are deliberately absent until the designer answers how they are
-// captured (DET-7, assumption A10).
+// One row per logged run (ADD-1..8), owned by its runner since RUN-57. Pace
+// is durationSeconds / distanceKm, derived everywhere and stored nowhere
+// (ADD-4). Start time, elevation and route type are deliberately absent
+// until the designer answers how they are captured (DET-7, assumption A10).
 model Run {
   id              String   @id @default(cuid())
   routeName       String
@@ -56,8 +73,147 @@ model Run {
   date            DateTime @db.Date
   effort          String // Easy | Medium | Hard
   note            String   @default("")
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([date])
+  @@index([userId, date])
+}
+
+// One row per registered account (RUN-56), the anchor entity of the v2
+// community phase. Deliberately standalone: the single-row Profile above
+// stays untouched until the phase B per-user-scoping tasks decide how v1
+// data attaches to accounts. passwordHash is a bcrypt hash and must never
+// leave the auth service in any response or log line (RUN-56 AC4).
+//
+// The three privacy toggles (RUN-64) live here, on the account, not on
+// Profile: they gate what OTHER accounts may see, so they belong to the
+// identity every community entity already hangs off. showOnLeaderboard
+// landed first, pulled forward by RUN-69 because its event leaderboard has
+// to respect it to exist at all (AC3); RUN-64 added profilePublic and
+// showRoutes additively next to it and shipped the Settings card that
+// flips all three. All three carry the roadmap's decided default - false,
+// private, opt-in - so an existing account is never opted into anything by
+// a migration. The reader of profilePublic and showRoutes is RUN-63's
+// public profile page; showOnLeaderboard is read by the event leaderboard
+// today (see common/privacy.ts for the gating helpers).
+model User {
+  id                  String             @id @default(cuid())
+  email               String             @unique
+  passwordHash        String
+  firstName           String
+  lastName            String
+  profilePublic       Boolean            @default(false)
+  showOnLeaderboard   Boolean            @default(false)
+  showRoutes          Boolean            @default(false)
+  createdAt           DateTime           @default(now())
+  profile             Profile?
+  goal                Goal?
+  weekTargets         WeekTarget[]
+  runs                Run[]
+  coachPlans          CoachPlan[]
+  following           Follow[]           @relation("UserFollowing")
+  followers           Follow[]           @relation("UserFollowers")
+  notifications       Notification[]
+  eventsOwned         Event[]
+  eventParticipations EventParticipant[]
+}
+
+// One row per follow edge (RUN-61): follower -> followee, one-directional
+// ("friends" in the roadmap sense = two rows, one each way). The pair is
+// unique so following twice is impossible at the schema level, which is what
+// lets the API treat a repeat POST as an idempotent no-op. Both sides
+// cascade: deleting an account removes every edge it participates in,
+// whichever end it was on (AC4).
+model Follow {
+  id         String   @id @default(cuid())
+  followerId String
+  followeeId String
+  createdAt  DateTime @default(now())
+  follower   User     @relation("UserFollowing", fields: [followerId], references: [id], onDelete: Cascade)
+  followee   User     @relation("UserFollowers", fields: [followeeId], references: [id], onDelete: Cascade)
+
+  // The unique pair enforces one edge per direction (what makes the follow
+  // endpoint idempotent). Each side also gets a composite index matching
+  // the list queries' full shape - filter on one side, ORDER BY (createdAt,
+  // id) - so paging never has to fetch and sort a user's entire edge set.
+  @@unique([followerId, followeeId])
+  @@index([followerId, createdAt, id])
+  @@index([followeeId, createdAt, id])
+}
+
+// One row per delivered notification (RUN-65), owned by the user whose bell
+// it lands in. type is one of new-follower | followed-ran | event-joined
+// (NOTIFICATION_TYPES in notifications.service.ts; event-joined is defined
+// now and starts being written when events land in C2). payload is a
+// self-contained snapshot of everything rendering needs - actor name, run
+// stats - copied at write time, so a later unfollow or run delete can never
+// break the list (AC4). readAt null = unread; set once by mark-read.
+model Notification {
+  id        String    @id @default(cuid())
+  type      String // new-follower | followed-ran | event-joined
+  payload   Json
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // The list query's full shape: filter by owner, ORDER BY (createdAt, id)
+  // newest first - same reasoning as the Follow list indexes. The unread
+  // count filters on (userId, readAt), covered by its own index.
+  @@index([userId, createdAt, id])
+  @@index([userId, readAt])
+}
+
+// One row per community event (RUN-67). Any user creates one and becomes its
+// owner; both dates are inclusive calendar days and upcoming/active/finished
+// is derived from them against today at read time, never stored (a stored
+// state would go stale at every midnight). targetKm is an optional collective
+// distance goal, Float like Run.distanceKm because the leaderboard sums run
+// distances against it. The owner cascade deletes the event (and, through
+// it, the participant rows): an event does not outlive its owner.
+//
+// Not visible here: the add_event_date_order_check migration adds
+// CHECK ("endDate" >= "startDate") at the database level, because Prisma
+// cannot express CHECK constraints. It backstops the service-side
+// validation against concurrent PATCHes racing the merged-pair check.
+model Event {
+  id           String             @id @default(cuid())
+  name         String
+  description  String             @default("")
+  startDate    DateTime           @db.Date
+  endDate      DateTime           @db.Date
+  targetKm     Float?
+  createdAt    DateTime           @default(now())
+  ownerId      String
+  owner        User               @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  participants EventParticipant[]
+
+  // The list orders chronologically (startDate, id) and the state filter is
+  // a date-range comparison on either column, so each date gets an index;
+  // startDate's carries the id tiebreak to cover the full ORDER BY shape.
+  @@index([startDate, id])
+  @@index([endDate])
+  @@index([ownerId])
+}
+
+// One row per joined user per event (RUN-67), including the owner, who joins
+// at creation (AC1). The unique pair makes a repeat join impossible at the
+// schema level, which is what lets the API treat it as an idempotent no-op -
+// the same construction as Follow. Both FKs cascade: deleting the event or
+// the participant's account removes the row (AC5).
+model EventParticipant {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  eventId   String
+  userId    String
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+  // The reverse lookup: which events this user joined (the "joined" flag on
+  // the list resolves per page through the unique pair; this serves the
+  // per-user view RUN-68 needs).
+  @@index([userId])
 }
 
 // One row per generation (AIC-3..9). The newest row for the current week is
@@ -72,6 +228,8 @@ model CoachPlan {
   keyWorkout         String // "1 tempo"
   narrative          String
   updatedAt          DateTime @updatedAt
+  userId             String
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([weekStart])
+  @@index([userId, weekStart])
 }

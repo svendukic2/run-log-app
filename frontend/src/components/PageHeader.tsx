@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import NotificationsBell from '@/components/NotificationsBell';
 
 interface PageHeaderProps {
   // The small grey line above the title ("Good morning, Marko" on the
@@ -16,6 +17,11 @@ interface PageHeaderProps {
 // and Runs, which differ only in copy and action. Below `sm` the action cannot
 // sit next to the title without squeezing it, so the two stack and the action
 // spans the full width (RUN-15, responsive addendum).
+//
+// The notifications bell (RUN-66) is rendered here rather than passed in,
+// because it belongs on every screen with a header, not to any one page. It
+// rides in the same row as the action so that stacking below `sm` costs the
+// header two rows, never three.
 export default function PageHeader({ overline, title, action }: PageHeaderProps) {
   return (
     <header
@@ -30,7 +36,12 @@ export default function PageHeader({ overline, title, action }: PageHeaderProps)
           {title}
         </h1>
       </div>
-      {action}
+      <div className="flex shrink-0 items-center justify-end gap-3">
+        {/* The action keeps its own full-width-below-`sm` behaviour, so it
+            grows into whatever the bell leaves of the row. */}
+        {action ? <div className="min-w-0 flex-1">{action}</div> : null}
+        <NotificationsBell />
+      </div>
     </header>
   );
 }

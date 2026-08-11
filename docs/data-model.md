@@ -12,17 +12,82 @@ this document explains the conventions both follow.
 
 ## Where data lives today
 
-The design commits to local, on-device data ("No password needed - your runs stay on this
-device", WEL-4), so the current implementation is **localStorage only**. There is no
-database and no backend persistence yet. The owning modules are:
+App data lives in PostgreSQL behind the API since RUN-48 (runs) and RUN-50 (the
+onboarding-era entities). What remains in localStorage is device-scoped by nature:
 
-| Entity | Type lives in | localStorage key | Introduced by |
+| Entity | Type lives in | Persisted in | Introduced by |
 | --- | --- | --- | --- |
-| Profile | `frontend/src/lib/onboarding.ts` | `runlog.profile` | RUN-8 |
-| Onboarding flag | `frontend/src/lib/onboarding.ts` | `runlog.onboardingComplete` | RUN-8 |
-| Goal | `frontend/src/lib/goal.ts` | `runlog.goal` | RUN-10 |
-| Run | `frontend/src/lib/runs.ts` | `runlog.runs` | RUN-23 |
-| CoachPlan | not built yet | `runlog.coachPlans` (reserved) | RUN-32 (planned) |
+| Run | `frontend/src/lib/runs.ts` | PostgreSQL via `/api/runs` (RUN-48) | RUN-23 |
+| Account identity (name, email) | `frontend/src/lib/account.ts` | PostgreSQL (the User row) via `/api/account` (RUN-59) | RUN-56 |
+| Profile (level + default goal) | `frontend/src/lib/onboarding.ts` | PostgreSQL via `/api/profile` (RUN-50) | RUN-8 |
+| Goal | `frontend/src/lib/goal.ts` | PostgreSQL via `/api/goal` (RUN-50) | RUN-10 |
+| Week targets | `frontend/src/lib/goal.ts` | PostgreSQL via `/api/week-targets` (RUN-50) | RUN-17/33 |
+| Privacy settings | `frontend/src/lib/privacy.ts` | PostgreSQL via `/api/privacy` (RUN-64) | RUN-64 |
+| Session (JWT + email) | `frontend/src/lib/session.ts` | `runlog.session` (localStorage) | RUN-48, reshaped by RUN-58 |
+| Onboarding wizard draft | `frontend/src/lib/onboarding.ts` | `runlog.onboardingDraft` (localStorage) | RUN-50 |
+| Plan stamp | `frontend/src/lib/plan.ts` | `runlog.plan` (localStorage) | RUN-32 |
+
+Gone with RUN-50 (their v1 localStorage keys are imported once, then deleted):
+`runlog.profile`, `runlog.onboardingComplete`, `runlog.level`, `runlog.goal`,
+`runlog.defaultGoal` (now `Profile.defaultWeeklyGoalKm`), `runlog.appliedGoal` (now a
+`PUT /api/week-targets/:weekStart`). "Onboarding complete" is no longer stored at all:
+it is derived - the profile existing on the server IS the completed onboarding. The
+wizard draft holds a visitor's half-finished setup answers locally on purpose: no
+account exists until "Finish setup", so an abandoned wizard costs nothing server-side.
+
+## The frontend API pattern (decided in RUN-48, reuse everywhere)
+
+RUN-48 decided the app-wide async pattern once; the profile/goal stores follow it since
+RUN-50 and the privacy store since RUN-64 (four stores now: runs, profile, goal + week
+target, privacy) and every v2 screen reuses it rather than inventing another:
+
+- **Same-origin calls, proxied.** The browser calls `/api/*` on the frontend's own
+  origin; `next.config.ts` rewrites that to the backend server-side. `BACKEND_URL`
+  stays a server-only variable and CORS never enters the picture.
+- **Real sign in (RUN-58).** Identity comes from the Sign in / Sign up screens; the v1
+  "device is the account" bridge (a silently minted `runner-<random>@device.runlog`
+  identity with a stored secret) is gone. `runlog.session` now stores ONLY the JWT and
+  the account email - never a password. Every guarded screen sits behind
+  `RequireSession` (signed out lands on `/signin`); the setup steps run AFTER signup,
+  which also seeds the wizard draft with the names/email it collected. `apiFetch()`
+  attaches the token and times out hung requests (8s); a 401 signs the user out cleanly
+  and lands on Sign in - there is no refresh endpoint to retry against (that follow-up
+  is RUN-74). A signed-out visitor reads as empty data without any network. With
+  blocked storage (private browsing) the session cannot survive the post-auth page
+  load, so the Sign in / Sign up screens refuse to navigate and show an inline error
+  instead of a silent bounce-back loop.
+- **One-time v1 runs import.** Runs still under the v1 `runlog.runs` key are imported
+  into the SIGNED-IN account on first load, then the key is deleted: POSTed oldest
+  first, resumable after transient failures; rows the stricter API rejects are dropped
+  and counted, never allowed to wedge the app; the user sees a dismissible notice with
+  the count. The v1 onboarding-data import (RUN-50) died with RUN-58: a v1 device's
+  minted account has no password its user could ever type, so there is no account to
+  import into.
+- **Reads: cache + screen-level gate.** Stores keep an in-memory cache behind
+  `useSyncExternalStore`; hooks stay synchronous (`useRuns(): Run[]`,
+  `useProfile(): ProfileRecord | null`, `useGoalTarget(iso): number`,
+  `usePrivacy(): PrivacySettings`). Each screen
+  renders through one `AppDataBoundary` (RunsBoundary until RUN-50), which gates all
+  four stores: blank for the first 250 ms (no spinner flash on the fast local API),
+  then an honest spinner, then either content or one error card. Retryable failures
+  (network, timeout, 5xx) get "Try again" that reloads only the failed stores;
+  terminal ones (an expired session, which also signs the user out) explain the way
+  out instead.
+  `useRuns()` throws in development when read while loading outside a boundary, so a
+  forgotten gate cannot ship a false empty state; `useProfile()` is deliberately soft
+  (null while loading) because the sidebar footer legitimately reads it outside any
+  boundary. v1 designs no loading or error states; this is the design-review note for
+  that gap.
+- **Writes: pessimistic, awaited.** Mutations return promises; forms disable their
+  submit while saving and keep themselves open with an inline `role="alert"` line on
+  failure. No optimistic UI: a run the user believes is saved must actually be saved.
+  A mutation landing while the store is not 'ready' triggers a real reload instead of
+  merging into an unknown state.
+- **Cross-tab liveness is gone with the `storage` event** (runs only): another tab's
+  writes appear on the next full load. Accepted; BroadcastChannel can restore it later.
+- **Pure helpers live apart from state**: types, formatters and selectors are in
+  `frontend/src/lib/runMath.ts` (stateless, safe anywhere); the store in `runs.ts`
+  re-exports them, so components import from `./runs` as always.
 
 `backend/prisma/schema.prisma` is the **agreed future shape** of the same data for a
 PostgreSQL database. It is inert until someone installs Prisma and runs a migration (see
@@ -50,20 +115,317 @@ diverge.
 
 ## Entities
 
-### Profile (single record)
+### User (one per account, RUN-56)
+
+The anchor entity of the v2 community phase, deliberately standalone: the single-row
+`Profile` below stays untouched until the phase B per-user-scoping tasks decide how v1
+data attaches to accounts. Community tasks (follow, notifications, events) hang off
+`User.id`, not `Profile`.
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| firstName | string | Feeds greeting (DSH-2) and "Welcome, {name}" badge (GOAL-1) |
+| email | string, UNIQUE | Stored trimmed + lowercased + NFC-normalized (one canonical spelling per account) |
+| passwordHash | string | bcrypt, cost 12; never leaves the auth service in any response or log (RUN-56 AC4) |
+| firstName | string | Non-empty, mirrors WEL-5 rules |
+| lastName | string | Non-empty, mirrors WEL-5 rules |
+| profilePublic | boolean, default false | Opt-in: other runners may open this account's public profile (RUN-64; the page itself is RUN-63) |
+| showOnLeaderboard | boolean, default false | Opt-in to every leaderboard, global and per event. Pulled forward from RUN-64 by RUN-69, which cannot honour its own AC3 without it |
+| showRoutes | boolean, default false | Opt-in: route maps are shown to whoever can see the profile (RUN-64; route maps themselves are RUN-72) |
+| createdAt | timestamp | Audit field (the `updatedAt` convention above extends to `createdAt` here) |
+
+The API endpoints are `POST /api/auth/signup` and `POST /api/auth/login`, both
+returning `{ token, user }` with the JWT subject = user id. Passwords are capped at
+72 UTF-8 **bytes** (not characters) because bcrypt silently truncates beyond that.
+
+**Privacy settings (RUN-64).** The three toggles are `GET`/`PUT /api/privacy`: one
+resource per account, no id in the contract, body exactly
+`{ profilePublic, showOnLeaderboard, showRoutes }`. The PUT is a full replace like
+the profile and goal ones, every field required and strictly boolean - no truthy
+coercion, because the one direction that must never happen by accident is a
+setting switching ON. `showOnLeaderboard` landed early with RUN-69 (the event
+leaderboard has to honour it to exist); `profilePublic` and `showRoutes` arrived
+additively with RUN-64, which also shipped the Settings privacy card that flips all
+three and issues its PUT alongside the profile's, from the same Save changes
+button.
+
+All three carry the decided default - **false, private, opt-in** - and the
+migration adds them at that default too, so no existing account is ever published
+by a deploy. Consequence worth knowing: leaderboards keep rendering their "nobody
+is on leaderboards yet" state until runners opt in, and RUN-71's seeder opts its
+demo users in explicitly. The gating rules live in `backend/src/common/privacy.ts`
+(`appearsOnLeaderboard`, shared by the event leaderboard and RUN-70's global one;
+`canViewProfile` and `canViewRoutes`, added by RUN-63 when the public profile
+became their reader). All three are pure functions over the settings, so the
+policy is testable without a database and no call site re-derives it.
+
+**Reading another account (RUN-63).** `GET /api/users/:id` answers one runner's
+public profile: `{ id, firstName, lastName, me, following, counts: { followers,
+following }, visible, showRoutes, runs }`. `me` is the viewer looking at their
+own profile and `following` their follow edge, both answered by the API for the
+same reason the events list answers `mine` - the client does not track its own
+user id.
+
+The split at `visible` is the privacy rule, not a rendering hint. The header half
+is always served, because AC2 wants the name, the counts and a working follow
+button on a private profile too. The body half - `runs` - is **omitted** when
+`canViewProfile` says no: `runs: null` means "not yours to see", while an empty
+public log serves `[]`. The runs are never fetched and then filtered, so no gated
+payload exists for a client to recover with devtools. Records and the weekly
+distance chart are deliberately not separate fields: the frontend derives them
+from this one list with the same helpers the dashboard uses, so a single gate
+covers all three cards, and the read-only run detail at `/people/:id/runs/:runId`
+reads the same list rather than a second endpoint that could forget it.
+
+A **missing user is 404; a private user is not** - a private account is a normal
+200 with a gated body, because it still has a header it is entitled to serve, and
+403 is the wrong status for "you may read the header but not the body". Recorded
+plainly, because an earlier draft of this paragraph claimed the opposite: those
+two statuses side by side ARE an id enumeration oracle, and a 403 would have
+revealed less. That is an accepted tradeoff rather than a property the endpoint
+has; ids are `cuid()`, so there is no id space to walk. Do not "fix" it by
+404ing private accounts - AC2 needs their header.
+
+`showRoutes` is strictly narrower than `profilePublic` (the grant is the AND of
+the two), and the owner overrides both on their own profile. Route maps
+themselves are RUN-72, so `showRoutes` gates only the run detail's Route card so
+far; it is honoured in the payload now so that route data was never exposed in
+the meantime. The endpoint lives in `backend/src/users/`, which RUN-62 extends
+with `GET /api/users?search=`.
+
+**Ownership (RUN-57).** Every other entity in this document carries a required
+`userId` foreign key (cascade on user delete), with one structural exception:
+pure edge tables like `Follow` (RUN-61) relate two users, so they carry two user
+foreign keys (`followerId`, `followeeId`, both cascading) instead of a single
+`userId` - the scoping rule still holds in spirit, every query pins the caller
+to the relevant side of the edge. Every endpoint except
+`/api/auth/*` and `/api/hello` demands a `Authorization: Bearer <token>` header;
+queries are scoped `WHERE userId` server-side, and a foreign id answers 404, never
+403. Rows that existed before accounts were adopted by a **documented placeholder
+user** (`legacy-placeholder-user`, email `legacy-data@runlog.invalid`): it exists in
+every database that ran the `scope_entities_to_users` migration, cannot log in (its
+stored hash's preimage was random and discarded), and simply holds pre-account data
+until someone claims or deletes it. Response shapes are unchanged: `userId` never
+appears in API responses, the owner is implicit in the token.
+
+### Follow (one per follow edge, RUN-61)
+
+One-directional edge in the community follow graph: `follower -> followee`
+("friends" in the roadmap sense is simply two edges, one each way). The pair is
+UNIQUE at the schema level, which is what makes the follow endpoint idempotent.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| followerId | string FK -> User | The account doing the following; cascades on user delete |
+| followeeId | string FK -> User | The account being followed; cascades on user delete |
+| createdAt | timestamp | Orders the lists, newest first |
+
+The API is `POST`/`DELETE /api/users/:id/follow` (idempotent both ways; following
+yourself is 400, following a nonexistent user 404) plus `GET /api/me/followers` and
+`GET /api/me/following`, paginated with `?page` (1-based, max 100000) and `?pageSize`
+(default 20, max 100). An empty-but-present param (`?page=`) means "use the default";
+unknown query params are rejected like unknown body fields (the app-wide whitelist
+pipe). List items carry `{ id, firstName, lastName, followsYou, youFollow }` and the
+envelope carries `{ total, page, pageSize, counts: { followers, following } }`.
+
+### Notification (one per delivered notification, RUN-65)
+
+The bell's storage. Rows are only ever created by the social actions that cause
+them, inside those actions' transactions - a follow and its notification (or a
+run and its fan-out) commit together or not at all, which is what makes "exactly
+one notification per action" hold under retries.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| userId | string FK -> User | The recipient (whose bell it lands in); cascades on user delete |
+| type | string | `new-follower` \| `followed-ran` \| `event-joined` (the last written by event joins since RUN-67) |
+| payload | json | Self-contained snapshot taken at write time, see below |
+| readAt | timestamp, nullable | null = unread; set once by mark-read, never moved |
+| createdAt | timestamp | Orders the bell, newest first |
+
+The payload is deliberately **self-contained**: the actor's id and name (and for
+`followed-ran` the run's id and headline stats: routeName, distanceKm,
+durationSeconds, date) are copied in when the notification is written, never
+joined at read time. A later unfollow, account deletion or run delete therefore
+cannot break rendering a notification that already landed. The cost is accepted
+staleness: a renamed actor keeps their old name in old notifications.
+
+One anti-spam bound on `new-follower` and `event-joined`: while the recipient
+still has an **unread** notification from the same actor (for `event-joined`,
+the same actor and event), a fresh action writes nothing, so a follow/unfollow
+or join/leave loop cannot grow the bell by more than one row per actor. Reading
+the notification re-arms it, keeping a genuine later re-follow or re-join
+visible.
+
+Fan-out is batched per run: one query for the follower ids, then `createMany` in
+bounded chunks - never a query or insert per follower.
+
+The API is `GET /api/me/notifications` (newest first, same pagination contract as
+the follow lists, envelope `{ items, total, page, pageSize, unreadCount }`), plus
+`POST /api/me/notifications/:id/read` and `POST /api/me/notifications/read-all`.
+Both mark-read calls are idempotent; a repeat changes nothing and answers like
+the first. Items carry `{ id, type, payload, readAt, createdAt }` with ISO
+instant timestamps (the bell renders "2h ago", so these are the app's one
+deliberate exception to the calendar-day rule).
+
+### Event (one per community event, RUN-67) + EventParticipant (one per joined user per event)
+
+Community events: any user creates one, others join or leave. The creator is the
+**owner and first participant** in one atomic write, so an event never exists
+without its creator in it - which is also why the owner cannot leave (400): their
+membership is structural, not a preference.
+
+| Field (Event) | Type | Notes |
+| --- | --- | --- |
+| name | string | Non-empty, bounded like every free-text field |
+| description | string | Optional text is `''`, never null |
+| startDate | date | Inclusive calendar day (yyyy-mm-dd in the API) |
+| endDate | date | Inclusive; on/after startDate, validated on the merged pair for PATCH |
+| targetKm | number, nullable | Optional collective distance goal; Float like Run.distanceKm |
+| createdAt | timestamp | ISO instant in the API, like Notification's |
+| ownerId | string FK -> User | Cascades on user delete: an event does not outlive its owner |
+
+| Field (EventParticipant) | Type | Notes |
+| --- | --- | --- |
+| eventId | string FK -> Event | Cascades on event delete |
+| userId | string FK -> User | Cascades on user delete |
+| createdAt | timestamp | When they joined; not exposed in the API yet |
+| (eventId, userId) | unique | A repeat join is impossible at the schema level, so the API treats it as an idempotent no-op (the Follow construction) |
+
+The lifecycle state - `upcoming` | `active` | `finished` - is **derived from the
+dates against today's UTC day at read time, never stored** (a stored state would
+go stale at every midnight). The dates are inclusive: an event is active on its
+start and end days themselves.
+
+The API is `GET`/`POST /api/events` (list is paginated with the shared contract,
+envelope `{ items, total, page, pageSize }`, ordered chronologically by start
+day, filterable with `?state=`), `GET /api/events/:id`, `POST`/`DELETE
+/api/events/:id/join`, and owner-only `PATCH`/`DELETE /api/events/:id` (a
+non-owner gets 404, never 403 - same rule as every scoped entity). Items carry
+`{ id, name, description, startDate, endDate, targetKm, state, participantCount,
+joined, mine, owner: { id, firstName, lastName }, createdAt }`; `joined` is the
+caller's own participation and `mine` their ownership (RUN-68), so the list alone
+renders Join/Leave buttons and knows which cards must not offer Leave - the
+device-session frontend does not track its own user id, so the API answers the
+ownership question instead of making the client compare ids. Both membership
+verbs answer the **updated event** (RUN-68 review fix): the card that clicked
+learns the flipped flag and the fresh participant count in one round trip,
+instead of a follow-up read that could fail after the membership already
+changed. Leaving an event never joined is an idempotent 200; an unknown event
+is 404 for both verbs. A join
+notifies the owner (`event-joined`, see Notification above) in the same
+transaction; the owner joining their own event and repeat joins never notify.
+
+**The detail page's one read (RUN-69).** `GET /api/events/:id/participants`
+answers `{ items, total }` with one row per member: `{ id, firstName, lastName,
+joinedAt, me, rank, totalKm, runCount }`, in join order, where `id` is the
+**user's** id. The participant list and the leaderboard are the same set of
+people counted two ways, so they travel together rather than as two endpoints.
+This list is deliberately **not paginated**, unlike every other list in the API:
+a leaderboard is only correct as a whole, and the set is bounded by one event's
+membership rather than by the database.
+
+`rank`, `totalKm` and `runCount` are one decision, not three - all three are
+`null` exactly when that runner has `showOnLeaderboard` false. The numbers are
+withheld rather than flagged, so an opted-out runner appears in the participant
+list and no client can reconstruct their standing. `totalKm` is the sum of that
+runner's run distances inside the event's **inclusive** window (a run on the
+start or end day counts), computed by one `GROUP BY` at read time and never
+stored, the same rule the event's own derived state follows. Ties share a rank
+and the next distinct distance skips the places they consumed (1, 1, 3).
+
+### The global weekly leaderboard (RUN-70, stores nothing)
+
+`GET /api/leaderboard[?weekStart=yyyy-mm-dd]` ranks every opted-in runner by the
+kilometres they logged inside one **Monday-Sunday inclusive** week. It has no
+entity of its own: the answer is derived at read time from `User` and `Run`, like
+every other number in the "Never stored" section below.
+
+`weekStart` may name **any** day; the server normalizes it to the Monday of that
+day's week (the same week definition as the dashboard's `startOfWeek`) and echoes
+the resolved `{ weekStart, weekEnd }` back, so a client never has to guess which
+week it is looking at. Omitting it means the current week.
+
+The envelope is `{ weekStart, weekEnd, items, me, total }`, where each row is
+`{ id, firstName, lastName, rank, totalKm, runCount, me }` and `id` is the
+**user's** id (the row links to their public profile). Nothing in a row is
+nullable, unlike the event board's: a runner with `showOnLeaderboard` false is
+**absent** here rather than present with withheld numbers, because a global board
+has no membership list they would otherwise appear on. `me` repeats the caller's
+own row outside `items` and is `null` **exactly** when the caller is opted out -
+the one signal the page's banner needs, and one that names nobody else's setting.
+
+`items` is capped at the top 50 while `total` counts every ranked runner, so the
+caller's pinned row stays truthful when they rank far below the served slice. The
+ranking is computed over **everyone**, never within the served slice: opted-in
+runners with no runs that week tie at 0 km at the bottom rather than vanishing
+from their own leaderboard. Ranking and rounding are shared with the event board
+(`common/ranking.ts`, moved there by this ticket): ties share a rank, the next
+distinct distance skips the places they consumed (1, 1, 3), and distances round
+to **one** decimal, the precision the UI prints.
+
+Two reads serve it, exactly one of them the aggregation: the opted-in users (for
+their names, and so a runner who sat the week out still gets a row), then one
+`GROUP BY` over the week's runs. The opt-in gate is expressed **inside** that
+aggregation as a relation filter (`user: { showOnLeaderboard: true }`), not as an
+id list built from the first read: an `IN` list would carry one bind parameter
+per opted-in account and fail outright past Postgres' 65535-parameter cap. The
+event board may pass ids because one event's membership is bounded; this one is
+bounded only by the user table.
+
+### Account identity (the User row, RUN-59)
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| firstName | string | Feeds greeting (DSH-2), the "Welcome, {name}" setup badge (GOAL-1) and every social surface |
 | lastName | string | With firstName derives avatar initials (SET-2); never uploaded |
-| email | string | Format-validated (WEL-5, A1) |
+| email | string | Also the SIGN-IN credential: unique, normalized (trimmed, lowercased, NFC) on every write path |
+
+`GET`/`PUT /api/account` (RUN-59), cached by `frontend/src/lib/account.ts`. This is
+the app's **single source of truth** for a runner's name and email. It has to be:
+events, follow, notifications and leaderboards all read the names off the `User`
+row, so while the profile kept its own copies (RUN-49/50) a rename in Settings
+changed the runner's own dashboard and nothing anyone else saw. RUN-59 dropped
+those columns (migration `20260812000000_profile_drops_identity` first copies the
+profile's names back onto the User row, so the spelling the user last chose is the
+one that survives; the profile's email is deliberately not copied - `User.email` is
+unique and the only rows where the two ever differed are v1 device-era accounts
+that RUN-58 already made unreachable).
+
+Keeping identity separate from the setup answers is also what makes setup
+resumable: the account exists from signup, the profile only from "Finish setup",
+so the setup steps can greet a runner by name on any device with nothing stored
+locally (RUN-59 AC3).
+
+A 409 on PUT means another account owns that email; the Settings form shows it
+inline. Changing the email does not invalidate the session - the token carries the
+user id, not the address.
+
+### Profile (one per user since RUN-57, setup answers only since RUN-59)
+
+| Field | Type | Notes |
+| --- | --- | --- |
 | runningLevel | 'Beginner' \| 'Intermediate' \| 'Advanced' | Set once in onboarding (LVL-2); not editable after (by design, flagged) |
 | defaultWeeklyGoalKm | number | Settings "Default weekly goal" (SET-3); seeds future weeks only (SET-6) |
 
-`runningLevel` and `defaultWeeklyGoalKm` are not in `onboarding.ts` yet; RUN-11 and
-RUN-38 add them to this same interface rather than creating new stores.
+Both fields live on the same `ProfileRecord` in `onboarding.ts` - one record, not
+separate stores. The level is capitalized everywhere now; the lowercase spellings
+were a v1 localStorage relic.
 
-### Goal (single record) + WeekTarget (one per week)
+The API is `GET`/`PUT /api/profile` (RUN-49): one resource per account, no id in the
+routes or the response - the owner is the token. GET answers 404 until the first PUT,
+which is the signal RUN-50 derives the onboarding gate from (a profile exists exactly
+when onboarding finished). PUT is a full replace: every field required, so the row can
+never end up half-written and re-sending a payload is a no-op. `runningLevel` is
+capitalized in the API and the database whatever casing the v1 store used.
+
+**SET-6 is server-enforced**: changing `defaultWeeklyGoalKm` on an existing profile
+first materializes every Monday a client could honestly call "the current week"
+(at most two, at a week boundary) under the OLD goal state, so the running week's
+snapshot is frozen before the new default lands. The first PUT ever (onboarding
+finishing) skips the freeze: nothing is changing yet, and RUN-50 may save the
+profile before the goal.
+
+### Goal (one per user since RUN-57) + WeekTarget (one per user per week)
 
 This resolves the one question the spec leaves open. SET-6 says the default target is
 "applied to each new week", and the coach's previous plans show "Target 20 km · ran
@@ -72,16 +434,39 @@ reproduce that history, so the target is **snapshotted per week**:
 
 - **Goal** is the onboarding record (RUN-10): `{ km, startDate, endDate | null }`, bounds
   0-60 km (GOAL-2, A17).
-- **WeekTarget** is `{ weekStart, targetKm }`, at most one per week (`weekStart` unique,
-  Monday ISO date). The first time a week is displayed or evaluated, its row is created
+- **WeekTarget** is `{ weekStart, targetKm }`, at most one per user per week
+  (`(userId, weekStart)` unique since RUN-57, Monday ISO date). The first time a week is displayed or evaluated, its row is created
   from the goal's current km. After that the row is the truth for that week.
 - "Apply to weekly goal" (AIC-5, A15) updates the **current week's** WeekTarget only.
 - Changing the Settings default (SET-6) changes what **future** weeks snapshot; existing
   rows never change retroactively.
 - Hit/Missed for a past week = `totalsForWeek(runs, weekStart).distanceKm >= targetKm`.
 
-WeekTarget does not exist in code yet; it lands with RUN-17 (weekly goal card) or RUN-33
-(apply action), whichever needs it first.
+The API (RUN-49):
+
+- `GET`/`PUT /api/goal` - the onboarding goal, one per account, 404 until the first
+  PUT. Full replace; `endDate` omitted and `endDate: null` both mean "No end date".
+  Replacing the goal never rewrites existing WeekTarget rows; while the account has
+  no profile (so `goal.km` is the active seed), changing `km` first freezes the
+  running week under the old value, the same SET-6 rule the profile default follows.
+- `GET /api/week-targets/:weekStart` - get-or-create, where creation is allowed only
+  for the current week: reading the week you are in is what materializes it, seeded
+  from `profile.defaultWeeklyGoalKm`, else `goal.km`, else the 20 km fallback - the
+  same resolution order as the frontend's `resolveGoalTarget`. A past week that was
+  never materialized while live answers 404 ("no target was recorded"), never a row
+  seeded from today's state - that would fabricate Hit/Missed history. A future week
+  404s too: it snapshots when it arrives, under whatever default is in force then.
+  `weekStart` must be a real Monday (400 otherwise, naming the correct one).
+- `PUT /api/week-targets/:weekStart { targetKm }` - "Apply to weekly goal", allowed
+  only for the current week. The server cannot know the client's timezone, so
+  "current" means the Mondays of the local calendar day at the two real-world offset
+  extremes (UTC-12 and UTC+14): one Monday most of the week, two only while the week
+  boundary crosses the globe (Sunday 10:00 UTC to Monday 12:00 UTC). Past weeks are
+  immutable history; future weeks are refused. `targetKm` accepts 0 (the slider does)
+  and deliberately exceeds the 60 km slider cap - the coach can suggest more - up to
+  a 1000 km sanity ceiling.
+- `GET /api/week-targets` - every materialized week, newest first, for the Hit/Missed
+  history.
 
 ### Run
 
@@ -128,19 +513,83 @@ Recomputing on every read is the mechanism behind RUN-11 ("records fill in
 automatically"), DEL-3 and A18, and it is why deleting a run can never leave a stale
 record behind.
 
-## Adopting the database (when/if required)
+## Adopting the database (live since RUN-46)
 
-No Docker needed; a locally installed PostgreSQL works fine:
+The schema is no longer inert: Prisma 7 and the initial migration landed with RUN-46.
+No Docker needed; a locally installed PostgreSQL works fine. On a fresh clone:
 
 1. Create an empty database once: `CREATE DATABASE runlog;`
-2. `cd backend && npm install prisma @prisma/client`
-3. Add to `backend/.env` (and a placeholder to `backend/.env.example`):
+2. Set `DATABASE_URL` in `backend/.env` (template in `backend/.env.example`):
    `DATABASE_URL="postgresql://postgres:<password>@localhost:5432/runlog"`
-4. `npx prisma migrate dev --name init` - generates the SQL migration from
-   `prisma/schema.prisma`, commits it to `prisma/migrations/`, and applies it.
-5. Teammates then only set their own `DATABASE_URL` and run `npx prisma migrate dev`.
+   Since RUN-56 the boot also requires `JWT_SECRET` (min 32 chars); the template
+   carries a one-liner that generates it.
+3. `cd backend && npm install` - also generates the Prisma client into
+   `backend/src/generated/prisma` (gitignored) via the `postinstall` script.
+4. `npx prisma migrate dev` - applies the committed migrations from
+   `backend/prisma/migrations/`, giving everyone an identical database.
+
+Prisma 7 wiring, for anyone touching it:
+
+- The connection URL lives in **two places on purpose**, both reading
+  `backend/.env`: `backend/prisma.config.ts` feeds the CLI (migrate, studio),
+  and `PrismaService` feeds the runtime client through ConfigService with a
+  `pg` driver adapter. The schema file itself has no URL (Prisma 7 removed it).
+  Run Prisma CLI commands **from `backend/`**: both the dotenv lookup and the
+  schema path in `prisma.config.ts` are cwd-relative, so from the repo root
+  the CLI reports "url is missing" even when `.env` is perfectly fine.
+- `PrismaService` (`backend/src/prisma/`) is the app's single database entry
+  point. `PrismaModule` is deliberately not `@Global`: feature modules that
+  talk to the database import it explicitly and inject the service, so the
+  imports arrays stay an honest map of who touches persistence.
+- Schema changes: edit `prisma/schema.prisma`, run
+  `npx prisma migrate dev --name <change>`, commit the new migration folder
+  together with the schema change. `migrate dev` is a development command;
+  CI and any deployed database use `npx prisma migrate deploy`, which only
+  applies committed migrations and never generates or resets anything.
+- **The Jest configs carry Prisma 7 workarounds**, kept in one place:
+  `backend/jest.shared.js`, consumed by both `jest.config.js` (unit) and
+  `test/jest-e2e.config.js` (e2e), with the exact error each workaround
+  prevents commented at the point of use. Short version: the generated
+  client loads its WASM query compiler with a dynamic `import()`, which
+  under the app's `nodenext` tsconfig survives to runtime and kills Jest's
+  CommonJS VM with "A dynamic import callback was invoked without
+  --experimental-vm-modules". The ts-jest override (`module: commonjs` +
+  `moduleResolution: node10` + `resolvePackageJsonExports: false`) makes tsc
+  downlevel that `import()` to a `require` of what is verifiably a CJS file,
+  and the `moduleNameMapper` entry strips the ESM-style `.js` suffix from
+  the generated client's relative imports ("Cannot find module './enums.js'"
+  otherwise). The cost is that tests resolve modules under older rules than
+  the production build; the build step and the e2e-against-real-Postgres run
+  in CI are what keep that divergence honest. Delete `jest.shared.js` the
+  day Prisma's generated client loads cleanly under Jest's default CJS
+  environment.
+
+## API validation (RUN-47)
+
+The runs endpoints (`/api/runs`) validate with class-validator DTOs mirroring the
+frontend rules: routeName non-empty, distanceKm > 0, durationSeconds integer > 0, date
+a real `yyyy-mm-dd` calendar day, effort one of the capitalized levels, note optional.
+Three server-side specifics worth knowing:
+
+- **"Not in the future" allows one day of slack.** The server cannot know the client's
+  zone: a runner in Sydney is on "tomorrow" relative to a UTC server for the first
+  hours of their day. The API therefore accepts dates up to tomorrow in UTC; the strict
+  "today" rule of RUN-23 AC7 stays in the form, where the user's zone is known.
+- **Free-text bounds are API-side additions**: routeName is trimmed and capped at 120
+  characters, note at 2000. The v1 forms enforce no lengths, so these exist to keep a
+  stray script from storing megabytes in unbounded TEXT columns, not to police real
+  input.
+- **Explicit `null` is always a 400**, on create and on PATCH. Omitting `effort` or
+  `note` means "use the defaults" (`Medium`, `''`); sending `null` for anything is
+  rejected in validation rather than reaching a NOT NULL column as a 500.
+
+## Test database
+
+`npm run test:e2e` never touches the development database. The suite derives its own
+URL (`DATABASE_URL_TEST` if set, otherwise the `DATABASE_URL` database name plus a
+`_test` suffix, e.g. `runlog_test`), creates and migrates that database automatically
+on first run, and refuses to start against any database whose name does not end in
+`_test`, because the tests delete rows between cases. See `backend/test/test-database.ts`.
 
 The frontend keeps the same types and swaps localStorage calls for API calls; nothing in
-the components changes shape. That swap is deliberately **not** scheduled in the current
-sprint plan; confirm with the teacher whether a real database is part of the grade before
-spending sprint capacity on it.
+the components changes shape. RUN-48 made that swap for runs; RUN-50 does profile/goal.

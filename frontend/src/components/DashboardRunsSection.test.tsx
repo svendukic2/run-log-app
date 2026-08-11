@@ -2,6 +2,7 @@ import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderToString } from 'react-dom/server';
 import { addRun } from '@/lib/runs';
+import { seedRuns } from '@/test/runsApiMock';
 import DashboardRunsSection from './DashboardRunsSection';
 
 function firstRun() {
@@ -16,10 +17,6 @@ function firstRun() {
 }
 
 describe('Dashboard empty state (RUN-18)', () => {
-  beforeEach(() => {
-    window.localStorage.clear();
-  });
-
   afterEach(() => {
     // The modal restores this on unmount; resetting after each test means a
     // regression there fails the test that caused it instead of leaking.
@@ -40,10 +37,11 @@ describe('Dashboard empty state (RUN-18)', () => {
   });
 
   it('renders a neutral server shell, never the prompt, pre-hydration', () => {
-    addRun(firstRun());
+    seedRuns([firstRun()]);
 
-    // What the server ships cannot depend on localStorage; a returning user
-    // must not see "Log your first run" flash before their data hydrates in.
+    // What the server ships cannot depend on the client-side runs cache; a
+    // returning user must not see "Log your first run" flash before their
+    // data hydrates in.
     expect(renderToString(<DashboardRunsSection />)).not.toMatch(/Log your first run/);
   });
 
@@ -67,12 +65,12 @@ describe('Dashboard empty state (RUN-18)', () => {
     expect(document.body.style.overflow).toBe('');
   });
 
-  it('replaces the prompt when a run is saved through the store (AC3)', () => {
+  it('replaces the prompt when a run is saved through the store (AC3)', async () => {
     render(<DashboardRunsSection />);
     expect(screen.getByRole('region', { name: 'Log your first run' })).toBeInTheDocument();
 
-    act(() => {
-      addRun(firstRun());
+    await act(async () => {
+      await addRun(firstRun());
     });
 
     expect(screen.queryByRole('region', { name: 'Log your first run' })).toBeNull();
@@ -80,7 +78,7 @@ describe('Dashboard empty state (RUN-18)', () => {
   });
 
   it('shows the runs content directly when runs are already stored', () => {
-    addRun(firstRun());
+    seedRuns([firstRun()]);
 
     render(<DashboardRunsSection />);
 
@@ -90,7 +88,7 @@ describe('Dashboard empty state (RUN-18)', () => {
   });
 
   it('stacks the distance chart above the recent runs card (RUN-19)', () => {
-    addRun(firstRun());
+    seedRuns([firstRun()]);
 
     render(<DashboardRunsSection />);
 

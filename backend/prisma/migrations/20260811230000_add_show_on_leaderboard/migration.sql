@@ -1,0 +1,11 @@
+-- The first of the three privacy toggles (RUN-64 owns the other two and the
+-- Settings UI). RUN-69's event leaderboard has to honour it to satisfy its
+-- own AC3, so the column is pulled forward here rather than the leaderboard
+-- shipping with a gate it cannot read.
+--
+-- The default is FALSE on purpose: the roadmap decided all three privacy
+-- settings default to private, and a leaderboard that silently opts every
+-- existing account in would be exactly the regression that decision guards
+-- against. Existing rows therefore land opted OUT, which is also why RUN-71's
+-- seeder opts its demo users in explicitly.
+ALTER TABLE "User" ADD COLUMN "showOnLeaderboard" BOOLEAN NOT NULL DEFAULT false;

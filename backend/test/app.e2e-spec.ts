@@ -1,24 +1,17 @@
-import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
-import { AppModule } from './../src/app.module';
+import { createE2eApp } from './create-test-app';
 
 describe('AppController (e2e)', () => {
   let app: INestApplication<App>;
 
   beforeEach(async () => {
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication();
-    // Mirror the global 'api' prefix configured in main.ts so e2e routes
-    // match production (GET /api/hello).
-    app.setGlobalPrefix('api');
-    await app.init();
+    ({ app } = await createE2eApp());
   });
 
+  // Public by the RUN-57 contract: reachable with no Authorization header
+  // while everything else 401s (proven in user-isolation.e2e-spec).
   it('/api/hello (GET)', () => {
     return request(app.getHttpServer())
       .get('/api/hello')

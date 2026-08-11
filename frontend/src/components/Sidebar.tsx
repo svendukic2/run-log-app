@@ -4,7 +4,8 @@ import { useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ROUTES, isActiveRoute } from '@/lib/routes';
-import { profileInitials, profileShortName, useProfile } from '@/lib/onboarding';
+import { accountInitials, accountShortName, useAccount } from '@/lib/account';
+import { signOut } from '@/lib/session';
 
 // Icon geometry is taken 1:1 from the Figma exports (20x20 viewBox, node 47:40);
 // fills are currentColor so the active state can recolor them via CSS.
@@ -35,6 +36,20 @@ function CoachIcon() {
       <path
         d="M10 0L12.687 7.31299L20 10L12.687 12.687L10 20L7.31299 12.687L0 10L7.31299 7.31299L10 0Z"
         fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+function EventsIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path
+        d="M4 18V2M4 2H16.5L13.5 6L16.5 10H4"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
       />
     </svg>
   );
@@ -83,6 +98,13 @@ const NAV_SECTIONS: NavSection[] = [
     items: [{ label: 'AI Coach', href: ROUTES.coach, icon: <CoachIcon /> }],
   },
   {
+    // The COMMUNITY section formally belongs to RUN-62 (People), which adds
+    // Leaderboard and People here; only Events lands now (RUN-68) so the
+    // sidebar never links to routes that do not exist yet.
+    label: 'COMMUNITY',
+    items: [{ label: 'Events', href: ROUTES.events, icon: <EventsIcon /> }],
+  },
+  {
     label: 'ACCOUNT',
     items: [{ label: 'Settings', href: ROUTES.settings, icon: <SettingsIcon /> }],
   },
@@ -102,7 +124,7 @@ interface SidebarProps {
 // in as an off-canvas drawer (RUN-13, responsive addendum).
 export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   const pathname = usePathname();
-  const profile = useProfile();
+  const account = useAccount();
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
   // Opening the drawer moves focus into it so keyboard and screen-reader users
@@ -182,26 +204,40 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
 
       <div className="min-h-[26px] flex-1" />
 
-      {/* Profile footer (RUN-14). useProfile is null on the server snapshot, so
+      {/* Identity footer (RUN-14, reading the account since RUN-59).
+          useAccount is null on the server snapshot, so
           the footer appears right after hydration; rendering nothing until then
           beats guessing a placeholder identity. */}
-      {profile && (
+      {account && (
         <div
           data-testid="profile-footer"
-          className="flex w-full items-center gap-[11px] border-t border-ink-border px-[10px] pt-[14px] pb-[6px]"
+          className="flex w-full flex-col border-t border-ink-border px-[10px] pt-[14px] pb-[6px]"
         >
-          <div
-            aria-hidden="true"
-            className="flex size-[36px] shrink-0 items-center justify-center rounded-full bg-ink-elevated"
+          <div className="flex w-full items-center gap-[11px]">
+            <div
+              aria-hidden="true"
+              className="flex size-[36px] shrink-0 items-center justify-center rounded-full bg-ink-elevated"
+            >
+              <span className="text-[14px] font-semibold text-white">
+                {accountInitials(account)}
+              </span>
+            </div>
+            <div className="flex min-w-0 flex-1 flex-col gap-px">
+              <span className="truncate text-[13px] font-medium text-on-dark-soft">
+                {accountShortName(account)}
+              </span>
+              <span className="truncate text-[11.5px] text-on-dark-subtle">{account.email}</span>
+            </div>
+          </div>
+          {/* Sign out (RUN-58 AC5): clears the session and lands on Sign in
+              via a full page load, which also drops every store cache. */}
+          <button
+            type="button"
+            onClick={signOut}
+            className="mt-[10px] w-full rounded-[10px] border border-ink-border px-[12px] py-[8px] text-left text-[12.5px] font-medium text-on-dark-subtle hover:bg-ink-raised hover:text-white"
           >
-            <span className="text-[14px] font-semibold text-white">{profileInitials(profile)}</span>
-          </div>
-          <div className="flex min-w-0 flex-1 flex-col gap-px">
-            <span className="truncate text-[13px] font-medium text-on-dark-soft">
-              {profileShortName(profile)}
-            </span>
-            <span className="truncate text-[11.5px] text-on-dark-subtle">{profile.email}</span>
-          </div>
+            Sign out
+          </button>
         </div>
       )}
     </aside>

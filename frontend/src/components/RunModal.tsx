@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import EffortField from '@/components/EffortField';
 import TextArea from '@/components/TextArea';
 import TextField from '@/components/TextField';
+import { mutationErrorMessage } from '@/lib/session';
 import {
   addRun,
   emptyRunForm,
@@ -59,10 +60,29 @@ export default function RunModal({ run, onClose }: RunModalProps) {
     run ? runToForm(run) : emptyRunForm(),
   );
   const [errors, setErrors] = useState<RunFormErrors>({});
+  // The save round-trips to the API since RUN-48: `saving` disables the
+  // buttons against a double submit, `saveError` is the inline line the
+  // app-wide error pattern prescribes (modal stays open, nothing saved).
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const routeNameRef = useRef<HTMLInputElement>(null);
 
   const setValue = <Field extends keyof RunFormValues>(field: Field, value: RunFormValues[Field]) =>
     setValues((current) => ({ ...current, [field]: value }));
+
+  // Dismissal is refused while a save is in flight (RUN-68 review fix,
+  // back-ported here: the two modals share the pattern): closing mid-save
+  // would unmount the modal, a late failure's inline error would land on an
+  // unmounted component, and the user would walk away believing a run is
+  // saved that never was. Escape here, the scrim, Cancel and the X below
+  // all share the gate.
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !saving) onClose();
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [onClose, saving]);
 
   useEffect(() => {
     // Land on the first field: the point of the modal is logging a run in
@@ -70,23 +90,17 @@ export default function RunModal({ run, onClose }: RunModalProps) {
     // the scrim.
     routeNameRef.current?.focus();
 
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', closeOnEscape);
-
     // Stop the page behind the dialog from scrolling under the user's finger.
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-
     return () => {
-      document.removeEventListener('keydown', closeOnEscape);
       document.body.style.overflow = previousOverflow;
     };
-  }, [onClose]);
+  }, []);
 
-  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (saving) return;
 
     // Editing applies the same rules as adding (EDT-3: ADD-5 to ADD-8).
     const nextErrors = validateRunForm(values);
@@ -101,14 +115,25 @@ export default function RunModal({ run, onClose }: RunModalProps) {
     }
 
     // Pace is derived from what was entered, never asked for (ADD-4). Saving
-    // an edit announces the change, so list, detail, dashboard and records
-    // all refresh (EDT-2).
-    if (run) {
-      updateRun(run.id, toRunDraft(values));
-    } else {
-      addRun(toRunDraft(values));
+    // goes through the API (RUN-48) and updates the cache, so list, detail,
+    // dashboard and records all refresh (EDT-2). An edit of a run deleted
+    // elsewhere resolves null: the run is gone either way, so the modal
+    // closes and the screens refresh from the cache.
+    setSaving(true);
+    setSaveError(null);
+    try {
+      if (run) {
+        await updateRun(run.id, toRunDraft(values));
+      } else {
+        await addRun(toRunDraft(values));
+      }
+      onClose();
+    } catch (error) {
+      // The failure keeps the modal open with everything typed intact:
+      // closing would silently discard a run the user believes is saved.
+      setSaving(false);
+      setSaveError(mutationErrorMessage(error));
     }
-    onClose();
   };
 
   return (
@@ -116,7 +141,7 @@ export default function RunModal({ run, onClose }: RunModalProps) {
       <div
         aria-hidden="true"
         data-testid="run-modal-backdrop"
-        onClick={onClose}
+        onClick={saving ? undefined : onClose}
         className="fixed inset-0 bg-ink/60"
       />
 
@@ -136,8 +161,9 @@ export default function RunModal({ run, onClose }: RunModalProps) {
           <button
             type="button"
             onClick={onClose}
+            disabled={saving}
             aria-label="Close"
-            className="flex size-[34px] shrink-0 items-center justify-center rounded-[10px] text-secondary hover:bg-muted hover:text-ink"
+            className="flex size-[34px] shrink-0 items-center justify-center rounded-[10px] text-secondary hover:bg-muted hover:text-ink disabled:cursor-default disabled:opacity-60"
           >
             <CloseIcon />
           </button>
@@ -203,23 +229,35 @@ export default function RunModal({ run, onClose }: RunModalProps) {
 
           {/* Full-width and stacked on a phone, which puts the primary action
               closest to the thumb without reordering it away from the design. */}
-          <div className="flex shrink-0 flex-col gap-3 px-5 py-4 sm:flex-row sm:justify-end sm:gap-[12px] sm:px-[28px] sm:py-[18px]">
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex w-full items-center justify-center rounded-[14px] border border-line-strong bg-white px-[28px] py-[16px] text-[16px] font-semibold text-text-primary hover:bg-muted sm:w-auto"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="flex w-full items-center justify-center gap-[9px] rounded-[14px] bg-accent px-[28px] py-[16px] text-[16px] font-semibold text-white hover:bg-accent-pressed sm:w-auto"
-            >
-              {run ? 'Save changes' : 'Save run'}
-              <span aria-hidden="true" className="text-[17px]">
-                →
-              </span>
-            </button>
+          <div className="flex shrink-0 flex-col gap-3 px-5 py-4 sm:px-[28px] sm:py-[18px]">
+            {/* The API-failure line (RUN-48). role=alert so the failure is
+                announced from behind the modal's focus; rendered only with
+                content so an empty live region never mounts. */}
+            {saveError && (
+              <p role="alert" className="text-[13px] leading-[1.5] text-accent-pressed">
+                {saveError}
+              </p>
+            )}
+            <div className="flex flex-col gap-3 sm:flex-row sm:justify-end sm:gap-[12px]">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={saving}
+                className="flex w-full items-center justify-center rounded-[14px] border border-line-strong bg-white px-[28px] py-[16px] text-[16px] font-semibold text-text-primary hover:bg-muted disabled:cursor-default disabled:opacity-60 sm:w-auto"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={saving}
+                className="flex w-full items-center justify-center gap-[9px] rounded-[14px] bg-accent px-[28px] py-[16px] text-[16px] font-semibold text-white hover:bg-accent-pressed disabled:cursor-default disabled:opacity-60 sm:w-auto"
+              >
+                {saving ? 'Saving…' : run ? 'Save changes' : 'Save run'}
+                <span aria-hidden="true" className="text-[17px]">
+                  →
+                </span>
+              </button>
+            </div>
           </div>
         </form>
       </div>

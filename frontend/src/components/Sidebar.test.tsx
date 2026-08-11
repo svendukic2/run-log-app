@@ -1,5 +1,8 @@
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { seedAccount, signInRedirectCount } from '@/test/runsApiMock';
+import { __resetAccountStoreForTests } from '@/lib/account';
+import { hasStoredSession } from '@/lib/session';
 import Sidebar from './Sidebar';
 
 // usePathname drives the active state; mock it per test.
@@ -16,15 +19,10 @@ function renderSidebar() {
   return render(<Sidebar isOpen onClose={onClose} />);
 }
 
-function storeProfile(profile: { firstName: string; lastName: string; email: string }) {
-  window.localStorage.setItem('runlog.profile', JSON.stringify(profile));
-}
-
 describe('Sidebar', () => {
   beforeEach(() => {
     mockUsePathname.mockReturnValue('/dashboard');
     onClose.mockClear();
-    window.localStorage.clear();
   });
 
   it('renders the logo and all sections with their items (AC1)', () => {
@@ -35,11 +33,13 @@ describe('Sidebar', () => {
 
     expect(screen.getByText('MENU')).toBeInTheDocument();
     expect(screen.getByText('ASSISTANT')).toBeInTheDocument();
+    expect(screen.getByText('COMMUNITY')).toBeInTheDocument();
     expect(screen.getByText('ACCOUNT')).toBeInTheDocument();
 
     expect(screen.getByRole('link', { name: /dashboard/i })).toHaveAttribute('href', '/dashboard');
     expect(screen.getByRole('link', { name: /runs/i })).toHaveAttribute('href', '/runs');
     expect(screen.getByRole('link', { name: /ai coach/i })).toHaveAttribute('href', '/coach');
+    expect(screen.getByRole('link', { name: /events/i })).toHaveAttribute('href', '/events');
     expect(screen.getByRole('link', { name: /settings/i })).toHaveAttribute('href', '/settings');
   });
 
@@ -61,6 +61,7 @@ describe('Sidebar', () => {
     ['/dashboard', 'Dashboard'],
     ['/runs', 'Runs'],
     ['/coach', 'AI Coach'],
+    ['/events', 'Events'],
     ['/settings', 'Settings'],
   ])('marks %s as active for the %s item (AC4)', (pathname, label) => {
     mockUsePathname.mockReturnValue(pathname);
@@ -79,9 +80,11 @@ describe('Sidebar', () => {
     expect(screen.getByRole('link', { name: /runs/i })).toHaveAttribute('aria-current', 'page');
   });
 
+  // The footer's identity is the ACCOUNT's since RUN-59 (name and email live
+  // on the User row), so these tests seed the account, not the profile.
   describe('profile footer (RUN-14)', () => {
-    it('shows initials, "{First name} {L}." and the email from the stored profile (AC1)', () => {
-      storeProfile({ firstName: 'Marko', lastName: 'Kovačić', email: 'marko@email.com' });
+    it('shows initials, "{First name} {L}." and the email from the stored account (AC1)', () => {
+      seedAccount({ firstName: 'Marko', lastName: 'Kovačić', email: 'marko@email.com' });
       renderSidebar();
 
       const footer = screen.getByTestId('profile-footer');
@@ -91,7 +94,7 @@ describe('Sidebar', () => {
     });
 
     it('derives the initials from first and last name, not a hardcoded pair (AC2)', () => {
-      storeProfile({ firstName: 'ana', lastName: 'barić', email: 'ana@email.com' });
+      seedAccount({ firstName: 'ana', lastName: 'barić', email: 'ana@email.com' });
       renderSidebar();
 
       const footer = screen.getByTestId('profile-footer');
@@ -103,7 +106,7 @@ describe('Sidebar', () => {
       'renders the same footer on %s (AC3)',
       (pathname) => {
         mockUsePathname.mockReturnValue(pathname);
-        storeProfile({ firstName: 'Marko', lastName: 'Kovačić', email: 'marko@email.com' });
+        seedAccount({ firstName: 'Marko', lastName: 'Kovačić', email: 'marko@email.com' });
         renderSidebar();
 
         const footer = screen.getByTestId('profile-footer');
@@ -113,10 +116,22 @@ describe('Sidebar', () => {
       },
     );
 
-    it('renders no footer while no profile is stored', () => {
+    it('renders no footer while the identity is still unknown', () => {
+      __resetAccountStoreForTests(null);
       renderSidebar();
 
       expect(screen.queryByTestId('profile-footer')).not.toBeInTheDocument();
+    });
+
+    it('signs out from the footer: session cleared, redirected to Sign in (RUN-58 AC5)', async () => {
+      seedAccount({ firstName: 'Marko', lastName: 'Kovačić', email: 'marko@email.com' });
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(screen.getByRole('button', { name: 'Sign out' }));
+
+      expect(hasStoredSession()).toBe(false);
+      expect(signInRedirectCount()).toBe(1);
     });
   });
 
