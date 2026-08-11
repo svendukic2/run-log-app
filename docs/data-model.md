@@ -163,7 +163,7 @@ one notification per action" hold under retries.
 | Field | Type | Notes |
 | --- | --- | --- |
 | userId | string FK -> User | The recipient (whose bell it lands in); cascades on user delete |
-| type | string | `new-follower` \| `followed-ran` \| `event-joined` (the last is contract-only until events land in C2) |
+| type | string | `new-follower` \| `followed-ran` \| `event-joined` (the last written by event joins since RUN-67) |
 | payload | json | Self-contained snapshot taken at write time, see below |
 | readAt | timestamp, nullable | null = unread; set once by mark-read, never moved |
 | createdAt | timestamp | Orders the bell, newest first |
@@ -175,10 +175,12 @@ joined at read time. A later unfollow, account deletion or run delete therefore
 cannot break rendering a notification that already landed. The cost is accepted
 staleness: a renamed actor keeps their old name in old notifications.
 
-One anti-spam bound on `new-follower`: while the recipient still has an
-**unread** notification from the same actor, a fresh follow edge writes nothing,
-so a follow/unfollow loop cannot grow the bell by more than one row per actor.
-Reading the notification re-arms it, keeping a genuine later re-follow visible.
+One anti-spam bound on `new-follower` and `event-joined`: while the recipient
+still has an **unread** notification from the same actor (for `event-joined`,
+the same actor and event), a fresh action writes nothing, so a follow/unfollow
+or join/leave loop cannot grow the bell by more than one row per actor. Reading
+the notification re-arms it, keeping a genuine later re-follow or re-join
+visible.
 
 Fan-out is batched per run: one query for the follower ids, then `createMany` in
 bounded chunks - never a query or insert per follower.
@@ -190,6 +192,44 @@ Both mark-read calls are idempotent; a repeat changes nothing and answers like
 the first. Items carry `{ id, type, payload, readAt, createdAt }` with ISO
 instant timestamps (the bell renders "2h ago", so these are the app's one
 deliberate exception to the calendar-day rule).
+
+### Event (one per community event, RUN-67) + EventParticipant (one per joined user per event)
+
+Community events: any user creates one, others join or leave. The creator is the
+**owner and first participant** in one atomic write, so an event never exists
+without its creator in it - which is also why the owner cannot leave (400): their
+membership is structural, not a preference.
+
+| Field (Event) | Type | Notes |
+| --- | --- | --- |
+| name | string | Non-empty, bounded like every free-text field |
+| description | string | Optional text is `''`, never null |
+| startDate | date | Inclusive calendar day (yyyy-mm-dd in the API) |
+| endDate | date | Inclusive; on/after startDate, validated on the merged pair for PATCH |
+| targetKm | number, nullable | Optional collective distance goal; Float like Run.distanceKm |
+| ownerId | string FK -> User | Cascades on user delete: an event does not outlive its owner |
+
+| Field (EventParticipant) | Type | Notes |
+| --- | --- | --- |
+| eventId | string FK -> Event | Cascades on event delete |
+| userId | string FK -> User | Cascades on user delete |
+| (eventId, userId) | unique | A repeat join is impossible at the schema level, so the API treats it as an idempotent no-op (the Follow construction) |
+
+The lifecycle state - `upcoming` | `active` | `finished` - is **derived from the
+dates against today's UTC day at read time, never stored** (a stored state would
+go stale at every midnight). The dates are inclusive: an event is active on its
+start and end days themselves.
+
+The API is `GET`/`POST /api/events` (list is paginated with the shared contract,
+envelope `{ items, total, page, pageSize }`, ordered chronologically by start
+day, filterable with `?state=`), `GET /api/events/:id`, `POST`/`DELETE
+/api/events/:id/join`, and owner-only `PATCH`/`DELETE /api/events/:id` (a
+non-owner gets 404, never 403 - same rule as every scoped entity). Items carry
+`{ id, name, description, startDate, endDate, targetKm, state, participantCount,
+joined, owner: { id, firstName, lastName }, createdAt }`; `joined` is the
+caller's own participation, so the list alone renders Join/Leave buttons. A join
+notifies the owner (`event-joined`, see Notification above) in the same
+transaction; the owner joining their own event and repeat joins never notify.
 
 ### Profile (one per user since RUN-57)
 

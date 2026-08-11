@@ -87,20 +87,22 @@ model Run {
 // privacy toggles (profilePublic, showOnLeaderboard, showRoutes) arrive
 // additively in RUN-64.
 model User {
-  id            String         @id @default(cuid())
-  email         String         @unique
-  passwordHash  String
-  firstName     String
-  lastName      String
-  createdAt     DateTime       @default(now())
-  profile       Profile?
-  goal          Goal?
-  weekTargets   WeekTarget[]
-  runs          Run[]
-  coachPlans    CoachPlan[]
-  following     Follow[]       @relation("UserFollowing")
-  followers     Follow[]       @relation("UserFollowers")
-  notifications Notification[]
+  id                  String             @id @default(cuid())
+  email               String             @unique
+  passwordHash        String
+  firstName           String
+  lastName            String
+  createdAt           DateTime           @default(now())
+  profile             Profile?
+  goal                Goal?
+  weekTargets         WeekTarget[]
+  runs                Run[]
+  coachPlans          CoachPlan[]
+  following           Follow[]           @relation("UserFollowing")
+  followers           Follow[]           @relation("UserFollowers")
+  notifications       Notification[]
+  eventsOwned         Event[]
+  eventParticipations EventParticipant[]
 }
 
 // One row per follow edge (RUN-61): follower -> followee, one-directional
@@ -147,6 +149,53 @@ model Notification {
   // count filters on (userId, readAt), covered by its own index.
   @@index([userId, createdAt, id])
   @@index([userId, readAt])
+}
+
+// One row per community event (RUN-67). Any user creates one and becomes its
+// owner; both dates are inclusive calendar days and upcoming/active/finished
+// is derived from them against today at read time, never stored (a stored
+// state would go stale at every midnight). targetKm is an optional collective
+// distance goal, Float like Run.distanceKm because the leaderboard sums run
+// distances against it. The owner cascade deletes the event (and, through
+// it, the participant rows): an event does not outlive its owner.
+model Event {
+  id           String             @id @default(cuid())
+  name         String
+  description  String             @default("")
+  startDate    DateTime           @db.Date
+  endDate      DateTime           @db.Date
+  targetKm     Float?
+  createdAt    DateTime           @default(now())
+  ownerId      String
+  owner        User               @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  participants EventParticipant[]
+
+  // The list orders chronologically (startDate, id) and the state filter is
+  // a date-range comparison on either column, so each date gets an index;
+  // startDate's carries the id tiebreak to cover the full ORDER BY shape.
+  @@index([startDate, id])
+  @@index([endDate])
+  @@index([ownerId])
+}
+
+// One row per joined user per event (RUN-67), including the owner, who joins
+// at creation (AC1). The unique pair makes a repeat join impossible at the
+// schema level, which is what lets the API treat it as an idempotent no-op -
+// the same construction as Follow. Both FKs cascade: deleting the event or
+// the participant's account removes the row (AC5).
+model EventParticipant {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  eventId   String
+  userId    String
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+  // The reverse lookup: which events this user joined (the "joined" flag on
+  // the list resolves per page through the unique pair; this serves the
+  // per-user view RUN-68 needs).
+  @@index([userId])
 }
 
 // One row per generation (AIC-3..9). The newest row for the current week is
