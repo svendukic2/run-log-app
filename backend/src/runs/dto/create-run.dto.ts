@@ -9,9 +9,15 @@ import {
   Matches,
   MaxLength,
   registerDecorator,
-  ValidateIf,
   type ValidationOptions,
 } from 'class-validator';
+import { addDaysIso, isRealCalendarDay, utcTodayIso } from '../../common/dates';
+import { ValidateIfPresent } from '../../common/validation';
+
+// Moved to src/common/validation.ts when the profile/goal DTOs (RUN-49)
+// needed the same present-or-valid semantics; re-exported so this module's
+// DTO surface stays in one import.
+export { ValidateIfPresent };
 
 // Mirrors frontend/src/lib/runs.ts EFFORT_LEVELS; the API and the UI must
 // agree on the capitalized spellings (docs/data-model.md).
@@ -39,16 +45,7 @@ export const NOTE_MAX_LENGTH = 2000;
 // slack is exactly sufficient, no more. The strict "not in the future" of
 // RUN-23 AC7 is enforced by the form, where the user's zone is known.
 export function latestAcceptableUtcIso(): string {
-  const nowUtc = new Date();
-  return new Date(
-    Date.UTC(
-      nowUtc.getUTCFullYear(),
-      nowUtc.getUTCMonth(),
-      nowUtc.getUTCDate() + 1,
-    ),
-  )
-    .toISOString()
-    .slice(0, 10);
+  return addDaysIso(utcTodayIso(), 1);
 }
 
 // Rejects impossible calendar days (2026-02-31, which new Date() silently
@@ -66,28 +63,12 @@ export function IsRealNotFutureDate(validationOptions?: ValidationOptions) {
       options: validationOptions,
       validator: {
         validate(value: unknown): boolean {
-          if (typeof value !== 'string') return false;
-          const [year, month, day] = value.split('-').map(Number);
-          const parsed = new Date(year, month - 1, day);
-          const isRealDay =
-            parsed.getFullYear() === year &&
-            parsed.getMonth() === month - 1 &&
-            parsed.getDate() === day;
           // ISO date strings compare correctly as strings.
-          return isRealDay && value <= latestAcceptableUtcIso();
+          return isRealCalendarDay(value) && value <= latestAcceptableUtcIso();
         },
       },
     });
   };
-}
-
-// Runs the decorated validators only when the property is present in the
-// payload. Unlike @IsOptional, an explicit null is NOT waved through: null
-// fails the validators like any other wrong value. This matters most for
-// UpdateRunDto (PATCH {"routeName": null} must be a 400, not a null hitting
-// a NOT NULL column), and create shares the semantics for effort/note.
-export function ValidateIfPresent() {
-  return ValidateIf((_object, value) => value !== undefined);
 }
 
 export class CreateRunDto {
