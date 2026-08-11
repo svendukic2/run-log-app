@@ -1,9 +1,10 @@
 import { Module, ValidationPipe } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_PIPE } from '@nestjs/core';
+import { APP_GUARD, APP_PIPE } from '@nestjs/core';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
+import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { validateEnv } from './config/env.validation';
 import { PrismaModule } from './prisma/prisma.module';
 import { RunsModule } from './runs/runs.module';
@@ -39,6 +40,15 @@ import { RunsModule } from './runs/runs.module';
         forbidNonWhitelisted: true,
         transform: true,
       }),
+    },
+    // Everything requires a Bearer token unless marked @Public() (RUN-57).
+    // Registered app-wide, like the pipe above, so e2e suites booting
+    // AppModule get exactly the production auth behavior. JwtService
+    // resolves from AuthModule's exported JwtModule - same secret the
+    // tokens were signed with.
+    {
+      provide: APP_GUARD,
+      useClass: JwtAuthGuard,
     },
   ],
 })

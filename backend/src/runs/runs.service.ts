@@ -3,7 +3,6 @@ import {
   InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
-import { isPrismaError } from '../prisma/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
 import type { Run as RunRow } from '../generated/prisma/client';
 import {
@@ -16,7 +15,9 @@ import { UpdateRunDto } from './dto/update-run.dto';
 
 // The API shape of a run: exactly the Run type from docs/data-model.md and
 // frontend/src/lib/runs.ts. `date` is a yyyy-mm-dd string, never a Date or
-// timestamp, and nothing derived (pace, totals) is ever part of it.
+// timestamp, and nothing derived (pace, totals) is ever part of it. userId
+// is deliberately NOT in the response: the owner is implicit in the token,
+// and the frontend contract predates accounts.
 export interface RunResponse {
   id: string;
   routeName: string;
@@ -52,13 +53,13 @@ function toEffort(rowId: string, value: string): Effort {
   return value as Effort;
 }
 
-// P2025 = "record not found" on a mutation: the row vanished between the
-// request and the query (or never existed). The duck-typing rationale lives
-// with the shared predicate in ../prisma/prisma-errors.ts.
-function isRecordNotFound(error: unknown): boolean {
-  return isPrismaError(error, 'P2025');
-}
-
+// Every method takes the owning userId first (RUN-57) and folds it into the
+// WHERE clause itself - ownership is enforced by the query, never by
+// filtering rows in JS (AC2). A miss on someone else's row is exactly a
+// miss on a nonexistent row: 404 either way, so an id never confirms it
+// exists for another account (AC3). That is also why the mutations use
+// updateMany/deleteMany with {id, userId} instead of update/delete on the
+// bare unique id.
 @Injectable()
 export class RunsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -78,24 +79,27 @@ export class RunsService {
   // Newest first, the order every screen shows runs in. Same-day runs have
   // no insertion timestamp in the contract (docs/data-model.md), so the id
   // is the tiebreak: arbitrary but deterministic across requests. Unbounded
-  // on purpose for now: one implicit user, and the frontend consumes the
-  // whole list; pagination belongs to the schema-hardening follow-up.
-  async findAll(): Promise<RunResponse[]> {
+  // on purpose for now: the frontend consumes the whole list; pagination
+  // belongs to the schema-hardening follow-up.
+  async findAll(userId: string): Promise<RunResponse[]> {
     const rows = await this.prisma.run.findMany({
+      where: { userId },
       orderBy: [{ date: 'desc' }, { id: 'desc' }],
     });
     return rows.map((row) => this.toResponse(row));
   }
 
-  async findOne(id: string): Promise<RunResponse> {
-    const row = await this.prisma.run.findUnique({ where: { id } });
+  async findOne(userId: string, id: string): Promise<RunResponse> {
+    // findFirst, not findUnique: the where must carry the owner too.
+    const row = await this.prisma.run.findFirst({ where: { id, userId } });
     if (!row) throw new NotFoundException(`Run ${id} not found`);
     return this.toResponse(row);
   }
 
-  async create(dto: CreateRunDto): Promise<RunResponse> {
+  async create(userId: string, dto: CreateRunDto): Promise<RunResponse> {
     const row = await this.prisma.run.create({
       data: {
+        userId,
         routeName: dto.routeName,
         distanceKm: dto.distanceKm,
         durationSeconds: dto.durationSeconds,
@@ -111,7 +115,11 @@ export class RunsService {
     return this.toResponse(row);
   }
 
-  async update(id: string, dto: UpdateRunDto): Promise<RunResponse> {
+  async update(
+    userId: string,
+    id: string,
+    dto: UpdateRunDto,
+  ): Promise<RunResponse> {
     const data = {
       ...(dto.routeName !== undefined && { routeName: dto.routeName }),
       ...(dto.distanceKm !== undefined && { distanceKm: dto.distanceKm }),
@@ -124,29 +132,23 @@ export class RunsService {
     };
 
     // An empty PATCH is a deliberate no-op: return the row as-is (404 if
-    // the id is unknown) rather than rejecting a request that asks for
-    // nothing.
-    if (Object.keys(data).length === 0) return this.findOne(id);
+    // the id is unknown or owned by someone else) rather than rejecting a
+    // request that asks for nothing.
+    if (Object.keys(data).length === 0) return this.findOne(userId, id);
 
-    try {
-      const row = await this.prisma.run.update({ where: { id }, data });
-      return this.toResponse(row);
-    } catch (error) {
-      if (isRecordNotFound(error)) {
-        throw new NotFoundException(`Run ${id} not found`);
-      }
-      throw error;
-    }
+    // updateMany because update() only accepts the bare unique id, which
+    // would let user A edit user B's run. count 0 covers both "no such
+    // row" and "not your row" with the same 404 (AC3).
+    const result = await this.prisma.run.updateMany({
+      where: { id, userId },
+      data,
+    });
+    if (result.count === 0) throw new NotFoundException(`Run ${id} not found`);
+    return this.findOne(userId, id);
   }
 
-  async remove(id: string): Promise<void> {
-    try {
-      await this.prisma.run.delete({ where: { id } });
-    } catch (error) {
-      if (isRecordNotFound(error)) {
-        throw new NotFoundException(`Run ${id} not found`);
-      }
-      throw error;
-    }
+  async remove(userId: string, id: string): Promise<void> {
+    const result = await this.prisma.run.deleteMany({ where: { id, userId } });
+    if (result.count === 0) throw new NotFoundException(`Run ${id} not found`);
   }
 }

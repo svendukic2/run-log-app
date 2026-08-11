@@ -21,9 +21,9 @@ datasource db {
   provider = "postgresql"
 }
 
-// Single row: Run Log has no accounts (WEL-4). runningLevel is one of
-// Beginner | Intermediate | Advanced (LVL-2); defaultWeeklyGoalKm seeds
-// future weeks only (SET-3, SET-6).
+// One row per user since RUN-57 (was single-row in v1, WEL-4). runningLevel
+// is one of Beginner | Intermediate | Advanced (LVL-2); defaultWeeklyGoalKm
+// seeds future weeks only (SET-3, SET-6).
 model Profile {
   id                  String @id @default(cuid())
   firstName           String
@@ -31,31 +31,40 @@ model Profile {
   email               String
   runningLevel        String
   defaultWeeklyGoalKm Int
+  userId              String @unique
+  user                User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
-// Single row: the onboarding goal period (GOAL-2..4). km stays within 0-60
-// (A17); endDate null renders as "No end date".
+// One row per user since RUN-57: the onboarding goal period (GOAL-2..4).
+// km stays within 0-60 (A17); endDate null renders as "No end date".
 model Goal {
   id        String    @id @default(cuid())
   km        Int
   startDate DateTime  @db.Date
   endDate   DateTime? @db.Date
+  userId    String    @unique
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
-// At most one row per week, keyed by the Monday of that week. Snapshotted from
-// the goal's km the first time a week is used, then only changed by the
-// coach's "Apply to weekly goal" for the current week (AIC-5, A15). Past rows
-// never change, which is what makes Hit/Missed history possible (AIC-7).
+// At most one row per user per week, keyed by the Monday of that week.
+// Snapshotted from the goal's km the first time a week is used, then only
+// changed by the coach's "Apply to weekly goal" for the current week
+// (AIC-5, A15). Past rows never change, which is what makes Hit/Missed
+// history possible (AIC-7).
 model WeekTarget {
   id        String   @id @default(cuid())
-  weekStart DateTime @unique @db.Date
+  weekStart DateTime @db.Date
   targetKm  Int
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, weekStart])
 }
 
-// One row per logged run (ADD-1..8). Pace is durationSeconds / distanceKm,
-// derived everywhere and stored nowhere (ADD-4). Start time, elevation and
-// route type are deliberately absent until the designer answers how they are
-// captured (DET-7, assumption A10).
+// One row per logged run (ADD-1..8), owned by its runner since RUN-57. Pace
+// is durationSeconds / distanceKm, derived everywhere and stored nowhere
+// (ADD-4). Start time, elevation and route type are deliberately absent
+// until the designer answers how they are captured (DET-7, assumption A10).
 model Run {
   id              String   @id @default(cuid())
   routeName       String
@@ -64,8 +73,10 @@ model Run {
   date            DateTime @db.Date
   effort          String // Easy | Medium | Hard
   note            String   @default("")
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([date])
+  @@index([userId, date])
 }
 
 // One row per registered account (RUN-56), the anchor entity of the v2
@@ -76,12 +87,17 @@ model Run {
 // privacy toggles (profilePublic, showOnLeaderboard, showRoutes) arrive
 // additively in RUN-64.
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
+  id           String       @id @default(cuid())
+  email        String       @unique
   passwordHash String
   firstName    String
   lastName     String
-  createdAt    DateTime @default(now())
+  createdAt    DateTime     @default(now())
+  profile      Profile?
+  goal         Goal?
+  weekTargets  WeekTarget[]
+  runs         Run[]
+  coachPlans   CoachPlan[]
 }
 
 // One row per generation (AIC-3..9). The newest row for the current week is
@@ -96,6 +112,8 @@ model CoachPlan {
   keyWorkout         String // "1 tempo"
   narrative          String
   updatedAt          DateTime @updatedAt
+  userId             String
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([weekStart])
+  @@index([userId, weekStart])
 }
