@@ -5,7 +5,7 @@ import { fetchWeekTarget } from '@/lib/accountApi';
 import { todayIso } from '@/lib/goal';
 import { getProfileRecord, type Profile } from '@/lib/onboarding';
 import { startOfWeek } from '@/lib/runs';
-import { failProfileApi, seedProfile } from '@/test/runsApiMock';
+import { failPrivacyApi, failProfileApi, seedPrivacy, seedProfile } from '@/test/runsApiMock';
 import SettingsView from './SettingsView';
 
 const STORED: Profile = { firstName: 'Marko', lastName: 'Kovač', email: 'marko@email.com' };
@@ -431,5 +431,26 @@ describe('Settings privacy card (RUN-64)', () => {
     // must not rewrite settings the user never opened.
     await save(user);
     expect(privacyPutBodies()).toHaveLength(1);
+  });
+
+  it('renders the stored settings and keeps a failed save on screen (AC1)', async () => {
+    seedPrivacy({ profilePublic: true });
+    failPrivacyApi();
+    const user = userEvent.setup();
+    const { unmount } = render(<SettingsView />);
+
+    // The stored state, not the defaults: an opted-in setting shows as on.
+    expect(toggle('Public profile')).toHaveAttribute('aria-checked', 'true');
+
+    await user.click(toggle('Show my route maps'));
+    await save(user);
+
+    // Pessimistic: the failure stays on screen and nothing pretends to be
+    // stored, so a reload still shows what the server actually holds.
+    expect(screen.getByRole('alert')).toHaveTextContent(/privacy settings failed/i);
+    unmount();
+    render(<SettingsView />);
+    expect(toggle('Public profile')).toHaveAttribute('aria-checked', 'true');
+    expect(toggle('Show my route maps')).toHaveAttribute('aria-checked', 'false');
   });
 });

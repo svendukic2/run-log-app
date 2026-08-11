@@ -21,9 +21,12 @@ export interface PrivacySettings {
   showRoutes: boolean;
 }
 
-// The decided defaults, in one place so the schema, the seeder and the
-// tests cannot drift from each other. Mirrored by @default(false) on each
-// column, which is what actually applies them to a new row.
+// The decided defaults, written down once so a reader does not have to
+// infer the policy from three @default(false) column attributes. Those
+// attributes are what actually applies the defaults to a new row; this
+// constant is the statement of intent the specs assert against, and the
+// value RUN-70's global leaderboard and RUN-71's seeder should read
+// rather than re-typing three literals.
 export const PRIVACY_DEFAULTS: PrivacySettings = Object.freeze({
   profilePublic: false,
   showOnLeaderboard: false,

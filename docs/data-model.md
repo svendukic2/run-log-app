@@ -135,6 +135,7 @@ data attaches to accounts. Community tasks (follow, notifications, events) hang 
 The API endpoints are `POST /api/auth/signup` and `POST /api/auth/login`, both
 returning `{ token, user }` with the JWT subject = user id. Passwords are capped at
 72 UTF-8 **bytes** (not characters) because bcrypt silently truncates beyond that.
+
 **Privacy settings (RUN-64).** The three toggles are `GET`/`PUT /api/privacy`: one
 resource per account, no id in the contract, body exactly
 `{ profilePublic, showOnLeaderboard, showRoutes }`. The PUT is a full replace like

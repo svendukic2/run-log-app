@@ -95,7 +95,10 @@ function PrivacyToggle({
         aria-labelledby={`${id}-label`}
         aria-describedby={`${id}-hint`}
         onClick={() => onChange(!checked)}
-        className={`relative h-[30px] w-[52px] shrink-0 self-start rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:self-auto ${
+        // The pill is 52x30 by design, which is under the 44 px minimum
+        // touch target on a phone, so a pseudo-element grows the HIT area
+        // to 66x44 without moving anything on screen (responsive addendum).
+        className={`relative h-[30px] w-[52px] shrink-0 self-start rounded-full transition-colors before:absolute before:-inset-[7px] before:content-[''] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:self-auto ${
           checked ? 'bg-accent' : 'bg-line-strong'
         }`}
       >
@@ -163,20 +166,25 @@ function SettingsForm() {
       // week's target alone - is the server's job now: it freezes the
       // current week before the new default lands (RUN-49).
       await saveProfileSettings({ ...draft, defaultWeeklyGoalKm: goalKm });
+      // The inputs adopt the trimmed values that were actually stored, so
+      // what the card shows is exactly what a reload would show. Done
+      // BEFORE the privacy PUT below (review fix): that write can fail on
+      // its own, and leaving these inputs on the pre-trim draft would show
+      // untrimmed text next to an avatar already rendering the trimmed
+      // stored name, under a message about privacy.
+      setFirstName(draft.firstName);
+      setLastName(draft.lastName);
+      setEmail(draft.email);
       // The privacy toggles are a second resource (they live on the
       // account row, not in the profile), so they take a second PUT - and
       // only when they actually changed, so editing a name does not
       // rewrite settings the user never touched. Both PUTs are full
-      // replaces, so a failure between them is repaired by pressing Save
-      // again.
+      // replaces, so a failure of this one leaves the profile saved, the
+      // toggles as drafted and the failure on screen: pressing Save again
+      // re-sends both and repairs it.
       if (privacyChanged) {
         await savePrivacySettings(privacy);
       }
-      // The inputs adopt the trimmed values that were actually stored, so
-      // what the card shows is exactly what a reload would show.
-      setFirstName(draft.firstName);
-      setLastName(draft.lastName);
-      setEmail(draft.email);
     } catch (error) {
       // Pessimistic like every write since RUN-48: the failure stays on
       // screen and nothing pretends to be saved.
@@ -287,7 +295,7 @@ function SettingsForm() {
             here. Each row spells out what turning it on actually exposes,
             because "Public profile" alone does not say what a visitor
             would see. */}
-        <div data-testid="privacy-rows" className="mt-[26px] flex flex-col gap-[22px]">
+        <div className="mt-[26px] flex flex-col gap-[22px]">
           <PrivacyToggle
             id="privacy-profile-public"
             label="Public profile"
