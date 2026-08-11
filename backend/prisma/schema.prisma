@@ -98,6 +98,28 @@ model User {
   weekTargets  WeekTarget[]
   runs         Run[]
   coachPlans   CoachPlan[]
+  following    Follow[]     @relation("UserFollowing")
+  followers    Follow[]     @relation("UserFollowers")
+}
+
+// One row per follow edge (RUN-61): follower -> followee, one-directional
+// ("friends" in the roadmap sense = two rows, one each way). The pair is
+// unique so following twice is impossible at the schema level, which is what
+// lets the API treat a repeat POST as an idempotent no-op. Both sides
+// cascade: deleting an account removes every edge it participates in,
+// whichever end it was on (AC4).
+model Follow {
+  id         String   @id @default(cuid())
+  followerId String
+  followeeId String
+  createdAt  DateTime @default(now())
+  follower   User     @relation("UserFollowing", fields: [followerId], references: [id], onDelete: Cascade)
+  followee   User     @relation("UserFollowers", fields: [followeeId], references: [id], onDelete: Cascade)
+
+  // The unique pair doubles as the follower-side index (leftmost prefix);
+  // the followee side needs its own for the followers list and count.
+  @@unique([followerId, followeeId])
+  @@index([followeeId])
 }
 
 // One row per generation (AIC-3..9). The newest row for the current week is

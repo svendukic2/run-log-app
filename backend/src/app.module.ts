@@ -6,6 +6,7 @@ import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { validateEnv } from './config/env.validation';
+import { FollowModule } from './follow/follow.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RunsModule } from './runs/runs.module';
 
@@ -23,6 +24,7 @@ import { RunsModule } from './runs/runs.module';
     PrismaModule,
     RunsModule,
     AuthModule,
+    FollowModule,
   ],
   controllers: [AppController],
   providers: [

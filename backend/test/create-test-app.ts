@@ -31,12 +31,18 @@ export async function createE2eApp(): Promise<{
 // boundaries, not password strength.
 export const E2E_PASSWORD = 'correct horse battery staple';
 
-// Registers `${name}@example.com` and returns the header that authenticates
-// as them, which is all a spec ever needs from a signup.
-export async function signupUser(
+// A signed-up account as a spec sees it: the id for building /users/:id
+// URLs and asserting list contents, the header for authenticating as them.
+export interface TestUser {
+  id: string;
+  auth: { Authorization: string };
+}
+
+// Registers `${name}@example.com` and returns the id + auth header pair.
+export async function signupTestUser(
   app: INestApplication<App>,
   name: string,
-): Promise<{ Authorization: string }> {
+): Promise<TestUser> {
   const response = await request(app.getHttpServer())
     .post('/api/auth/signup')
     .send({
@@ -46,5 +52,14 @@ export async function signupUser(
       lastName: 'Tester',
     })
     .expect(201);
-  return { Authorization: `Bearer ${(response.body as AuthResponse).token}` };
+  const body = response.body as AuthResponse;
+  return { id: body.user.id, auth: { Authorization: `Bearer ${body.token}` } };
+}
+
+// The header-only shorthand, which is all most specs need from a signup.
+export async function signupUser(
+  app: INestApplication<App>,
+  name: string,
+): Promise<{ Authorization: string }> {
+  return (await signupTestUser(app, name)).auth;
 }
