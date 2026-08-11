@@ -7,14 +7,21 @@
 // synchronously through seedRuns()/seedProfile()/seedGoal(), which also
 // prime the store caches - assertions right after render() keep working
 // exactly as they did when the stores were localStorage.
-import { type AccountRecord, type ProfileRecord, type WeekTarget } from '@/lib/accountApi';
+import {
+  type AccountRecord,
+  type PrivacySettings,
+  type ProfileRecord,
+  type WeekTarget,
+} from '@/lib/accountApi';
 import { __resetAccountStoreForTests } from '@/lib/account';
 import { __resetGoalStoreForTests, todayIso, type Goal } from '@/lib/goal';
 import { __resetProfileStoreForTests } from '@/lib/onboarding';
+import { __resetPrivacyStoreForTests, PRIVACY_DEFAULTS } from '@/lib/privacy';
 import { __resetRunsStoreForTests, startOfWeek, type Run } from '@/lib/runs';
 import { __resetSessionForTests, __setHardNavigateForTests, hasStoredSession } from '@/lib/session';
 import { jsonResponse } from './apiMockShared';
 import { handleEventsRequest } from './eventsApiMock';
+import { handleNotificationsRequest } from './notificationsApiMock';
 
 let db: Run[] = [];
 let idCounter = 0;
@@ -42,6 +49,10 @@ let accountPutFailure: number | null = null;
 let profileDb: ProfileRecord | null = null;
 let goalDb: Goal | null = null;
 let weekTargetsDb = new Map<string, number>();
+// The account's privacy settings (RUN-64). A fresh account starts at the
+// schema defaults - all three false - like a real signup does.
+let privacyDb: PrivacySettings = { ...PRIVACY_DEFAULTS };
+let privacyPutFailure: number | null = null;
 // Statuses to fail the account GETs with (makeProfileLoadFail and friends).
 let profileFailure: number | null = null;
 let goalFailure: number | null = null;
@@ -128,6 +139,7 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
     url === '/api/account' ||
     url === '/api/profile' ||
     url === '/api/goal' ||
+    url === '/api/privacy' ||
     url.startsWith('/api/week-targets')
   ) {
     if (!authorized(init)) {
@@ -154,6 +166,20 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
       email: record.email.trim().toLowerCase(),
     };
     return Promise.resolve(jsonResponse(200, accountDb));
+  }
+
+  // The privacy settings (RUN-64). No 404 case: they are columns on the
+  // account row, so a valid session always has them.
+  if (url === '/api/privacy' && method === 'GET') {
+    return Promise.resolve(jsonResponse(200, privacyDb));
+  }
+
+  if (url === '/api/privacy' && method === 'PUT') {
+    if (privacyPutFailure) {
+      return Promise.resolve(jsonResponse(privacyPutFailure, { message: 'Simulated failure' }));
+    }
+    privacyDb = JSON.parse(String(init.body)) as PrivacySettings;
+    return Promise.resolve(jsonResponse(200, privacyDb));
   }
 
   if (url === '/api/profile' && method === 'GET') {
@@ -281,6 +307,17 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
     if (handled) return handled;
   }
 
+  // The notifications API (RUN-65, consumed by the bell in RUN-66): same
+  // arrangement as the events mock, one fetch mock and one Bearer handshake
+  // for all three stores.
+  if (url.startsWith('/api/me/notifications')) {
+    if (!authorized(init)) {
+      return Promise.resolve(jsonResponse(401, { message: 'Missing bearer token' }));
+    }
+    const handled = handleNotificationsRequest(url, method);
+    if (handled) return handled;
+  }
+
   const byId = url.match(/^\/api\/runs\/([^/]+)$/);
   if (byId) {
     const index = db.findIndex((run) => run.id === byId[1]);
@@ -330,6 +367,8 @@ export function installRunsApiMock(): void {
   goalFailure = null;
   profilePutFailure = null;
   weekTargetPutFailure = null;
+  privacyDb = { ...PRIVACY_DEFAULTS };
+  privacyPutFailure = null;
   signInRedirects = 0;
   hardNavigations = [];
   // jsdom cannot navigate; the session layer's full-load navigations become
@@ -348,6 +387,9 @@ export function installRunsApiMock(): void {
   __resetAccountStoreForTests(accountDb);
   __resetProfileStoreForTests(null);
   __resetGoalStoreForTests({ goal: null, weekTarget: null });
+  // A fresh account is private on every count, so that is the state every
+  // test starts in (seedPrivacy below opts one in).
+  __resetPrivacyStoreForTests({ ...PRIVACY_DEFAULTS });
   // The in-memory session outlives the localStorage wipe and would leak
   // identities (with now-invalidated tokens) between tests.
   __resetSessionForTests();
@@ -543,6 +585,21 @@ export function makeGoalLoadFail(status = 500): void {
 // (failRunsApi's counterpart for the profile endpoint).
 export function failProfileApi(status = 500): void {
   profilePutFailure = status;
+}
+
+// Seeds the account's privacy settings in the mock backend AND primes the
+// privacy store, so a card renders the opted-in state from the first
+// render (RUN-64).
+export function seedPrivacy(settings: Partial<PrivacySettings>): PrivacySettings {
+  privacyDb = { ...PRIVACY_DEFAULTS, ...settings };
+  __resetPrivacyStoreForTests(privacyDb);
+  return privacyDb;
+}
+
+// Makes PUT /api/privacy fail: the Settings save must keep the failure on
+// screen instead of pretending a toggle was stored.
+export function failPrivacyApi(status = 500): void {
+  privacyPutFailure = status;
 }
 
 // Makes PUT /api/week-targets/<week> fail: "Apply to weekly goal" resolves

@@ -35,7 +35,10 @@ describe('AI Coach page (RUN-31)', () => {
     const header = screen.getByTestId('page-header');
     expect(within(header).getByText('Your training assistant')).toBeInTheDocument();
     expect(within(header).getByRole('heading', { level: 1, name: 'AI Coach' })).toBeInTheDocument();
-    expect(within(header).queryByRole('button')).toBeNull();
+    // No "Add run" pill here: the only header button is the notifications
+    // bell (RUN-66), which every page carries.
+    expect(within(header).getAllByRole('button')).toHaveLength(1);
+    expect(within(header).getByRole('button', { name: 'Notifications' })).toBeInTheDocument();
     expect(within(header).queryByRole('link')).toBeNull();
   });
 

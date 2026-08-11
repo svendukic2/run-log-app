@@ -15,10 +15,13 @@ describe('Page header (RUN-15)', () => {
     expect(screen.getByRole('button', { name: 'Add run' })).toBeInTheDocument();
   });
 
-  it('works without an action', () => {
+  it('works without an action, keeping only the always-present bell', () => {
     render(<PageHeader overline="Your activity" title="Runs" />);
 
-    expect(screen.queryByRole('button')).toBeNull();
+    // The notifications bell (RUN-66) is rendered by the header itself, so it
+    // is the one button a header without an action still has.
+    expect(screen.getAllByRole('button')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Notifications' })).toBeInTheDocument();
   });
 
   it('stacks the title and the action below `sm` (responsive)', () => {

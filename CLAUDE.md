@@ -120,17 +120,40 @@ server-side), not stored. In Jest, `jest.setup.ts` installs an in-memory `/api/*
 before every test; `seedRuns()`/`seedProfile()`/`seedGoal()` from
 `src/test/runsApiMock.ts` replace localStorage seeding.
 
-One deliberate variation exists: `frontend/src/lib/eventParticipants.ts`
+Two deliberate variations exist. `frontend/src/lib/eventParticipants.ts`
 (RUN-69) holds **per-event** data, not app-wide data, so its cache is a single
 slot for whichever event is open rather than a map, and its loading/error states
 live in the cards themselves instead of a screen-level boundary. Copy that shape
 for the next per-entity store, and the app-wide one for everything else.
+
+`frontend/src/lib/notifications.ts` (RUN-66) is app-wide but **ungated**: the
+bell it feeds is rendered by `PageHeader`, so it sits on every sidebar-reachable
+screen, and it is nobody's reason for visiting any of them. A failed read
+therefore means no unread indicator, never a blocked screen. It loads
+only the newest page (the panel is a dropdown, not a list screen), takes its
+badge count from the server envelope, and re-reads whenever the panel opens
+without blanking the rows already on screen. Put a store behind `AppDataBoundary`
+unless, like this one, it decorates every screen rather than being one.
 
 **Configuration goes through ConfigService.** `ConfigModule.forRoot({ isGlobal: true })`
 is registered in `backend/src/app.module.ts`, so it reads `backend/.env` at startup and
 `ConfigService` is injectable everywhere without re-importing the module. Read values
 through `ConfigService`, as `main.ts` does, rather than scattering `process.env` through
 the code.
+
+**Third-party calls go out through a backend proxy, never from the browser (RUN-53).**
+`backend/src/routes/` is the pattern and currently the only instance: the browser POSTs
+coordinates to `POST /api/routes/plan` and the backend calls openrouteservice with a key
+that lives in `ROUTING_API_KEY` and never enters any bundle. Three things about it are
+deliberate and worth copying. It is the one feature module with **no** `PrismaModule`
+import, because planning is stateless. Its config is **optional**, unlike
+`DATABASE_URL`/`JWT_SECRET`: a clone with no routing key boots and every other feature
+works, and only this endpoint answers 503. And every provider failure is mapped to a
+**typed error body** (`{ statusCode, code, message }`, codes in `ROUTE_PLAN_ERRORS`) so
+the caller can tell a rate limit from an unroutable point; a raw provider error or a
+generic 500 reaching the browser is the bug that mapping exists to prevent. Outbound HTTP
+uses Node's global `fetch` with `AbortSignal.timeout` - the backend has no HTTP client
+dependency and does not need one.
 
 **The database is PostgreSQL through Prisma 7 (RUN-46).** The schema is
 `backend/prisma/schema.prisma`, the migrations live in `backend/prisma/migrations/`, and
@@ -154,7 +177,7 @@ Copy the templates, then fill in values. Both real files are gitignored.
 
 | App      | Template                | Real file             | Variables                                                                                                                     |
 | -------- | ----------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| Backend  | `backend/.env.example`  | `backend/.env`        | `PORT` (default 3000), `FRONTEND_URL` (CORS origin, default `http://localhost:4200`), `DATABASE_URL` (**required**, no default), `JWT_SECRET` (**required**, min 32 chars, generation one-liner in the template) |
+| Backend  | `backend/.env.example`  | `backend/.env`        | `PORT` (default 3000), `FRONTEND_URL` (CORS origin, default `http://localhost:4200`), `DATABASE_URL` (**required**, no default), `JWT_SECRET` (**required**, min 32 chars, generation one-liner in the template), `ROUTING_API_KEY` + `ROUTING_BASE_URL` (both **optional**, RUN-53 route planning) |
 | Frontend | `frontend/.env.example` | `frontend/.env.local` | `BACKEND_URL` (default `http://localhost:3000`)                                                                                 |
 
 The frontend runs on its defaults with no `.env.local` at all. The backend **no longer

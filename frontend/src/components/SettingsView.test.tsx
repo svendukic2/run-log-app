@@ -6,7 +6,14 @@ import { fetchWeekTarget } from '@/lib/accountApi';
 import { todayIso } from '@/lib/goal';
 import { __resetProfileStoreForTests, getProfileRecord } from '@/lib/onboarding';
 import { startOfWeek } from '@/lib/runs';
-import { failAccountApi, failProfileApi, seedAccount, seedProfile } from '@/test/runsApiMock';
+import {
+  failAccountApi,
+  failPrivacyApi,
+  failProfileApi,
+  seedAccount,
+  seedPrivacy,
+  seedProfile,
+} from '@/test/runsApiMock';
 import SettingsView from './SettingsView';
 
 // The screen sends an un-onboarded account to the wizard (RUN-59), so the
@@ -61,7 +68,14 @@ function profilePutBodies() {
   return putBodies('/api/profile');
 }
 
-// Clicks Save changes and lets both PUTs settle: the save is async since
+// The same, for the privacy resource (RUN-64): its toggles ride the same
+// Save button but persist through their own endpoint.
+function privacyPutBodies(): Array<Record<string, boolean>> {
+  return putBodies('/api/privacy') as Array<Record<string, boolean>>;
+}
+
+// Clicks Save changes and lets every PUT settle: the save is async since
+
 // RUN-50, so assertions wait for the promise chain, not just the click.
 async function save(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole('button', { name: /save changes/i }));
@@ -225,14 +239,14 @@ describe('Settings profile card (RUN-37)', () => {
     await save(user);
 
     expect(screen.getByRole('alert')).toHaveTextContent(
-      'Your name and email were saved, but the weekly goal default was not: Saving your profile failed (500).',
+      'Saved: name and email. The rest was not saved: Saving your profile failed (500).',
     );
     // The identity really did land; the default really did not.
     expect(getAccountRecord()).toEqual({ ...STORED, firstName: 'Ana' });
     expect(getProfileRecord()).toMatchObject({ defaultWeeklyGoalKm: 20 });
-    // And the stepper shows the number the server still holds, not the one
-    // that was refused.
-    expect(trainingCard().getByRole('status')).toHaveTextContent('20');
+    // The stepper keeps the pending edit rather than deleting the user's work
+    // over a transient failure: pressing Save again re-sends it.
+    expect(trainingCard().getByRole('status')).toHaveTextContent('21');
     expect(screen.getByRole('button', { name: /save changes/i })).toBeEnabled();
   });
 
@@ -462,5 +476,96 @@ describe('Settings save changes persistence (RUN-39)', () => {
     expect(profilePutBodies()).toHaveLength(1);
     expect(getAccountRecord()).toEqual(STORED);
     expect(getProfileRecord()).toMatchObject({ defaultWeeklyGoalKm: 21 });
+  });
+});
+
+describe('Settings privacy card (RUN-64)', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    // Identity and setup answers are two records since RUN-59; the privacy
+    // card needs the profile to exist at all (an un-onboarded account is
+    // sent to the wizard instead).
+    seedSettings();
+  });
+
+  function toggle(name: string) {
+    return within(screen.getByRole('region', { name: 'Privacy' })).getByRole('switch', { name });
+  }
+
+  it('shows the three toggles off, with helper copy, for a fresh account (AC1, AC3)', () => {
+    render(<SettingsView />);
+
+    // All three private by default: nothing is shared until the owner says
+    // so, and each switch explains what turning it on exposes.
+    for (const name of ['Public profile', 'Show me on leaderboards', 'Show my route maps']) {
+      expect(toggle(name)).toHaveAttribute('aria-checked', 'false');
+      expect(toggle(name)).toHaveAccessibleDescription();
+    }
+  });
+
+  it('persists a flipped toggle on Save and leaves untouched settings alone (AC2)', async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(<SettingsView />);
+
+    await user.click(toggle('Show me on leaderboards'));
+    await save(user);
+
+    // One PUT carrying all three values, the two untouched ones unchanged.
+    expect(privacyPutBodies()).toEqual([
+      { profilePublic: false, showOnLeaderboard: true, showRoutes: false },
+    ]);
+
+    // A fresh mount seeds from the store, so this is what a reload shows.
+    unmount();
+    render(<SettingsView />);
+    expect(toggle('Show me on leaderboards')).toHaveAttribute('aria-checked', 'true');
+
+    // Saving again without touching a toggle writes nothing: editing a name
+    // must not rewrite settings the user never opened.
+    await save(user);
+    expect(privacyPutBodies()).toHaveLength(1);
+  });
+
+  it('carries all three resources on one Save, each to its own endpoint (RUN-59 + RUN-64)', async () => {
+    // One button, three resources: identity, setup answers, privacy grants.
+    // The integration point is worth one test - a regression here would save
+    // some of what the user changed and quietly drop the rest.
+    const user = userEvent.setup();
+    render(<SettingsView />);
+
+    const firstName = profileCard().getByLabelText('First name');
+    await user.clear(firstName);
+    await user.type(firstName, 'Ana');
+    await user.click(increase());
+    await user.click(toggle('Public profile'));
+    await save(user);
+
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(accountPutBodies()).toEqual([{ ...STORED, firstName: 'Ana' }]);
+    expect(profilePutBodies()).toEqual([{ runningLevel: 'Beginner', defaultWeeklyGoalKm: 21 }]);
+    expect(privacyPutBodies()).toEqual([
+      { profilePublic: true, showOnLeaderboard: false, showRoutes: false },
+    ]);
+  });
+
+  it('renders the stored settings and keeps a failed save on screen (AC1)', async () => {
+    seedPrivacy({ profilePublic: true });
+    failPrivacyApi();
+    const user = userEvent.setup();
+    const { unmount } = render(<SettingsView />);
+
+    // The stored state, not the defaults: an opted-in setting shows as on.
+    expect(toggle('Public profile')).toHaveAttribute('aria-checked', 'true');
+
+    await user.click(toggle('Show my route maps'));
+    await save(user);
+
+    // Pessimistic: the failure stays on screen and nothing pretends to be
+    // stored, so a reload still shows what the server actually holds.
+    expect(screen.getByRole('alert')).toHaveTextContent(/privacy settings failed/i);
+    unmount();
+    render(<SettingsView />);
+    expect(toggle('Public profile')).toHaveAttribute('aria-checked', 'true');
+    expect(toggle('Show my route maps')).toHaveAttribute('aria-checked', 'false');
   });
 });

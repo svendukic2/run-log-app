@@ -86,6 +86,50 @@ describe('validateEnv', () => {
     },
   );
 
+  describe('routing config (RUN-53), optional on purpose', () => {
+    it('boots with no ROUTING_ variables at all', () => {
+      // The whole point of keeping these optional: a clone with no routing key
+      // runs everything except POST /api/routes/plan, which answers 503 with a
+      // typed body instead of taking the app down at startup.
+      expect(() => validateEnv(VALID)).not.toThrow();
+    });
+
+    it('accepts a real-looking key and base URL', () => {
+      expect(() =>
+        validateEnv({
+          ...VALID,
+          ROUTING_API_KEY: '5b3ce35978511100000000004example',
+          ROUTING_BASE_URL: 'http://localhost:8080/ors',
+        }),
+      ).not.toThrow();
+    });
+
+    it('rejects the unedited ROUTING_API_KEY placeholder', () => {
+      // A pasted-but-unedited template line otherwise reaches the provider and
+      // comes back as a 403 the operator has to go hunting for.
+      expect(() =>
+        validateEnv({
+          ...VALID,
+          ROUTING_API_KEY: '<your-openrouteservice-api-key>',
+        }),
+      ).toThrow(/ROUTING_API_KEY still contains a "<\.\.\.>" placeholder/);
+    });
+
+    it('rejects a ROUTING_BASE_URL that is not an http(s) URL', () => {
+      expect(() =>
+        validateEnv({ ...VALID, ROUTING_BASE_URL: 'localhost:8080' }),
+      ).toThrow(/ROUTING_BASE_URL must be an http\(s\) URL/);
+    });
+
+    it('treats an empty ROUTING_BASE_URL as unset, not as a bad URL', () => {
+      // ROUTING_BASE_URL= in a .env means "I did not set this"; the service
+      // falls back to the hosted provider either way.
+      expect(() =>
+        validateEnv({ ...VALID, ROUTING_BASE_URL: '' }),
+      ).not.toThrow();
+    });
+  });
+
   it('reports every problem at once instead of one per boot attempt', () => {
     let message = '';
     try {

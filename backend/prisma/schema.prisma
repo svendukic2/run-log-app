@@ -85,20 +85,26 @@ model Run {
 // data attaches to accounts. passwordHash is a bcrypt hash and must never
 // leave the auth service in any response or log line (RUN-56 AC4).
 //
-// showOnLeaderboard is the first of the three privacy toggles to land,
-// pulled forward from RUN-64 because RUN-69's event leaderboard has to
-// respect it to exist at all (AC3). It carries the roadmap's decided
-// default - false, opt-in - so RUN-64 adds the remaining two (profilePublic,
-// showRoutes) plus the Settings UI without revisiting this one. Consequence
-// worth knowing: until that toggle ships, every leaderboard is empty by
-// design, and the pages say so rather than looking broken.
+// The three privacy toggles (RUN-64) live here, on the account, not on
+// Profile: they gate what OTHER accounts may see, so they belong to the
+// identity every community entity already hangs off. showOnLeaderboard
+// landed first, pulled forward by RUN-69 because its event leaderboard has
+// to respect it to exist at all (AC3); RUN-64 added profilePublic and
+// showRoutes additively next to it and shipped the Settings card that
+// flips all three. All three carry the roadmap's decided default - false,
+// private, opt-in - so an existing account is never opted into anything by
+// a migration. The reader of profilePublic and showRoutes is RUN-63's
+// public profile page; showOnLeaderboard is read by the event leaderboard
+// today (see common/privacy.ts for the gating helpers).
 model User {
   id                  String             @id @default(cuid())
   email               String             @unique
   passwordHash        String
   firstName           String
   lastName            String
+  profilePublic       Boolean            @default(false)
   showOnLeaderboard   Boolean            @default(false)
+  showRoutes          Boolean            @default(false)
   createdAt           DateTime           @default(now())
   profile             Profile?
   goal                Goal?

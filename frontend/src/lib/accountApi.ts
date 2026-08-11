@@ -37,6 +37,16 @@ export interface WeekTarget {
   targetKm: number;
 }
 
+// The account's privacy settings, exactly the GET/PUT /api/privacy contract
+// (RUN-64). Three grants, all false by default: false is private
+// everywhere, so a missing or forgotten field can only ever be MORE
+// private, never less.
+export interface PrivacySettings {
+  profilePublic: boolean;
+  showOnLeaderboard: boolean;
+  showRoutes: boolean;
+}
+
 function isAccountRecord(body: unknown): body is AccountRecord {
   const record = body as AccountRecord;
   return (
@@ -51,6 +61,15 @@ function isProfileRecord(body: unknown): body is ProfileRecord {
   return (
     (RUNNING_LEVELS as readonly string[]).includes(record?.runningLevel) &&
     typeof record.defaultWeeklyGoalKm === 'number'
+  );
+}
+
+function isPrivacySettings(body: unknown): body is PrivacySettings {
+  const settings = body as PrivacySettings;
+  return (
+    typeof settings?.profilePublic === 'boolean' &&
+    typeof settings.showOnLeaderboard === 'boolean' &&
+    typeof settings.showRoutes === 'boolean'
   );
 }
 
@@ -153,6 +172,31 @@ export async function putProfile(record: ProfileRecord): Promise<ProfileRecord> 
     throw new ApiError(`Saving your profile failed (${response.status}).`, response.status);
   }
   return parsed(response, isProfileRecord, 'a profile');
+}
+
+// No 404 case, unlike the profile: the settings are columns on the account
+// row, so a valid session always has them (at the private defaults from
+// signup onwards). Anything but 200 is a real failure.
+export async function fetchPrivacy(): Promise<PrivacySettings> {
+  const response = await apiFetch('/api/privacy');
+  if (!response.ok) {
+    throw new ApiError(
+      `Loading your privacy settings failed (${response.status}).`,
+      response.status,
+    );
+  }
+  return parsed(response, isPrivacySettings, 'privacy settings');
+}
+
+export async function putPrivacy(settings: PrivacySettings): Promise<PrivacySettings> {
+  const response = await putJson('/api/privacy', settings);
+  if (!response.ok) {
+    throw new ApiError(
+      `Saving your privacy settings failed (${response.status}).`,
+      response.status,
+    );
+  }
+  return parsed(response, isPrivacySettings, 'privacy settings');
 }
 
 // 404 means "no goal set yet" - a fresh account, not an error.
