@@ -1,16 +1,16 @@
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
-import { NAME_MAX_LENGTH, PutProfileDto } from './put-profile.dto';
+import { PutProfileDto } from './put-profile.dto';
 
 // Direct class-validator runs against the DTO, the same approach as the
 // runs DTO spec: plainToInstance applies the @Transform trims, matching
 // the app-wide ValidationPipe (transform: true).
+//
+// Since RUN-59 the profile carries the SETUP ANSWERS only - the name and
+// email validators moved with their fields to PutAccountDto.
 
 function validProfile(): Record<string, unknown> {
   return {
-    firstName: 'Ana',
-    lastName: 'Anić',
-    email: 'ana@example.com',
     runningLevel: 'Intermediate',
     defaultWeeklyGoalKm: 25,
   };
@@ -34,49 +34,8 @@ describe('PutProfileDto', () => {
     const errors = await validate(dto);
     expect(errors.map((error) => error.property).sort()).toEqual([
       'defaultWeeklyGoalKm',
-      'email',
-      'firstName',
-      'lastName',
       'runningLevel',
     ]);
-  });
-
-  describe('names', () => {
-    it('rejects whitespace-only names (trimmed before IsNotEmpty)', async () => {
-      expect(await errorsFor({ firstName: '   ' })).toHaveLength(1);
-      expect(await errorsFor({ lastName: '   ' })).toHaveLength(1);
-    });
-
-    it('trims surrounding whitespace off the stored values', async () => {
-      const dto = plainToInstance(PutProfileDto, {
-        ...validProfile(),
-        firstName: '  Ana  ',
-      });
-      expect(await validate(dto)).toHaveLength(0);
-      expect(dto.firstName).toBe('Ana');
-    });
-
-    it('rejects names over the documented bound', async () => {
-      const errors = await errorsFor({
-        firstName: 'x'.repeat(NAME_MAX_LENGTH + 1),
-      });
-      expect(errors).toHaveLength(1);
-      expect(errors[0].constraints).toHaveProperty('maxLength');
-    });
-  });
-
-  describe('email', () => {
-    it.each([
-      ['a missing @', 'ana.example.com'],
-      ['a missing domain', 'ana@'],
-      ['an empty string', ''],
-      ['a number', 42],
-      ['a null', null],
-    ])('rejects %s (%s)', async (_label, email) => {
-      const errors = await errorsFor({ email });
-      expect(errors.length).toBeGreaterThan(0);
-      expect(errors[0].property).toBe('email');
-    });
   });
 
   describe('runningLevel', () => {

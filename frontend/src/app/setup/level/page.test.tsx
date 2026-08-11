@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { todayIso } from '@/lib/goal';
-import { getOnboardingDraft, saveDraftGoal, saveDraftProfile } from '@/lib/onboarding';
+import { getOnboardingDraft, saveDraftGoal } from '@/lib/onboarding';
 import { failProfileApi } from '@/test/runsApiMock';
 import RunningLevelPage from './page';
 
@@ -11,11 +11,10 @@ jest.mock('next/navigation', () => ({
   useRouter: () => ({ push, replace: jest.fn() }),
 }));
 
-// A wizard that reached this step: both earlier steps drafted. Finishing
-// without the profile draft is rejected by design (the account would have
-// no name), so the finish tests always plant this first.
+// A wizard that reached this step: the goal is the only thing the earlier
+// step drafts, and since RUN-59 the only thing "Finish setup" needs from
+// local state (the name and email are already on the account).
 function plantDraft() {
-  saveDraftProfile({ firstName: 'Marko', lastName: 'Horvat', email: 'marko@email.com' });
   saveDraftGoal({ km: 35, startDate: todayIso(), endDate: null });
 }
 
@@ -96,7 +95,7 @@ describe('Finish setup writes the account (RUN-11, RUN-50)', () => {
     push.mockClear();
   });
 
-  it('PUTs the drafted goal and profile with the chosen level, then opens the Dashboard', async () => {
+  it('PUTs the drafted goal and the setup answers, then opens the Dashboard', async () => {
     const user = userEvent.setup();
     plantDraft();
     render(<RunningLevelPage />);
@@ -108,11 +107,10 @@ describe('Finish setup writes the account (RUN-11, RUN-50)', () => {
     // Both writes carry the wizard's answers: the goal exactly as drafted,
     // the profile with the level chosen here and the goal km as the
     // starting default (the Settings stepper edits it from there, SET-3).
+    // Nothing identity-shaped rides along since RUN-59 - that lives on the
+    // account, written at signup.
     expect(putBody('/api/goal')).toEqual({ km: 35, startDate: todayIso(), endDate: null });
     expect(putBody('/api/profile')).toEqual({
-      firstName: 'Marko',
-      lastName: 'Horvat',
-      email: 'marko@email.com',
       runningLevel: 'Advanced',
       defaultWeeklyGoalKm: 35,
     });
@@ -137,24 +135,21 @@ describe('Finish setup writes the account (RUN-11, RUN-50)', () => {
     expect(screen.getByRole('button', { name: /finish setup/i })).toBeEnabled();
     expect(push).not.toHaveBeenCalled();
     // The answers survive the failure, so retrying costs nothing.
-    expect(getOnboardingDraft().profile).toEqual({
-      firstName: 'Marko',
-      lastName: 'Horvat',
-      email: 'marko@email.com',
-    });
+    expect(getOnboardingDraft().goal).toEqual({ km: 35, startDate: todayIso(), endDate: null });
   });
 
-  it('refuses to finish when the first step was never drafted', async () => {
+  it('refuses to finish when the goal step was never drafted', async () => {
     const user = userEvent.setup();
     render(<RunningLevelPage />);
 
     await user.click(screen.getByRole('button', { name: /finish setup/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Your sign-up details are missing on this device, so setup cannot finish here yet.',
+      'Your weekly goal from the first step is missing. Go back a step.',
     );
     expect(push).not.toHaveBeenCalled();
-    // Nothing reached the server: no half-created account without a name.
+    // Nothing reached the server: no goal-less profile written behind the
+    // user's back.
     expect(global.fetch).not.toHaveBeenCalled();
   });
 });

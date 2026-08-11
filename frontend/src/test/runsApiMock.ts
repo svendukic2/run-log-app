@@ -7,7 +7,13 @@
 // synchronously through seedRuns()/seedProfile()/seedGoal(), which also
 // prime the store caches - assertions right after render() keep working
 // exactly as they did when the stores were localStorage.
-import { type PrivacySettings, type ProfileRecord, type WeekTarget } from '@/lib/accountApi';
+import {
+  type AccountRecord,
+  type PrivacySettings,
+  type ProfileRecord,
+  type WeekTarget,
+} from '@/lib/accountApi';
+import { __resetAccountStoreForTests } from '@/lib/account';
 import { __resetGoalStoreForTests, todayIso, type Goal } from '@/lib/goal';
 import { __resetProfileStoreForTests } from '@/lib/onboarding';
 import { __resetPrivacyStoreForTests, PRIVACY_DEFAULTS } from '@/lib/privacy';
@@ -36,6 +42,11 @@ let authBroken = false;
 let holdLoading = false;
 // The account resources (RUN-50). One implicit account: the mock does not
 // model multi-user isolation, only the contract shapes.
+// The signed-in account's identity (RUN-59), created by signup like the
+// real backend does.
+let accountDb: AccountRecord = { firstName: 'Test', lastName: 'Runner', email: 'test@example.com' };
+let accountFailure: number | null = null;
+let accountPutFailure: number | null = null;
 let profileDb: ProfileRecord | null = null;
 let goalDb: Goal | null = null;
 let weekTargetsDb = new Map<string, number>();
@@ -126,6 +137,7 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
   // The account endpoints (RUN-49 contract, consumed since RUN-50). Guarded
   // like the real thing.
   if (
+    url === '/api/account' ||
     url === '/api/profile' ||
     url === '/api/goal' ||
     url === '/api/privacy' ||
@@ -134,6 +146,27 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
     if (!authorized(init)) {
       return Promise.resolve(jsonResponse(401, { message: 'Missing bearer token' }));
     }
+  }
+
+  if (url === '/api/account' && method === 'GET') {
+    if (accountFailure)
+      return Promise.resolve(jsonResponse(accountFailure, { message: 'Simulated failure' }));
+    return Promise.resolve(jsonResponse(200, accountDb));
+  }
+
+  if (url === '/api/account' && method === 'PUT') {
+    if (accountPutFailure) {
+      return Promise.resolve(jsonResponse(accountPutFailure, { message: 'Simulated failure' }));
+    }
+    const record = JSON.parse(String(init.body)) as AccountRecord;
+    accountDb = {
+      firstName: record.firstName.trim(),
+      lastName: record.lastName.trim(),
+      // The real DTO normalizes the login credential; mirror it so tests
+      // see the same spelling the server would store.
+      email: record.email.trim().toLowerCase(),
+    };
+    return Promise.resolve(jsonResponse(200, accountDb));
   }
 
   // The privacy settings (RUN-64). No 404 case: they are columns on the
@@ -171,11 +204,11 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
       const week = startOfWeek(todayIso());
       if (!weekTargetsDb.has(week)) weekTargetsDb.set(week, seedKm());
     }
+    // Only the setup answers live here since RUN-59; name and email are the
+    // account's (PUT /api/account above).
     profileDb = {
-      ...record,
-      firstName: record.firstName.trim(),
-      lastName: record.lastName.trim(),
-      email: record.email.trim(),
+      runningLevel: record.runningLevel,
+      defaultWeeklyGoalKm: record.defaultWeeklyGoalKm,
     };
     return Promise.resolve(jsonResponse(200, profileDb));
   }
@@ -332,6 +365,11 @@ export function installRunsApiMock(): void {
   rejectedNames = new Set();
   authBroken = false;
   holdLoading = false;
+  // The identity a fresh signup has, restored per test so a seedAccount() or
+  // failAccountApi() in one test cannot leak into the next.
+  accountDb = { firstName: 'Test', lastName: 'Runner', email: 'test@example.com' };
+  accountFailure = null;
+  accountPutFailure = null;
   profileDb = null;
   goalDb = null;
   weekTargetsDb = new Map();
@@ -354,6 +392,9 @@ export function installRunsApiMock(): void {
   // Every store starts 'ready' and empty, the state a fresh device wakes up
   // in, so component tests render synchronously; seeding helpers below
   // prime data the same way.
+  // The signed-in identity is present from the start, like an account that
+  // just signed in (RUN-59).
+  __resetAccountStoreForTests(accountDb);
   __resetProfileStoreForTests(null);
   __resetGoalStoreForTests({ goal: null, weekTarget: null });
   // A fresh account is private on every count, so that is the state every
@@ -472,14 +513,20 @@ export function breakRunsAuth(): void {
   authBroken = true;
 }
 
-/* Account resources (RUN-50) ------------------------------------------------ */
+/* Account resources (RUN-50, split by RUN-59) ------------------------------- */
 
-// Seeds the profile in the mock backend AND primes the profile store, so
-// an onboarded account is on screen from the first render. The display
-// fields are enough; level and default fill with the onboarding defaults.
-export function seedProfile(
-  profile: Partial<ProfileRecord> & { firstName: string; lastName: string; email: string },
-): ProfileRecord {
+// Overrides the signed-in identity in the mock backend AND primes the
+// account store, so a named runner is on screen from the first render.
+export function seedAccount(account: Partial<AccountRecord>): AccountRecord {
+  accountDb = { ...accountDb, ...account };
+  __resetAccountStoreForTests(accountDb);
+  return accountDb;
+}
+
+// Seeds the profile (the SETUP ANSWERS since RUN-59) in the mock backend AND
+// primes the profile store, so an onboarded account is on screen from the
+// first render. Both fields default to the onboarding defaults.
+export function seedProfile(profile: Partial<ProfileRecord> = {}): ProfileRecord {
   profileDb = {
     runningLevel: 'Beginner',
     defaultWeeklyGoalKm: 20,
@@ -487,6 +534,25 @@ export function seedProfile(
   };
   __resetProfileStoreForTests(profileDb);
   return profileDb;
+}
+
+// Re-arms the account store's initial load against a failing GET: the store
+// lands in 'error' once an account hook mounts (boundary tests).
+export function makeAccountLoadFail(status = 500): void {
+  plantTestSession();
+  accountFailure = status;
+  __resetAccountStoreForTests();
+}
+
+// Makes PUT /api/account fail: the Settings save must keep the failure on
+// screen instead of pretending anything was stored.
+export function failAccountApi(status = 500): void {
+  accountPutFailure = status;
+}
+
+export function restoreAccountApi(): void {
+  accountFailure = null;
+  accountPutFailure = null;
 }
 
 // Seeds the onboarding goal and primes the goal store. The current week's

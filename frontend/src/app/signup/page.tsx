@@ -6,7 +6,6 @@ import { useRouter } from 'next/navigation';
 import Badge from '@/components/Badge';
 import Brand from '@/components/Brand';
 import TextField from '@/components/TextField';
-import { saveDraftProfile } from '@/lib/onboardingDraft';
 import { validateProfileForm, type ProfileFormErrors } from '@/lib/profileValidation';
 import { ROUTES } from '@/lib/routes';
 import {
@@ -96,10 +95,9 @@ export default function SignUpPage() {
         setSubmitting(false);
         return;
       }
-      // The wizard draft is what "Finish setup" turns into the profile
-      // record; seeding it here is what lets the setup steps greet by name
-      // and finish without re-asking anything.
-      saveDraftProfile(profile);
+      // Nothing identity-shaped is drafted locally (RUN-59): signup stored
+      // the names and email ON THE ACCOUNT, which is where the setup steps
+      // and "Finish setup" read them from - on this device or any other.
       hasNavigated.current = true;
       // Full page load for the same reason as Sign in: module-level store
       // caches from the signed-out state must not survive the identity
