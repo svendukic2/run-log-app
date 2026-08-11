@@ -82,6 +82,24 @@ stored hash's preimage was random and discarded), and simply holds pre-account d
 until someone claims or deletes it. Response shapes are unchanged: `userId` never
 appears in API responses, the owner is implicit in the token.
 
+### Follow (one per follow edge, RUN-61)
+
+One-directional edge in the community follow graph: `follower -> followee`
+("friends" in the roadmap sense is simply two edges, one each way). The pair is
+UNIQUE at the schema level, which is what makes the follow endpoint idempotent.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| followerId | string FK -> User | The account doing the following; cascades on user delete |
+| followeeId | string FK -> User | The account being followed; cascades on user delete |
+| createdAt | timestamp | Orders the lists, newest first |
+
+The API is `POST`/`DELETE /api/users/:id/follow` (idempotent both ways; following
+yourself is 400, following a nonexistent user 404) plus `GET /api/me/followers` and
+`GET /api/me/following`, paginated with `?page` (1-based) and `?pageSize` (default
+20, max 100). List items carry `{ id, firstName, lastName, followsYou, youFollow }`
+and the envelope carries `{ total, page, pageSize, counts: { followers, following } }`.
+
 ### Profile (one per user since RUN-57)
 
 | Field | Type | Notes |
