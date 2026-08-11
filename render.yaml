@@ -1,0 +1,131 @@
+# Render Blueprint (RUN-60): the NestJS backend and its managed Postgres.
+#
+# The Next.js frontend is NOT here - it deploys to Vercel, which this repo was
+# already connected to before this ticket. See the "Deployment" section of the
+# root README.md for the whole picture and the reasoning.
+#
+# Create everything from this file once: Render Dashboard > New > Blueprint,
+# point it at this repo. Render then prompts for the three values marked
+# `sync: false` below, because secrets must never live in the repo (AC3).
+# Editing this file and pushing updates the infrastructure on the next deploy;
+# the `sync: false` values are never overwritten.
+
+databases:
+  # Free plan: 1 GB, and it EXPIRES 30 DAYS AFTER CREATION (then a 14-day grace
+  # period before the data is deleted). Render emails a warning first. This is
+  # the single biggest operational catch of this setup - the README explains the
+  # two ways out (recreate + re-run migrations, or point DATABASE_URL at a free
+  # Neon database, which does not expire).
+  - name: runlog-db
+    databaseName: runlog
+    plan: free
+    # Keep the database and the service in the same region: that is what makes
+    # the internal connection string below work, and it keeps database traffic
+    # off the public internet.
+    region: frankfurt
+
+services:
+  - type: web
+    name: runlog-backend
+    runtime: node
+    plan: free
+    region: frankfurt
+
+    # AC2 keys off "a merge to master", and master is this repo's default
+    # branch. Stated explicitly rather than relying on the default so that
+    # renaming the default branch cannot silently redirect production.
+    branch: master
+
+    # This is a multi-app repo with no npm workspaces, so the service must build
+    # from backend/ and not the repo root. This one line also sidesteps the root
+    # package.json's `prepare: husky` script: Render never installs the root
+    # package, so husky never runs (and never fails) on the host. Change this and
+    # that problem comes back.
+    rootDir: backend
+
+    # `--include=dev` is load-bearing, not decoration. Render sets
+    # NODE_ENV=production, and npm reads that as --omit=dev, which prunes
+    # @nestjs/cli - so `nest build` fails with "nest: not found". Verified by
+    # reproducing it locally. Everything this app needs to BUILD (the Nest CLI,
+    # TypeScript) is a devDependency; only the running server is production-only.
+    #
+    # `npm ci` also fires the backend's postinstall (`prisma generate`), which
+    # has to happen before the build because src/generated/ is gitignored and
+    # the TypeScript sources import from it.
+    buildCommand: npm ci --include=dev && npm run build
+
+    # Migrations run here rather than in a preDeployCommand because Render's
+    # pre-deploy step is a PAID feature and this is the free plan. The start
+    # command is the next best place and still satisfies AC2: `migrate deploy`
+    # applies every pending migration and only then does node boot, so the new
+    # backend never serves traffic against an unmigrated schema. It is
+    # idempotent - a no-op when there is nothing pending - so paying it again on
+    # each cold start costs a second, not correctness.
+    #
+    # `migrate deploy`, never `migrate dev`: it applies the committed migrations
+    # verbatim and refuses to invent or reset anything.
+    #
+    # `exec node dist/main`, not `npm run start:prod`: exec replaces the shell
+    # with node, so node is the process Render signals directly. Going through
+    # npm would bury node two processes deep, SIGTERM would stop at the shell,
+    # and main.ts's enableShutdownHooks would never fire - meaning Prisma never
+    # calls $disconnect and in-flight queries get severed rather than drained,
+    # which is the exact thing that comment in main.ts says not to break.
+    startCommand: npx prisma migrate deploy && exec node dist/main
+
+    # NOT "/" - main.ts sets a global 'api' prefix, so GET / is a genuine 404 and
+    # a health check pointed there would fail forever. /api/hello is @Public()
+    # (RUN-57) so it answers without a token, and it carries no user data.
+    healthCheckPath: /api/hello
+
+    envVars:
+      # Pinned explicitly, and this needs the explanation: Render's precedence is
+      # NODE_VERSION > .node-version > .nvmrc > engines.node. The repo's .nvmrc
+      # (24) sits at the repo root, which is NOT this service's rootDir, so
+      # Render would likely fall through to engines.node - and that is
+      # ">=20.9.0", an unbounded range Render's own docs warn resolves to the
+      # newest Node in existence. Setting it here keeps the host on the same
+      # major as .nvmrc and CI. Bump all three together.
+      - key: NODE_VERSION
+        value: '24'
+
+      # Render injects PORT and health-checks it. main.ts already reads PORT
+      # through ConfigService (default 3000), so nothing to configure - listed
+      # here only so the next reader does not go looking for it.
+
+      # The INTERNAL connection string, which is what `property: connectionString`
+      # returns. Internal means same-region private networking: no TLS needed, no
+      # public egress, lower latency. The EXTERNAL URL is the one that needs
+      # `?sslmode=require`, and it is only for laptops and admin tools.
+      # Its `postgresql://` scheme satisfies validateEnv's scheme check.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: runlog-db
+          property: connectionString
+
+      # Secret: min 32 chars, boot fails loudly below that (validateEnv).
+      # `sync: false` means Render prompts for it and it never lands in git.
+      # Generate with:
+      #   node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+      - key: JWT_SECRET
+        sync: false
+
+      # The CORS origin (AC3): the deployed frontend's Vercel origin, scheme and
+      # host with no trailing slash, e.g. https://run-log-app.vercel.app
+      #
+      # Worth knowing what this does NOT do: the app's own traffic never uses
+      # CORS, because the browser only ever calls its own origin and Next
+      # rewrites /api/* to this backend server-side. So a wrong value here does
+      # not break the deployed app and will not show up in testing - it only
+      # matters for a genuinely cross-origin caller. Set it correctly anyway;
+      # a stale allow-list is a trap for whoever adds one later.
+      - key: FRONTEND_URL
+        sync: false
+
+      # Optional (RUN-53). Without it POST /api/routes/plan answers 503
+      # ROUTING_NOT_CONFIGURED and everything else works; the Add run modal shows
+      # the message and still saves the run by hand. RUN-54 ships the UI that
+      # calls it, so set it before demoing route maps.
+      # Free key: https://openrouteservice.org/dev/
+      - key: ROUTING_API_KEY
+        sync: false

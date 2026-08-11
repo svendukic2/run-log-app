@@ -10,11 +10,16 @@ export const ROUTES = {
   runs: '/runs',
   coach: '/coach',
   events: '/events',
+  leaderboard: '/leaderboard',
   settings: '/settings',
 } as const;
 
 // The views that live behind the shared shell, in sidebar order (Events
 // joined with the COMMUNITY section, RUN-68).
+//
+// The global leaderboard (RUN-70) is deliberately NOT here yet: RUN-62 owns
+// the sidebar's COMMUNITY section and adds the link there, so the page is
+// reachable by URL (and from wherever a row links to it) until that lands.
 export const APP_ROUTES = [
   ROUTES.dashboard,
   ROUTES.runs,
@@ -28,6 +33,14 @@ export const APP_ROUTES = [
 // APP_ROUTES: it is reached from a row, never from the sidebar.
 export function personRoute(id: string): string {
   return `/people/${id}`;
+}
+
+// One run on someone's public profile, read only (RUN-63 AC4). Nested under
+// the profile rather than reusing /runs/:id because the run is only
+// readable through the profile that owns it: the same privacy gate decides
+// both, and a flat route would invite reading a foreign run without one.
+export function personRunRoute(personId: string, runId: string): string {
+  return `${personRoute(personId)}/runs/${runId}`;
 }
 
 // Dashboard is the default view inside the shell (RUN-13 AC1).

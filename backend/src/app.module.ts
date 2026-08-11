@@ -10,12 +10,14 @@ import { validateEnv } from './config/env.validation';
 import { EventsModule } from './events/events.module';
 import { FollowModule } from './follow/follow.module';
 import { GoalModule } from './goal/goal.module';
+import { LeaderboardModule } from './leaderboard/leaderboard.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { PrivacyModule } from './privacy/privacy.module';
 import { ProfileModule } from './profile/profile.module';
 import { RoutesModule } from './routes/routes.module';
 import { RunsModule } from './runs/runs.module';
+import { UsersModule } from './users/users.module';
 import { WeekTargetsModule } from './week-targets/week-targets.module';
 
 @Module({
@@ -33,8 +35,10 @@ import { WeekTargetsModule } from './week-targets/week-targets.module';
     RunsModule,
     AuthModule,
     EventsModule,
+    LeaderboardModule,
     FollowModule,
     AccountModule,
+    UsersModule,
     ProfileModule,
     PrivacyModule,
     GoalModule,

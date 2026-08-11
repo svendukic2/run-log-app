@@ -22,14 +22,14 @@ Edit `src/app/page.tsx`; the page hot-reloads on save.
 
 ## Scripts
 
-| Command              | Purpose                                   |
-| -------------------- | ----------------------------------------- |
-| `npm run dev`        | Dev server on :4200                       |
-| `npm run build`      | Production build                          |
-| `npm start`          | Serve the production build on :4200       |
-| `npm run lint`       | ESLint (`eslint-config-next`)             |
-| `npm test`           | Unit tests (Jest + React Testing Library) |
-| `npm run test:watch` | Tests in watch mode                       |
+| Command              | Purpose                                                 |
+| -------------------- | ------------------------------------------------------- |
+| `npm run dev`        | Dev server on :4200                                     |
+| `npm run build`      | Production build                                        |
+| `npm start`          | Serve the production build on `$PORT`, or :4200 locally |
+| `npm run lint`       | ESLint (`eslint-config-next`)                           |
+| `npm test`           | Unit tests (Jest + React Testing Library)               |
+| `npm run test:watch` | Tests in watch mode                                     |
 
 ## Project Structure
 
@@ -60,8 +60,21 @@ This repo is a multi-app repo, so Vercel must build only this folder:
 2. Set **Root Directory** to `frontend` in Project Settings.
 3. Vercel auto-detects the Next.js preset (build `next build`, no extra config).
 4. Add `BACKEND_URL` (and any other env vars) under **Environment
-   Variables**, pointing at the deployed backend.
+   Variables**, pointing at the deployed backend - scheme and host only, no
+   trailing slash and no `/api` suffix (the rewrite in `next.config.ts` adds the
+   path). It must stay server-only: never rename it to `NEXT_PUBLIC_*`.
+
+Step 2 is the one that matters most. With the root directory left at the repo
+root, Vercel installs the root `package.json`, whose `prepare: husky` script has
+no business running on a build server, and tries to build the wrong app.
 
 Every push to a connected branch then gets a preview deployment; merges to the
-production branch promote automatically. The NestJS backend is **not** deployed
-to Vercel - it ships separately.
+production branch (`master`) promote automatically. The NestJS backend is **not**
+deployed to Vercel - it ships separately, to Render. The root
+[README's Deployment section](../README.md#deployment) covers both halves: env
+vars per service, how migrations run, and where the logs are.
+
+`npm start` is not used by Vercel, which serves the build directly. It matters
+for any Node-based host: it reads `$PORT` and only falls back to 4200 when the
+environment has not chosen one, because a hardcoded port fails a host's health
+check. See `scripts/start.mjs`.

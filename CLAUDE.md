@@ -71,7 +71,7 @@ Frontend, from `frontend/`:
 | -------------------- | ----------------------------------------------- |
 | `npm run dev`        | Next dev server on :4200                        |
 | `npm run build`      | Production build. Doubles as the typecheck gate |
-| `npm start`          | Serve the production build on :4200             |
+| `npm start`          | Serve the production build on `$PORT`, else :4200 |
 | `npm run lint`       | ESLint (`eslint-config-next`)                   |
 | `npm test`           | Jest + React Testing Library (jsdom)            |
 | `npm run test:watch` | Same, in watch mode                             |

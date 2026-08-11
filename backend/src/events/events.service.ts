@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { toDbDate, toIsoDate, utcTodayIso } from '../common/dates';
 import { resolvePagination } from '../common/pagination-query.dto';
-import { appearsOnLeaderboard } from '../common/privacy';
+import { rankByDistance, roundKm } from '../common/ranking';
 import { NotificationsService } from '../notifications/notifications.service';
 import { isPrismaError, prismaConstraint } from '../prisma/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
@@ -96,46 +96,9 @@ export interface EventParticipantListResponse {
 // the membership already changed, leaving the UI contradicting the server)
 // with one cheap read inside the same request.
 
-// RUN-69 AC2's ranking, pure so it can be tested without a database. Only
-// opted-in runners are ranked (AC3), and the ranking is the competition
-// kind: equal distances share a place and the next distinct distance skips
-// the places they consumed (1, 1, 3). The id tiebreak only fixes the sort's
-// order among tied rows - they get the same rank either way - so the output
-// is deterministic rather than dependent on the sort's stability.
-export function rankByDistance(
-  rows: Array<{ id: string; totalKm: number; showOnLeaderboard: boolean }>,
-): Map<string, number> {
-  const contenders = rows
-    // The opt-in gate itself lives in common/privacy.ts since RUN-64, so
-    // this leaderboard and the global one read the same rule.
-    .filter((row) => appearsOnLeaderboard(row))
-    .sort((a, b) => b.totalKm - a.totalKm || a.id.localeCompare(b.id));
-
-  const ranks = new Map<string, number>();
-  let previousKm: number | null = null;
-  let previousRank = 0;
-  contenders.forEach((row, index) => {
-    const rank = row.totalKm === previousKm ? previousRank : index + 1;
-    ranks.set(row.id, rank);
-    previousKm = row.totalKm;
-    previousRank = rank;
-  });
-  return ranks;
-}
-
-// Distances are Floats, so summing them accumulates binary-fraction noise
-// (0.1 + 0.2 = 0.30000000000000004), which would both print as
-// 30.000000000000004 km and order two genuinely equal totals.
-//
-// One decimal, not two (review fix): the app renders distances to one
-// decimal everywhere (frontend formatKm), so ranking on a finer number
-// than the one on screen produces a leaderboard that reads as a bug -
-// 12.34 km above 12.29 km, both printed "12.3 km". Rounding here makes the
-// order and the rendered number agree, and two runners the UI shows as
-// equal genuinely tie.
-function roundKm(km: number): number {
-  return Math.round(km * 10) / 10;
-}
+// The ranking itself (RUN-69 AC2) and the one-decimal rounding it depends
+// on moved to common/ranking.ts in RUN-70, where the global weekly board
+// reads exactly the same rules; they are imported above.
 
 // AC3's lifecycle, on inclusive dates: the event is active on its start and
 // end days themselves. ISO day strings compare chronologically as strings.

@@ -1,6 +1,8 @@
 import { UnauthorizedException } from '@nestjs/common';
 import {
   appearsOnLeaderboard,
+  canViewProfile,
+  canViewRoutes,
   PRIVACY_DEFAULTS,
   type PrivacySettings,
 } from '../common/privacy';
@@ -89,5 +91,30 @@ describe('appearsOnLeaderboard', () => {
   it('ranks only opted-in accounts, and defaults to opted out', () => {
     expect(appearsOnLeaderboard(PRIVACY_DEFAULTS)).toBe(false);
     expect(appearsOnLeaderboard({ showOnLeaderboard: true })).toBe(true);
+  });
+});
+
+// The public profile's two gates (RUN-63), pure and table-driven: the
+// owner override is a VIEWER check, so every row states both ids.
+describe('canViewProfile / canViewRoutes', () => {
+  const owner = 'user-owner';
+  const visitor = 'user-visitor';
+
+  it.each([
+    // settings, viewer, sees body, sees routes
+    [{ profilePublic: false, showRoutes: false }, visitor, false, false],
+    [{ profilePublic: false, showRoutes: true }, visitor, false, false],
+    [{ profilePublic: true, showRoutes: false }, visitor, true, false],
+    [{ profilePublic: true, showRoutes: true }, visitor, true, true],
+    // AC3: the owner always sees everything, whatever the toggles say.
+    [{ profilePublic: false, showRoutes: false }, owner, true, true],
+  ])('%o seen by %s', (settings, viewer, body, routes) => {
+    expect(canViewProfile(settings, viewer, owner)).toBe(body);
+    expect(canViewRoutes(settings, viewer, owner)).toBe(routes);
+  });
+
+  it('defaults to private on both counts', () => {
+    expect(canViewProfile(PRIVACY_DEFAULTS, visitor, owner)).toBe(false);
+    expect(canViewRoutes(PRIVACY_DEFAULTS, visitor, owner)).toBe(false);
   });
 });

@@ -153,9 +153,44 @@ migration adds them at that default too, so no existing account is ever publishe
 by a deploy. Consequence worth knowing: leaderboards keep rendering their "nobody
 is on leaderboards yet" state until runners opt in, and RUN-71's seeder opts its
 demo users in explicitly. The gating rules live in `backend/src/common/privacy.ts`
-(`appearsOnLeaderboard`, shared by the event leaderboard and RUN-70's global one);
-`profilePublic` and `showRoutes` are stored and served but have no gate yet, because
-their reader - RUN-63's public profile page - does not exist.
+(`appearsOnLeaderboard`, shared by the event leaderboard and RUN-70's global one;
+`canViewProfile` and `canViewRoutes`, added by RUN-63 when the public profile
+became their reader). All three are pure functions over the settings, so the
+policy is testable without a database and no call site re-derives it.
+
+**Reading another account (RUN-63).** `GET /api/users/:id` answers one runner's
+public profile: `{ id, firstName, lastName, me, following, counts: { followers,
+following }, visible, showRoutes, runs }`. `me` is the viewer looking at their
+own profile and `following` their follow edge, both answered by the API for the
+same reason the events list answers `mine` - the client does not track its own
+user id.
+
+The split at `visible` is the privacy rule, not a rendering hint. The header half
+is always served, because AC2 wants the name, the counts and a working follow
+button on a private profile too. The body half - `runs` - is **omitted** when
+`canViewProfile` says no: `runs: null` means "not yours to see", while an empty
+public log serves `[]`. The runs are never fetched and then filtered, so no gated
+payload exists for a client to recover with devtools. Records and the weekly
+distance chart are deliberately not separate fields: the frontend derives them
+from this one list with the same helpers the dashboard uses, so a single gate
+covers all three cards, and the read-only run detail at `/people/:id/runs/:runId`
+reads the same list rather than a second endpoint that could forget it.
+
+A **missing user is 404; a private user is not** - a private account is a normal
+200 with a gated body, because it still has a header it is entitled to serve, and
+403 is the wrong status for "you may read the header but not the body". Recorded
+plainly, because an earlier draft of this paragraph claimed the opposite: those
+two statuses side by side ARE an id enumeration oracle, and a 403 would have
+revealed less. That is an accepted tradeoff rather than a property the endpoint
+has; ids are `cuid()`, so there is no id space to walk. Do not "fix" it by
+404ing private accounts - AC2 needs their header.
+
+`showRoutes` is strictly narrower than `profilePublic` (the grant is the AND of
+the two), and the owner overrides both on their own profile. Route maps
+themselves are RUN-72, so `showRoutes` gates only the run detail's Route card so
+far; it is honoured in the payload now so that route data was never exposed in
+the meantime. The endpoint lives in `backend/src/users/`, which RUN-62 extends
+with `GET /api/users?search=`.
 
 **Ownership (RUN-57).** Every other entity in this document carries a required
 `userId` foreign key (cascade on user delete), with one structural exception:
@@ -297,6 +332,45 @@ runner's run distances inside the event's **inclusive** window (a run on the
 start or end day counts), computed by one `GROUP BY` at read time and never
 stored, the same rule the event's own derived state follows. Ties share a rank
 and the next distinct distance skips the places they consumed (1, 1, 3).
+
+### The global weekly leaderboard (RUN-70, stores nothing)
+
+`GET /api/leaderboard[?weekStart=yyyy-mm-dd]` ranks every opted-in runner by the
+kilometres they logged inside one **Monday-Sunday inclusive** week. It has no
+entity of its own: the answer is derived at read time from `User` and `Run`, like
+every other number in the "Never stored" section below.
+
+`weekStart` may name **any** day; the server normalizes it to the Monday of that
+day's week (the same week definition as the dashboard's `startOfWeek`) and echoes
+the resolved `{ weekStart, weekEnd }` back, so a client never has to guess which
+week it is looking at. Omitting it means the current week.
+
+The envelope is `{ weekStart, weekEnd, items, me, total }`, where each row is
+`{ id, firstName, lastName, rank, totalKm, runCount, me }` and `id` is the
+**user's** id (the row links to their public profile). Nothing in a row is
+nullable, unlike the event board's: a runner with `showOnLeaderboard` false is
+**absent** here rather than present with withheld numbers, because a global board
+has no membership list they would otherwise appear on. `me` repeats the caller's
+own row outside `items` and is `null` **exactly** when the caller is opted out -
+the one signal the page's banner needs, and one that names nobody else's setting.
+
+`items` is capped at the top 50 while `total` counts every ranked runner, so the
+caller's pinned row stays truthful when they rank far below the served slice. The
+ranking is computed over **everyone**, never within the served slice: opted-in
+runners with no runs that week tie at 0 km at the bottom rather than vanishing
+from their own leaderboard. Ranking and rounding are shared with the event board
+(`common/ranking.ts`, moved there by this ticket): ties share a rank, the next
+distinct distance skips the places they consumed (1, 1, 3), and distances round
+to **one** decimal, the precision the UI prints.
+
+Two reads serve it, exactly one of them the aggregation: the opted-in users (for
+their names, and so a runner who sat the week out still gets a row), then one
+`GROUP BY` over the week's runs. The opt-in gate is expressed **inside** that
+aggregation as a relation filter (`user: { showOnLeaderboard: true }`), not as an
+id list built from the first read: an `IN` list would carry one bind parameter
+per opted-in account and fail outright past Postgres' 65535-parameter cap. The
+event board may pass ids because one event's membership is bounded; this one is
+bounded only by the user table.
 
 ### Account identity (the User row, RUN-59)
 

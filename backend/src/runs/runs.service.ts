@@ -1,6 +1,5 @@
 import {
   Injectable,
-  InternalServerErrorException,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -14,53 +13,22 @@ import { ROUTE_SOURCE_OPENROUTESERVICE } from '../routes/route-sources';
 import {
   CreateRunDto,
   DEFAULT_EFFORT,
-  EFFORT_LEVELS,
-  MAX_ROUTE_POINTS,
-  MIN_ROUTE_POINTS,
-  type Effort,
   type RunRouteDto,
 } from './dto/create-run.dto';
+import {
+  runsNewestFirstOrder,
+  toRunResponse,
+  type RunResponse,
+} from './run-response';
 import { UpdateRunDto } from './dto/update-run.dto';
 
-// One tapped point, the same {lat, lng} order the routing endpoint takes and
-// Leaflet hands the picker (RUN-53's DTO comment explains why that order and
-// not the provider's).
-export interface RouteWaypointResponse {
-  lat: number;
-  lng: number;
-}
-
-// A run's route, served as ONE nullable object rather than three loose
-// columns (RUN-54). The columns stay separate in the database - that is what
-// the ticket asks for and what lets `routeSource` be indexed or filtered
-// later - but the API shape makes the invariant impossible to violate:
-// `route === null` is the whole of "no route", and no caller can construct
-// a polyline with no waypoints.
-export interface RunRouteResponse {
-  // Encoded polyline, precision 5 (RUN-53: the decoder must be told 5).
-  polyline: string;
-  // The runner's tapped points: [0] is Start, the last is Finish, the rest
-  // are the numbered waypoints, 2-5 in total.
-  waypoints: RouteWaypointResponse[];
-  // Who drew it, which is also what says "reconstruction, not GPS truth".
-  source: string;
-}
-
-// The API shape of a run: exactly the Run type from docs/data-model.md and
-// frontend/src/lib/runs.ts. `date` is a yyyy-mm-dd string, never a Date or
-// timestamp, and nothing derived (pace, totals) is ever part of it. userId
-// is deliberately NOT in the response: the owner is implicit in the token,
-// and the frontend contract predates accounts.
-export interface RunResponse {
-  id: string;
-  routeName: string;
-  distanceKm: number;
-  durationSeconds: number;
-  date: string;
-  effort: Effort;
-  note: string;
-  route: RunRouteResponse | null;
-}
+// The response shape and its mapper live in run-response.ts since RUN-63,
+// shared with the public profile read - which is also why RUN-54's route
+// mapping went there rather than here: two hand-written mappers is how the
+// owner's runs and a public profile's runs would start disagreeing about what
+// a run looks like, and the route is exactly the field where disagreeing
+// means leaking. Re-exported so every existing importer keeps its path.
+export type { RunResponse };
 
 // The two FK constraints a run-create transaction can violate (P2003) since
 // the RUN-65 fan-out joined it: the run's own owner FK and the notification
@@ -70,84 +38,11 @@ export interface RunResponse {
 const RUN_OWNER_FKEY = 'Run_userId_fkey';
 const NOTIFICATION_RECIPIENT_FKEY = 'Notification_userId_fkey';
 
-// The column is plain TEXT until RUN-73 adds a real enum, so a row edited
-// outside the API (psql, a seed script) can hold anything. A loud 500 that
-// names the row beats a silently wrong Effort type reaching the frontend's
-// exhaustive switches.
-function toEffort(rowId: string, value: string): Effort {
-  if (!(EFFORT_LEVELS as readonly string[]).includes(value)) {
-    throw new InternalServerErrorException(
-      `Run ${rowId} has stored effort "${value}", not one of: ${EFFORT_LEVELS.join(', ')}. Fix the row (RUN-73 adds the enum that prevents this).`,
-    );
-  }
-  return value as Effort;
-}
-
-// routeWaypoints is a JSONB column, so its contents are untrusted the same
-// way a provider body is: this is the only place their shape is assumed.
-// Latitude/longitude ranges are re-checked here rather than trusted from the
-// write path, because a stored point outside them would put a Leaflet marker
-// nowhere and the picker has no way to report that.
-function isRouteWaypoint(value: unknown): value is RouteWaypointResponse {
-  if (typeof value !== 'object' || value === null) return false;
-  const { lat, lng } = value as Record<string, unknown>;
-  return (
-    typeof lat === 'number' &&
-    Number.isFinite(lat) &&
-    lat >= -90 &&
-    lat <= 90 &&
-    typeof lng === 'number' &&
-    Number.isFinite(lng) &&
-    lng >= -180 &&
-    lng <= 180
-  );
-}
-
-// The stored JSON as a point list, or null if it is not one. Rebuilt entry by
-// entry rather than cast, so extra keys a hand-edited row might carry cannot
-// leak into the response.
-function toRouteWaypoints(
-  value: Prisma.JsonValue | null,
-): RouteWaypointResponse[] | null {
-  if (!Array.isArray(value)) return null;
-  const points: RouteWaypointResponse[] = [];
-  for (const entry of value) {
-    if (!isRouteWaypoint(entry)) return null;
-    points.push({ lat: entry.lat, lng: entry.lng });
-  }
-  if (points.length < MIN_ROUTE_POINTS || points.length > MAX_ROUTE_POINTS) {
-    return null;
-  }
-  return points;
-}
-
-// The route columns as one nullable object. All three NULL is the ordinary
-// no-route run (AC3). Anything else must be complete: a loud 500 that names
-// the row, like toEffort above, rather than a route the picker silently
-// cannot restore or a line with no provenance. The database CHECK added with
-// these columns makes the all-or-none half of this unreachable through SQL
-// too, so what is really left here is "the JSON is not a list of points".
-function toRoute(row: RunRow): RunRouteResponse | null {
-  const { routePolyline, routeWaypoints, routeSource } = row;
-  if (
-    routePolyline === null &&
-    routeWaypoints === null &&
-    routeSource === null
-  ) {
-    return null;
-  }
-  const waypoints = toRouteWaypoints(routeWaypoints);
-  if (routePolyline === null || routeSource === null || waypoints === null) {
-    throw new InternalServerErrorException(
-      `Run ${row.id} has an unreadable route: routePolyline, routeWaypoints (${MIN_ROUTE_POINTS}-${MAX_ROUTE_POINTS} {lat, lng} points) and routeSource must all be present or all be NULL. Fix the row.`,
-    );
-  }
-  return { polyline: routePolyline, waypoints, source: routeSource };
-}
-
-// The three columns for a write. Prisma needs DbNull (not null) to put SQL
-// NULL into a nullable Json column, which is the only reason clearing a
-// route is not simply three nulls.
+// The three columns for a write. Its read-side counterpart (toRoute) lives in
+// run-response.ts with the rest of the mapping; this one stays here because
+// only the owner's own endpoints ever write a route. Prisma needs DbNull (not
+// null) to put SQL NULL into a nullable Json column, which is the only reason
+// clearing a route is not simply three nulls.
 function routeColumns(route: RunRouteDto | null): {
   routePolyline: string | null;
   routeWaypoints: Prisma.InputJsonValue | typeof Prisma.DbNull;
@@ -190,28 +85,21 @@ export class RunsService {
     private readonly notifications: NotificationsService,
   ) {}
 
+  // Every response from this service is the OWNER's own run, so the route
+  // always comes with it: privacy gates who may see someone ELSE's routes
+  // (users.service, canViewRoutes), never your own.
   private toResponse(row: RunRow): RunResponse {
-    return {
-      id: row.id,
-      routeName: row.routeName,
-      distanceKm: row.distanceKm,
-      durationSeconds: row.durationSeconds,
-      date: toIsoDate(row.date),
-      effort: toEffort(row.id, row.effort),
-      note: row.note,
-      route: toRoute(row),
-    };
+    return toRunResponse(row, { withRoute: true });
   }
 
-  // Newest first, the order every screen shows runs in. Same-day runs have
-  // no insertion timestamp in the contract (docs/data-model.md), so the id
-  // is the tiebreak: arbitrary but deterministic across requests. Unbounded
-  // on purpose for now: the frontend consumes the whole list; pagination
-  // belongs to the schema-hardening follow-up.
+  // Newest first, the order every screen shows runs in (the ordering and
+  // its reasoning live in run-response.ts, shared with the public profile
+  // read). Unbounded on purpose for now: the frontend consumes the whole
+  // list; pagination belongs to the schema-hardening follow-up.
   async findAll(userId: string): Promise<RunResponse[]> {
     const rows = await this.prisma.run.findMany({
       where: { userId },
-      orderBy: [{ date: 'desc' }, { id: 'desc' }],
+      orderBy: [...runsNewestFirstOrder],
     });
     return rows.map((row) => this.toResponse(row));
   }

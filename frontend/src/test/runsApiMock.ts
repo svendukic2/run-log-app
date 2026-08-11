@@ -28,7 +28,9 @@ import { __resetSessionForTests, __setHardNavigateForTests, hasStoredSession } f
 import { jsonResponse } from './apiMockShared';
 import { resetLeafletMock } from './leafletMock';
 import { handleEventsRequest } from './eventsApiMock';
+import { handleLeaderboardRequest } from './leaderboardApiMock';
 import { handleNotificationsRequest } from './notificationsApiMock';
+import { handleUsersRequest } from './usersApiMock';
 
 let db: Run[] = [];
 let idCounter = 0;
@@ -392,12 +394,32 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
 
   // The notifications API (RUN-65, consumed by the bell in RUN-66): same
   // arrangement as the events mock, one fetch mock and one Bearer handshake
-  // for all three stores.
+  // for every store.
   if (url.startsWith('/api/me/notifications')) {
     if (!authorized(init)) {
       return Promise.resolve(jsonResponse(401, { message: 'Missing bearer token' }));
     }
     const handled = handleNotificationsRequest(url, method);
+    if (handled) return handled;
+  }
+
+  // The global weekly leaderboard (RUN-70), delegated the same way.
+  if (url.startsWith('/api/leaderboard')) {
+    if (!authorized(init)) {
+      return Promise.resolve(jsonResponse(401, { message: 'Missing bearer token' }));
+    }
+    const handled = handleLeaderboardRequest(url, method);
+    if (handled) return handled;
+  }
+
+  // The users API (RUN-63's public profile read and the RUN-61 follow verbs
+  // its header calls): same arrangement again, one fetch mock and one
+  // Bearer handshake for every store.
+  if (url.startsWith('/api/users')) {
+    if (!authorized(init)) {
+      return Promise.resolve(jsonResponse(401, { message: 'Missing bearer token' }));
+    }
+    const handled = handleUsersRequest(url, method);
     if (handled) return handled;
   }
 
