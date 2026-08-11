@@ -1,6 +1,5 @@
 import {
   Injectable,
-  InternalServerErrorException,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -8,29 +7,18 @@ import { toDbDate, toIsoDate } from '../common/dates';
 import { NotificationsService } from '../notifications/notifications.service';
 import { isPrismaError, prismaConstraint } from '../prisma/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
-import type { Run as RunRow } from '../generated/prisma/client';
+import { CreateRunDto, DEFAULT_EFFORT } from './dto/create-run.dto';
 import {
-  CreateRunDto,
-  DEFAULT_EFFORT,
-  EFFORT_LEVELS,
-  type Effort,
-} from './dto/create-run.dto';
+  runsNewestFirstOrder,
+  toRunResponse,
+  type RunResponse,
+} from './run-response';
 import { UpdateRunDto } from './dto/update-run.dto';
 
-// The API shape of a run: exactly the Run type from docs/data-model.md and
-// frontend/src/lib/runs.ts. `date` is a yyyy-mm-dd string, never a Date or
-// timestamp, and nothing derived (pace, totals) is ever part of it. userId
-// is deliberately NOT in the response: the owner is implicit in the token,
-// and the frontend contract predates accounts.
-export interface RunResponse {
-  id: string;
-  routeName: string;
-  distanceKm: number;
-  durationSeconds: number;
-  date: string;
-  effort: Effort;
-  note: string;
-}
+// The response shape and its mapper live in run-response.ts since RUN-63,
+// shared with the public profile read. Re-exported here so every existing
+// importer (the controller, the specs) keeps its import path.
+export type { RunResponse };
 
 // The two FK constraints a run-create transaction can violate (P2003) since
 // the RUN-65 fan-out joined it: the run's own owner FK and the notification
@@ -39,19 +27,6 @@ export interface RunResponse {
 // WHICH one broke - the same technique follow.service uses.
 const RUN_OWNER_FKEY = 'Run_userId_fkey';
 const NOTIFICATION_RECIPIENT_FKEY = 'Notification_userId_fkey';
-
-// The column is plain TEXT until RUN-73 adds a real enum, so a row edited
-// outside the API (psql, a seed script) can hold anything. A loud 500 that
-// names the row beats a silently wrong Effort type reaching the frontend's
-// exhaustive switches.
-function toEffort(rowId: string, value: string): Effort {
-  if (!(EFFORT_LEVELS as readonly string[]).includes(value)) {
-    throw new InternalServerErrorException(
-      `Run ${rowId} has stored effort "${value}", not one of: ${EFFORT_LEVELS.join(', ')}. Fix the row (RUN-73 adds the enum that prevents this).`,
-    );
-  }
-  return value as Effort;
-}
 
 // Every method takes the owning userId first (RUN-57) and folds it into the
 // WHERE clause itself - ownership is enforced by the query, never by
@@ -67,36 +42,23 @@ export class RunsService {
     private readonly notifications: NotificationsService,
   ) {}
 
-  private toResponse(row: RunRow): RunResponse {
-    return {
-      id: row.id,
-      routeName: row.routeName,
-      distanceKm: row.distanceKm,
-      durationSeconds: row.durationSeconds,
-      date: toIsoDate(row.date),
-      effort: toEffort(row.id, row.effort),
-      note: row.note,
-    };
-  }
-
-  // Newest first, the order every screen shows runs in. Same-day runs have
-  // no insertion timestamp in the contract (docs/data-model.md), so the id
-  // is the tiebreak: arbitrary but deterministic across requests. Unbounded
-  // on purpose for now: the frontend consumes the whole list; pagination
-  // belongs to the schema-hardening follow-up.
+  // Newest first, the order every screen shows runs in (the ordering and
+  // its reasoning live in run-response.ts, shared with the public profile
+  // read). Unbounded on purpose for now: the frontend consumes the whole
+  // list; pagination belongs to the schema-hardening follow-up.
   async findAll(userId: string): Promise<RunResponse[]> {
     const rows = await this.prisma.run.findMany({
       where: { userId },
-      orderBy: [{ date: 'desc' }, { id: 'desc' }],
+      orderBy: [...runsNewestFirstOrder],
     });
-    return rows.map((row) => this.toResponse(row));
+    return rows.map(toRunResponse);
   }
 
   async findOne(userId: string, id: string): Promise<RunResponse> {
     // findFirst, not findUnique: the where must carry the owner too.
     const row = await this.prisma.run.findFirst({ where: { id, userId } });
     if (!row) throw new NotFoundException(`Run ${id} not found`);
-    return this.toResponse(row);
+    return toRunResponse(row);
   }
 
   create(userId: string, dto: CreateRunDto): Promise<RunResponse> {
@@ -155,7 +117,7 @@ export class RunsService {
           timeout: 15_000,
         },
       );
-      return this.toResponse(row);
+      return toRunResponse(row);
     } catch (error) {
       if (isPrismaError(error, 'P2003')) {
         const constraint = prismaConstraint(error);
@@ -219,7 +181,7 @@ export class RunsService {
         where: { id, userId },
         data,
       });
-      return this.toResponse(row);
+      return toRunResponse(row);
     } catch (error) {
       if (isPrismaError(error, 'P2025')) {
         throw new NotFoundException(`Run ${id} not found`);
