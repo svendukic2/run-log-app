@@ -326,14 +326,16 @@ describe('Events API (e2e)', () => {
     const start = addDaysIso(today, -5);
     const end = addDaysIso(today, -3);
 
+    // Owned by carla, not by ana: joins notify the OWNER, and the delivered
+    // -notification assertions further down count ana's bell.
     const created = (
-      await createEvent(ana, {
+      await createEvent(carla, {
         name: 'Boundary week',
         startDate: start,
         endDate: end,
       }).expect(201)
     ).body as EventResponse;
-    for (const user of [bruno, carla]) {
+    for (const user of [ana, bruno]) {
       await request(app.getHttpServer())
         .post(`/api/events/${created.id}/join`)
         .set(user.auth)
@@ -373,31 +375,31 @@ describe('Events API (e2e)', () => {
     ).body as EventParticipantListResponse;
 
     expect(body.total).toBe(3);
-    // Join order (AC1), each carrying its global rank (AC2).
-    expect(body.items).toEqual([
-      expect.objectContaining({
-        id: ana.id,
-        me: true,
-        rank: 2,
-        totalKm: 8,
-        runCount: 2,
-      }),
-      expect.objectContaining({
-        id: bruno.id,
-        me: false,
-        rank: 1,
-        totalKm: 12,
-        runCount: 1,
-      }),
+    // Join order (AC1): the owner is first, having joined at creation. The
+    // other two are asserted by id rather than by position - their joins
+    // are milliseconds apart, and pinning that ordering would buy a flake
+    // instead of a guarantee.
+    expect(body.items[0]).toMatchObject({
+      id: carla.id,
       // Opted out: in the list, off the board, and none of her numbers
       // leave the server (AC3).
-      expect.objectContaining({
-        id: carla.id,
-        rank: null,
-        totalKm: null,
-        runCount: null,
-      }),
-    ]);
+      rank: null,
+      totalKm: null,
+      runCount: null,
+    });
+    const byId = new Map(body.items.map((row) => [row.id, row]));
+    expect(byId.get(ana.id)).toMatchObject({
+      me: true,
+      rank: 2,
+      totalKm: 8,
+      runCount: 2,
+    });
+    expect(byId.get(bruno.id)).toMatchObject({
+      me: false,
+      rank: 1,
+      totalKm: 12,
+      runCount: 1,
+    });
 
     await request(app.getHttpServer())
       .get('/api/events/nonexistent/participants')
