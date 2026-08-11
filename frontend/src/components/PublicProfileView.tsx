@@ -12,7 +12,7 @@ import {
 import RecentRunsCard from '@/components/RecentRunsCard';
 import { CARD } from '@/components/runDetailParts';
 import { initialsOf } from '@/lib/eventMath';
-import { usePublicProfile, type PublicProfile } from '@/lib/publicProfile';
+import { setFollowing, usePublicProfile, type PublicProfile } from '@/lib/publicProfile';
 import { personRunRoute } from '@/lib/routes';
 
 // One runner's public profile (RUN-63, Figma "V2 - Public profile"): header
@@ -75,7 +75,9 @@ function ProfileHeader({ profile }: { profile: PublicProfile }) {
           </p>
         </div>
       </div>
-      <FollowButton profile={profile} />
+      {/* The store's own mutation, which patches this page's cache; the
+          People rows pass theirs to the same button (RUN-62). */}
+      <FollowButton target={profile} setFollowing={setFollowing} />
     </header>
   );
 }

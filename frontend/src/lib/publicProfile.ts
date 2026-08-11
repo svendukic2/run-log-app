@@ -15,6 +15,7 @@
 // to un-hide. This store's whole job is to render the answer, never to
 // decide it.
 import { useEffect, useSyncExternalStore } from 'react';
+import { requestFollow } from './followApi';
 import { isRun, type Run } from './runMath';
 import { ApiError, apiFetch } from './session';
 
@@ -171,17 +172,9 @@ export function reloadPublicProfile(userId: string): void {
 // number. A wrong count is cheap and self-corrects on the next visit; a
 // spinner over the whole page for one button is not.
 export async function setFollowing(userId: string, next: boolean): Promise<void> {
-  const response = await apiFetch(`/api/users/${userId}/follow`, {
-    method: next ? 'POST' : 'DELETE',
-  });
-  if (!response.ok) {
-    throw new ApiError(
-      next
-        ? `Following this runner failed (${response.status}).`
-        : `Unfollowing this runner failed (${response.status}).`,
-      response.status,
-    );
-  }
+  // The request itself is shared with the People search's copy of this
+  // mutation (followApi.ts); only the cache patch below is this store's.
+  await requestFollow(userId, next);
 
   const current = snapshot.profile;
   if (!current || snapshot.userId !== userId || current.following === next) return;
