@@ -189,8 +189,36 @@ has; ids are `cuid()`, so there is no id space to walk. Do not "fix" it by
 the two), and the owner overrides both on their own profile. Route maps
 themselves are RUN-72, so `showRoutes` gates only the run detail's Route card so
 far; it is honoured in the payload now so that route data was never exposed in
-the meantime. The endpoint lives in `backend/src/users/`, which RUN-62 extends
-with `GET /api/users?search=`.
+the meantime. The endpoint lives in `backend/src/users/`, alongside the search
+below.
+
+**Searching for runners (RUN-62).** `GET /api/users?search=` answers the People
+page: `{ items: [{ id, firstName, lastName, following }], total, page, pageSize,
+counts: { followers, following } }`. It shares the `?page`/`?pageSize` contract
+with the follow lists (1-based, default 20, max 100) and is **capped, not
+unbounded** - the first page is what the UI shows, and `total` is what lets it
+say "showing the first 20 of 43" instead of silently truncating.
+
+Four rules make this endpoint what it is:
+
+- **The caller is never a row.** You cannot follow yourself, so your own account
+  would be the one result with no action on it.
+- **Every whitespace-separated term must appear in one half of the name**, case
+  insensitively, so "ana tes" finds Ana Tester and so does "tes ana"; neither
+  term is pinned to a column. Terms are capped at four and the whole query at 60
+  characters, because each term is another OR pair in the WHERE.
+- **An absent or blank `search` lists nobody.** It is a valid request - the page
+  reads it for the counts before anything is typed - but it never becomes a
+  `LIKE '%%'` over every account. Nothing in the User table is touched at all.
+- **A row carries names and the follow flag, nothing else.** Private accounts DO
+  appear: their profile page still serves a header and a working follow button
+  (RUN-63 AC2), so hiding them from search would only make them unfollowable.
+  That is exactly why no run count, distance or any other unshared number may be
+  added to this shape later.
+
+`counts` is the caller's own, served with every answer including the empty-query
+one. The frontend store (`frontend/src/lib/userSearch.ts`) keeps it across query
+changes for that reason: it belongs to the account, not to the query.
 
 **Ownership (RUN-57).** Every other entity in this document carries a required
 `userId` foreign key (cascade on user delete), with one structural exception:

@@ -29,6 +29,12 @@ export interface FoundRunner {
   following: boolean;
 }
 
+// The caller's own follower/following totals.
+export interface FollowCounts {
+  followers: number;
+  following: number;
+}
+
 // The envelope (UserSearchResponse). `counts` is the CALLER's own follow
 // counts, served with every answer including the empty-query one, which is
 // what the page shows before anything is typed.
@@ -37,10 +43,8 @@ export interface UserSearchResult {
   total: number;
   page: number;
   pageSize: number;
-  counts: { followers: number; following: number };
+  counts: FollowCounts;
 }
-
-export type FollowCounts = { followers: number; following: number };
 
 export type UserSearchStatus = 'loading' | 'ready' | 'error';
 
