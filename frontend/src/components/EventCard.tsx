@@ -60,9 +60,13 @@ export default function EventCard({ event }: EventCardProps) {
         {/* Renders nothing on the owner's own card; the chip above already
             says why (a deleted event unmounts the card instead - the row
             leaves the cache, which is the whole story). */}
+        {/* No shrink-0 on the wrapper (review fix): the button carries its
+            own, so the column can still narrow and let a failure message
+            wrap instead of setting the row's width and pushing the count
+            out of the card. */}
         <JoinEventButton
           event={event}
-          className="flex shrink-0 flex-col items-end gap-[2px] text-right"
+          className="flex min-w-0 flex-col items-end gap-[2px] text-right"
         />
       </div>
     </article>

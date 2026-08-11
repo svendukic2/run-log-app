@@ -10,7 +10,7 @@ import {
   type CommunityEvent,
   type EventParticipant,
 } from '@/lib/events';
-import { personRoute, ROUTES } from '@/lib/routes';
+import { personRoute } from '@/lib/routes';
 
 interface EventLeaderboardCardProps {
   event: CommunityEvent;
@@ -50,15 +50,13 @@ export default function EventLeaderboardCard({ event, participants }: EventLeade
           window count towards it.
         </p>
       ) : rows.length === 0 ? (
+        // No link to Settings (review fix): appearing on leaderboards is
+        // opt-in and the toggle granting it is RUN-64's, so until that
+        // ships this would send every reader of this state - currently
+        // every reader - hunting for a control that is not there.
         <p className="text-[13.5px] leading-[1.55] text-secondary">
-          Nobody here is on leaderboards yet. Runners choose to appear in{' '}
-          <Link
-            href={ROUTES.settings}
-            className="font-semibold text-accent hover:text-accent-pressed"
-          >
-            Settings
-          </Link>
-          .
+          Nobody here is on leaderboards yet. Appearing on one will be a choice each runner makes in
+          Settings.
         </p>
       ) : (
         <ol className="flex flex-col">
