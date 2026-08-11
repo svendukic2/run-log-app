@@ -1,9 +1,10 @@
 'use client';
 
 import Link from 'next/link';
+import { useEffect, useState } from 'react';
+import EventStateChips from '@/components/EventStateChips';
 import {
-  EVENT_STATE_CHIP,
-  EVENT_STATE_LABEL,
+  ensureEvent,
   formatEventWindow,
   formatKm,
   formatParticipantCount,
@@ -20,10 +21,29 @@ const CARD = 'rounded-[18px] border border-line bg-white';
 export default function EventDetailView({ eventId }: { eventId: string }) {
   const events = useEvents();
   const event = events.find((candidate) => candidate.id === eventId);
+  // The cache loads once per page load, so an event created after that is
+  // absent while being perfectly real (a link someone shared). A cache
+  // miss therefore earns one by-id read before the page claims the event
+  // does not exist (review fix); 'checking' renders nothing for the beat
+  // the read takes, exactly like the boundary's pre-spinner moment.
+  const [lookedUp, setLookedUp] = useState(false);
+
+  useEffect(() => {
+    if (event || lookedUp) return;
+    let cancelled = false;
+    void ensureEvent(eventId).finally(() => {
+      if (!cancelled) setLookedUp(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [event, lookedUp, eventId]);
+
+  if (!event && !lookedUp) return null;
 
   if (!event) {
-    // Renders only once the boundary settled 'ready', so a missing id is
-    // genuinely unknown (or just deleted), not still loading.
+    // The by-id read above also came back empty, so the id is genuinely
+    // unknown (or just deleted), not merely missing from a stale cache.
     return (
       <section
         className={`${CARD} mx-5 mb-6 flex flex-col items-start gap-[10px] p-[28px] sm:mx-8 lg:mx-[40px]`}
@@ -56,18 +76,7 @@ export default function EventDetailView({ eventId }: { eventId: string }) {
       </nav>
 
       <header className="flex flex-col gap-[10px]">
-        <div className="flex items-center gap-2">
-          <span
-            className={`rounded-full px-[10px] py-[3px] text-[11.5px] font-semibold ${EVENT_STATE_CHIP[event.state]}`}
-          >
-            {EVENT_STATE_LABEL[event.state]}
-          </span>
-          {event.mine && (
-            <span className="rounded-full bg-accent-soft px-[10px] py-[3px] text-[11.5px] font-semibold text-accent-pressed">
-              Your event
-            </span>
-          )}
-        </div>
+        <EventStateChips event={event} />
         <h1 className="font-display text-[24px] font-bold tracking-[-0.6px] text-text-primary lg:text-[30px]">
           {event.name}
         </h1>

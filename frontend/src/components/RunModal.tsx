@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import EffortField from '@/components/EffortField';
 import TextArea from '@/components/TextArea';
 import TextField from '@/components/TextField';
+import { mutationErrorMessage } from '@/lib/session';
 import {
   addRun,
   emptyRunForm,
@@ -69,26 +70,33 @@ export default function RunModal({ run, onClose }: RunModalProps) {
   const setValue = <Field extends keyof RunFormValues>(field: Field, value: RunFormValues[Field]) =>
     setValues((current) => ({ ...current, [field]: value }));
 
+  // Dismissal is refused while a save is in flight (RUN-68 review fix,
+  // back-ported here: the two modals share the pattern): closing mid-save
+  // would unmount the modal, a late failure's inline error would land on an
+  // unmounted component, and the user would walk away believing a run is
+  // saved that never was. Escape here, the scrim, Cancel and the X below
+  // all share the gate.
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !saving) onClose();
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [onClose, saving]);
+
   useEffect(() => {
     // Land on the first field: the point of the modal is logging a run in
     // seconds, and it keeps keyboard and screen-reader users out from behind
     // the scrim.
     routeNameRef.current?.focus();
 
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', closeOnEscape);
-
     // Stop the page behind the dialog from scrolling under the user's finger.
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-
     return () => {
-      document.removeEventListener('keydown', closeOnEscape);
       document.body.style.overflow = previousOverflow;
     };
-  }, [onClose]);
+  }, []);
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -124,11 +132,7 @@ export default function RunModal({ run, onClose }: RunModalProps) {
       // The failure keeps the modal open with everything typed intact:
       // closing would silently discard a run the user believes is saved.
       setSaving(false);
-      setSaveError(
-        error instanceof Error && error.message
-          ? error.message
-          : "Saving failed. Check that you're online and try again.",
-      );
+      setSaveError(mutationErrorMessage(error));
     }
   };
 
@@ -137,7 +141,7 @@ export default function RunModal({ run, onClose }: RunModalProps) {
       <div
         aria-hidden="true"
         data-testid="run-modal-backdrop"
-        onClick={onClose}
+        onClick={saving ? undefined : onClose}
         className="fixed inset-0 bg-ink/60"
       />
 
@@ -157,8 +161,9 @@ export default function RunModal({ run, onClose }: RunModalProps) {
           <button
             type="button"
             onClick={onClose}
+            disabled={saving}
             aria-label="Close"
-            className="flex size-[34px] shrink-0 items-center justify-center rounded-[10px] text-secondary hover:bg-muted hover:text-ink"
+            className="flex size-[34px] shrink-0 items-center justify-center rounded-[10px] text-secondary hover:bg-muted hover:text-ink disabled:cursor-default disabled:opacity-60"
           >
             <CloseIcon />
           </button>
@@ -237,7 +242,8 @@ export default function RunModal({ run, onClose }: RunModalProps) {
               <button
                 type="button"
                 onClick={onClose}
-                className="flex w-full items-center justify-center rounded-[14px] border border-line-strong bg-white px-[28px] py-[16px] text-[16px] font-semibold text-text-primary hover:bg-muted sm:w-auto"
+                disabled={saving}
+                className="flex w-full items-center justify-center rounded-[14px] border border-line-strong bg-white px-[28px] py-[16px] text-[16px] font-semibold text-text-primary hover:bg-muted disabled:cursor-default disabled:opacity-60 sm:w-auto"
               >
                 Cancel
               </button>

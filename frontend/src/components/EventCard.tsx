@@ -2,9 +2,8 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import EventStateChips from '@/components/EventStateChips';
 import {
-  EVENT_STATE_CHIP,
-  EVENT_STATE_LABEL,
   formatEventWindow,
   formatKm,
   formatParticipantCount,
@@ -13,6 +12,7 @@ import {
   type CommunityEvent,
 } from '@/lib/events';
 import { ROUTES } from '@/lib/routes';
+import { mutationErrorMessage } from '@/lib/session';
 
 interface EventCardProps {
   event: CommunityEvent;
@@ -42,16 +42,14 @@ export default function EventCard({ event }: EventCardProps) {
       } else {
         await joinEvent(event.id);
       }
-      // The store refresh re-renders this card with the flipped flag and
-      // the server's participant count; nothing to set here.
+      // The mutation's own response updated the cache, re-rendering this
+      // card with the flipped flag and the fresh count; nothing to set
+      // here. (A deleted event unmounts the card instead - the row leaves
+      // the cache, which is the whole story.)
       setBusy(false);
     } catch (cause) {
       setBusy(false);
-      setError(
-        cause instanceof Error && cause.message
-          ? cause.message
-          : "Saving failed. Check that you're online and try again.",
-      );
+      setError(mutationErrorMessage(cause));
     }
   };
 
@@ -60,18 +58,7 @@ export default function EventCard({ event }: EventCardProps) {
       data-testid="event-card"
       className="relative flex flex-col gap-[10px] rounded-[18px] border border-line bg-white p-[22px] transition-shadow hover:shadow-[0_10px_30px_0_rgba(0,0,0,0.07)]"
     >
-      <div className="flex items-center gap-2">
-        <span
-          className={`rounded-full px-[10px] py-[3px] text-[11.5px] font-semibold ${EVENT_STATE_CHIP[event.state]}`}
-        >
-          {EVENT_STATE_LABEL[event.state]}
-        </span>
-        {event.mine && (
-          <span className="rounded-full bg-accent-soft px-[10px] py-[3px] text-[11.5px] font-semibold text-accent-pressed">
-            Your event
-          </span>
-        )}
-      </div>
+      <EventStateChips event={event} />
 
       <div className="flex min-w-0 flex-col gap-[3px]">
         <h3 className="truncate font-display text-[17px] font-bold tracking-[-0.34px] text-text-primary">

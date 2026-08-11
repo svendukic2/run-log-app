@@ -5,11 +5,11 @@ describe('app routes (RUN-13)', () => {
     expect(DEFAULT_APP_ROUTE).toBe(ROUTES.dashboard);
   });
 
-  it('lists exactly the four views that live behind the shell', () => {
+  it('lists exactly the views that live behind the shell, in sidebar order', () => {
     expect(APP_ROUTES).toEqual(['/dashboard', '/runs', '/coach', '/events', '/settings']);
   });
 
-  it('keeps onboarding outside the four shell routes (AC4)', () => {
+  it('keeps onboarding outside the shell routes (AC4)', () => {
     expect(APP_ROUTES).not.toContain(ROUTES.welcome);
     expect(APP_ROUTES).not.toContain(ROUTES.setupGoal);
   });
@@ -20,7 +20,7 @@ describe('isActiveRoute (RUN-13 AC3)', () => {
     expect(isActiveRoute(href, href)).toBe(true);
   });
 
-  it('marks only one of the four views active at a time', () => {
+  it('marks only one view active at a time', () => {
     const active = APP_ROUTES.filter((href) => isActiveRoute('/runs', href));
 
     expect(active).toEqual([ROUTES.runs]);

@@ -52,12 +52,12 @@ export interface EventListResponse {
   pageSize: number;
 }
 
-// What POST /events/:id/join answers: the state the call guaranteed, exactly
-// like FollowStateResponse - idempotency makes "did this request insert the
-// row" meaningless to the caller.
-export interface EventJoinStateResponse {
-  joined: boolean;
-}
+// Join and leave answer the full updated EventResponse rather than a
+// follow-style state stub (review fix): the card that clicked needs the
+// flipped flag AND the fresh participant count, and answering both here
+// replaces a second authenticated round-trip (a GET that could fail AFTER
+// the membership already changed, leaving the UI contradicting the server)
+// with one cheap read inside the same request.
 
 // AC3's lifecycle, on inclusive dates: the event is active on its start and
 // end days themselves. ISO day strings compare chronologically as strings.
@@ -183,13 +183,14 @@ export class EventsService {
     return this.toResponse(row, utcTodayIso(), userId);
   }
 
-  // AC2 + AC4: ensures the caller participates. Idempotent by way of the
-  // unique (eventId, userId) pair: the repeat POST hits P2002 and reports
-  // the same final state - aborting the transaction BEFORE the notification
-  // write, so the owner is notified exactly once per genuine join. The owner
-  // "joining" their own event lands on the same P2002 (they participate
-  // since creation) and notifies nobody.
-  async join(userId: string, eventId: string): Promise<EventJoinStateResponse> {
+  // AC2 + AC4: ensures the caller participates, then answers the updated
+  // event. Idempotent by way of the unique (eventId, userId) pair: the
+  // repeat POST hits P2002 and reports the same final state - aborting the
+  // transaction BEFORE the notification write, so the owner is notified
+  // exactly once per genuine join. The owner "joining" their own event
+  // lands on the same P2002 (they participate since creation) and notifies
+  // nobody.
+  async join(userId: string, eventId: string): Promise<EventResponse> {
     try {
       await this.prisma.$transaction(async (tx) => {
         // Read inside the transaction: the row's FK check on the insert
@@ -216,34 +217,40 @@ export class EventsService {
       });
     } catch (error) {
       if (isPrismaError(error, 'P2002')) {
-        // Already in: the state the caller asked for already holds.
-        return { joined: true };
-      }
-      if (isPrismaError(error, 'P2003')) {
+        // Already in: the state the caller asked for already holds; fall
+        // through to answering the current event.
+      } else if (isPrismaError(error, 'P2003')) {
         throw await this.mapJoinForeignKeyError(error, userId, eventId);
+      } else {
+        throw error;
       }
-      throw error;
     }
-    return { joined: true };
+    // One extra read in the same request. The window between the insert and
+    // this read is real but benign: a deletion in it turns the answer into
+    // the same 404 the caller would get a moment later anyway.
+    return this.findOne(userId, eventId);
   }
 
   // AC2: ensures the caller does not participate, except the owner, whose
   // membership is structural (AC1 made them the first participant) - leaving
   // would orphan the event's own creator, so that is a 400, not a no-op.
-  // Everything else is idempotent like unfollow: leaving an event you never
-  // joined, already left, or that never existed all land in the requested
-  // state and succeed silently.
-  async leave(userId: string, eventId: string): Promise<void> {
+  // Leaving an event never joined or already left is idempotent and answers
+  // the same updated event; an unknown event is a 404 (review fix: this was
+  // a silent 204, but with the response carrying the updated event there is
+  // nothing truthful to answer for a row that does not exist).
+  async leave(userId: string, eventId: string): Promise<EventResponse> {
     const event = await this.prisma.event.findUnique({
       where: { id: eventId },
       select: { ownerId: true },
     });
-    if (event?.ownerId === userId) {
+    if (!event) throw new NotFoundException(`Event ${eventId} not found`);
+    if (event.ownerId === userId) {
       throw new BadRequestException('The owner cannot leave their own event');
     }
     await this.prisma.eventParticipant.deleteMany({
       where: { eventId, userId },
     });
+    return this.findOne(userId, eventId);
   }
 
   // AC5: owner-scoped update. The read and the write both fold ownerId into

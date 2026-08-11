@@ -6,7 +6,7 @@
 // everything here); this module exists so server-side code CAN import the
 // pure parts safely if it ever needs them.
 
-import { formatDate, fromIsoDate, todayIso } from './runMath';
+import { formatDate, formatDateShort, todayIso } from './runMath';
 
 // The shared formatters event screens lean on, so components importing
 // from './events' need no second lib import for a number or a day.
@@ -100,6 +100,16 @@ export function compareEventsChronological(a: CommunityEvent, b: CommunityEvent)
   return a.startDate.localeCompare(b.startDate) || a.id.localeCompare(b.id);
 }
 
+// Collapses duplicate ids, last occurrence winning (the later page saw the
+// row later). The paginated walk needs this: offset pages are not one
+// snapshot, so a row created mid-walk can shift another row across a page
+// boundary and deliver it twice - which would reach React as a duplicate
+// key.
+export function dedupeEventsById(events: CommunityEvent[]): CommunityEvent[] {
+  const byId = new Map(events.map((event) => [event.id, event]));
+  return [...byId.values()];
+}
+
 // The page's grouping (AC1): every event lands in exactly one bucket, each
 // bucket keeping the API's chronological order.
 export function groupEventsByState(events: CommunityEvent[]): Record<EventState, CommunityEvent[]> {
@@ -112,22 +122,17 @@ export function groupEventsByState(events: CommunityEvent[]): Record<EventState,
   return groups;
 }
 
-const WINDOW_DAY_FORMATTER = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-});
-
 // The card's date window: "Aug 11 - Aug 18, 2026" (en dash in the UI), a
 // one-day event collapses to its single date, and a window across a year
-// boundary spells out both years. No timeZone on the formatters is
-// deliberate: fromIsoDate builds local-midnight dates, so formatting in the
-// local zone can never shift the day (the formatDateShort reasoning).
+// boundary spells out both years. The yearless side is runMath's
+// formatDateShort, so run screens and event windows cannot drift to
+// different date renderings.
 export function formatEventWindow(startDate: string, endDate: string): string {
   if (startDate === endDate) return formatDate(startDate);
   if (startDate.slice(0, 4) !== endDate.slice(0, 4)) {
     return `${formatDate(startDate)} – ${formatDate(endDate)}`;
   }
-  return `${WINDOW_DAY_FORMATTER.format(fromIsoDate(startDate))} – ${formatDate(endDate)}`;
+  return `${formatDateShort(startDate)} – ${formatDate(endDate)}`;
 }
 
 // "1 runner" / "3 runners": the card's participant caption. The owner is a

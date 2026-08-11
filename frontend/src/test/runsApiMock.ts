@@ -8,6 +8,7 @@
 // as they did when the store was localStorage.
 import { __resetRunsStoreForTests, type Run } from '@/lib/runs';
 import { __resetSessionForTests } from '@/lib/session';
+import { jsonResponse } from './apiMockShared';
 import { handleEventsRequest } from './eventsApiMock';
 
 let db: Run[] = [];
@@ -45,14 +46,6 @@ function mintToken(): string {
 // (and compareRunsNewestFirst on the client).
 function sorted(): Run[] {
   return [...db].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
-}
-
-function jsonResponse(status: number, body: unknown): Response {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    json: () => Promise.resolve(body),
-  } as Response;
 }
 
 function authorized(init: RequestInit): boolean {
