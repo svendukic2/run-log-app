@@ -118,7 +118,11 @@ The privacy toggles (`profilePublic`, `showOnLeaderboard`, `showRoutes`) arrive
 additively in RUN-64.
 
 **Ownership (RUN-57).** Every other entity in this document carries a required
-`userId` foreign key (cascade on user delete) and every endpoint except
+`userId` foreign key (cascade on user delete), with one structural exception:
+pure edge tables like `Follow` (RUN-61) relate two users, so they carry two user
+foreign keys (`followerId`, `followeeId`, both cascading) instead of a single
+`userId` - the scoping rule still holds in spirit, every query pins the caller
+to the relevant side of the edge. Every endpoint except
 `/api/auth/*` and `/api/hello` demands a `Authorization: Bearer <token>` header;
 queries are scoped `WHERE userId` server-side, and a foreign id answers 404, never
 403. Rows that existed before accounts were adopted by a **documented placeholder
@@ -142,9 +146,11 @@ UNIQUE at the schema level, which is what makes the follow endpoint idempotent.
 
 The API is `POST`/`DELETE /api/users/:id/follow` (idempotent both ways; following
 yourself is 400, following a nonexistent user 404) plus `GET /api/me/followers` and
-`GET /api/me/following`, paginated with `?page` (1-based) and `?pageSize` (default
-20, max 100). List items carry `{ id, firstName, lastName, followsYou, youFollow }`
-and the envelope carries `{ total, page, pageSize, counts: { followers, following } }`.
+`GET /api/me/following`, paginated with `?page` (1-based, max 100000) and `?pageSize`
+(default 20, max 100). An empty-but-present param (`?page=`) means "use the default";
+unknown query params are rejected like unknown body fields (the app-wide whitelist
+pipe). List items carry `{ id, firstName, lastName, followsYou, youFollow }` and the
+envelope carries `{ total, page, pageSize, counts: { followers, following } }`.
 
 ### Profile (one per user since RUN-57)
 

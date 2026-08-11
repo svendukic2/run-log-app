@@ -116,10 +116,13 @@ model Follow {
   follower   User     @relation("UserFollowing", fields: [followerId], references: [id], onDelete: Cascade)
   followee   User     @relation("UserFollowers", fields: [followeeId], references: [id], onDelete: Cascade)
 
-  // The unique pair doubles as the follower-side index (leftmost prefix);
-  // the followee side needs its own for the followers list and count.
+  // The unique pair enforces one edge per direction (what makes the follow
+  // endpoint idempotent). Each side also gets a composite index matching
+  // the list queries' full shape - filter on one side, ORDER BY (createdAt,
+  // id) - so paging never has to fetch and sort a user's entire edge set.
   @@unique([followerId, followeeId])
-  @@index([followeeId])
+  @@index([followerId, createdAt, id])
+  @@index([followeeId, createdAt, id])
 }
 
 // One row per generation (AIC-3..9). The newest row for the current week is

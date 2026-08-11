@@ -48,9 +48,13 @@ describe('FollowService', () => {
   };
 
   // What Prisma throws on constraint violations; the service duck-types on
-  // the code, so the mock only needs that shape.
-  function prismaError(code: string) {
-    return Object.assign(new Error(`prisma ${code}`), { code });
+  // the code and the optional meta.constraint, so the mock only needs that
+  // shape.
+  function prismaError(code: string, constraint?: string) {
+    return Object.assign(new Error(`prisma ${code}`), {
+      code,
+      ...(constraint && { meta: { constraint } }),
+    });
   }
 
   beforeEach(async () => {
@@ -88,25 +92,51 @@ describe('FollowService', () => {
       });
     });
 
-    it('404s a follow of a nonexistent user (P2003 with the target missing)', async () => {
-      prisma.follow.create.mockRejectedValue(prismaError('P2003'));
-      prisma.user.findUnique.mockResolvedValue(null);
+    it('404s a follow of a nonexistent user straight from the named followee constraint (P2003)', async () => {
+      prisma.follow.create.mockRejectedValue(
+        prismaError('P2003', 'Follow_followeeId_fkey'),
+      );
 
       await expect(service.follow(USER_ID, 'no-such-user')).rejects.toThrow(
         NotFoundException,
       );
+      // The constraint name told the whole story: no second query.
+      expect(prisma.user.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('answers 401 straight from the named follower constraint: the caller was deleted (P2003)', async () => {
+      prisma.follow.create.mockRejectedValue(
+        prismaError('P2003', 'Follow_followerId_fkey'),
+      );
+
+      await expect(service.follow('deleted-user', TARGET_ID)).rejects.toThrow(
+        UnauthorizedException,
+      );
+      expect(prisma.user.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('falls back to a caller-existence check when P2003 names no constraint: dead session wins', async () => {
+      prisma.follow.create.mockRejectedValue(prismaError('P2003'));
+      prisma.user.findUnique.mockResolvedValue(null);
+
+      await expect(service.follow('deleted-user', TARGET_ID)).rejects.toThrow(
+        UnauthorizedException,
+      );
+      // The CALLER is checked, not the target: a deleted caller gets 401
+      // even when the target id is also unknown - re-authenticating comes
+      // before fixing ids.
       expect(prisma.user.findUnique).toHaveBeenCalledWith({
-        where: { id: 'no-such-user' },
+        where: { id: 'deleted-user' },
         select: { id: true },
       });
     });
 
-    it('answers 401 when the target exists, so the broken key is the deleted caller (P2003)', async () => {
+    it('falls back to 404 when P2003 names no constraint and the caller still exists', async () => {
       prisma.follow.create.mockRejectedValue(prismaError('P2003'));
-      prisma.user.findUnique.mockResolvedValue({ id: TARGET_ID });
+      prisma.user.findUnique.mockResolvedValue({ id: USER_ID });
 
-      await expect(service.follow('deleted-user', TARGET_ID)).rejects.toThrow(
-        UnauthorizedException,
+      await expect(service.follow(USER_ID, 'no-such-user')).rejects.toThrow(
+        NotFoundException,
       );
     });
 
