@@ -7,7 +7,11 @@ import { Test } from '@nestjs/testing';
 import { addDaysIso, toDbDate, utcTodayIso } from '../common/dates';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { deriveEventState, EventsService } from './events.service';
+import {
+  deriveEventState,
+  EventsService,
+  rankByDistance,
+} from './events.service';
 
 // Freeze "today" for the whole suite: the fixture days below are computed
 // once at module load, but the service calls utcTodayIso() per request, so
@@ -79,11 +83,29 @@ describe('deriveEventState', () => {
   });
 });
 
+describe('rankByDistance (RUN-69 AC2)', () => {
+  it('shares a place between tied distances and skips the places they took', () => {
+    const ranks = rankByDistance([
+      { id: 'a', totalKm: 30, showOnLeaderboard: true },
+      { id: 'b', totalKm: 42, showOnLeaderboard: true },
+      { id: 'c', totalKm: 42, showOnLeaderboard: true },
+      { id: 'hidden', totalKm: 99, showOnLeaderboard: false },
+    ]);
+
+    expect([...ranks]).toEqual([
+      ['b', 1],
+      ['c', 1],
+      ['a', 3],
+    ]);
+  });
+});
+
 describe('EventsService', () => {
   let service: EventsService;
   const prisma: {
     event: Record<string, jest.Mock>;
     eventParticipant: Record<string, jest.Mock>;
+    run: Record<string, jest.Mock>;
     user: Record<string, jest.Mock>;
     $transaction: jest.Mock;
   } = {
@@ -99,6 +121,10 @@ describe('EventsService', () => {
     eventParticipant: {
       create: jest.fn(),
       deleteMany: jest.fn(),
+      findMany: jest.fn(),
+    },
+    run: {
+      groupBy: jest.fn(),
     },
     user: {
       findUnique: jest.fn(),
@@ -268,6 +294,96 @@ describe('EventsService', () => {
       await expect(service.findOne(USER_ID, 'nope')).rejects.toThrow(
         NotFoundException,
       );
+    });
+  });
+
+  describe('listParticipants (RUN-69)', () => {
+    // Three runners: two opted in (one of them the caller), one opted out.
+    function participant(id: string, showOnLeaderboard: boolean, day = 1) {
+      return {
+        createdAt: new Date(`2026-08-0${day}T09:00:00.000Z`),
+        user: { id, firstName: id, lastName: 'Tester', showOnLeaderboard },
+      };
+    }
+
+    function aggregate(userId: string, km: number, runs: number) {
+      return { userId, _sum: { distanceKm: km }, _count: { _all: runs } };
+    }
+
+    it('ranks the opted-in participants and withholds the opted-out runner’s numbers (AC2, AC3)', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        startDate: toDbDate(YESTERDAY),
+        endDate: toDbDate(TOMORROW),
+      });
+      prisma.eventParticipant.findMany.mockResolvedValue([
+        participant(USER_ID, true, 1),
+        participant('user-hidden', false, 2),
+        participant('user-ana', true, 3),
+      ]);
+      prisma.run.groupBy.mockResolvedValue([
+        aggregate(USER_ID, 12.5, 2),
+        // The hidden runner leads on distance and still must not rank,
+        // which is also what proves the ranks are not simply array order.
+        aggregate('user-hidden', 40, 5),
+        aggregate('user-ana', 20.25, 3),
+      ]);
+
+      const { items, total } = await service.listParticipants(
+        USER_ID,
+        'event-1',
+      );
+
+      expect(total).toBe(3);
+      // Join order is the list order (AC1); the ranks are global.
+      expect(items.map((row) => [row.id, row.rank])).toEqual([
+        [USER_ID, 2],
+        ['user-hidden', null],
+        ['user-ana', 1],
+      ]);
+      expect(items[0]).toMatchObject({ me: true, totalKm: 12.5, runCount: 2 });
+      // Opted out: no place and no numbers at all.
+      expect(items[1]).toMatchObject({
+        me: false,
+        totalKm: null,
+        runCount: null,
+      });
+
+      // The aggregation is one GROUP BY over these participants, bounded by
+      // the event's own inclusive window (AC6's contract; the e2e suite
+      // proves the boundary days against a real database).
+      expect(prisma.run.groupBy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          by: ['userId'],
+          where: {
+            userId: { in: [USER_ID, 'user-hidden', 'user-ana'] },
+            date: { gte: toDbDate(YESTERDAY), lte: toDbDate(TOMORROW) },
+          },
+        }),
+      );
+    });
+
+    it('gives a participant with no runs in the window a place with zero km', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        startDate: toDbDate(TODAY),
+        endDate: toDbDate(TOMORROW),
+      });
+      prisma.eventParticipant.findMany.mockResolvedValue([
+        participant(USER_ID, true),
+      ]);
+      prisma.run.groupBy.mockResolvedValue([]);
+
+      const { items } = await service.listParticipants(USER_ID, 'event-1');
+
+      expect(items[0]).toMatchObject({ rank: 1, totalKm: 0, runCount: 0 });
+    });
+
+    it('404s an unknown event without touching the aggregation', async () => {
+      prisma.event.findUnique.mockResolvedValue(null);
+
+      await expect(service.listParticipants(USER_ID, 'nope')).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(prisma.run.groupBy).not.toHaveBeenCalled();
     });
   });
 

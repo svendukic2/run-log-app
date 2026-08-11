@@ -8,15 +8,23 @@ import {
   __resetEventsStoreForTests,
   compareEventsChronological,
   type CommunityEvent,
+  type EventParticipant,
 } from '@/lib/events';
+import { __resetEventParticipantsForTests } from '@/lib/eventParticipants';
 import { todayIso } from '@/lib/runs';
 import { jsonResponse } from './apiMockShared';
 
 let db: CommunityEvent[] = [];
+// Participants per event id (RUN-69). Kept beside the events rather than
+// derived from them: the real endpoint ranks server-side, so a test that
+// seeds ranks is testing the rendering, which is the part that lives here.
+let participantDb = new Map<string, EventParticipant[]>();
 let idCounter = 0;
 // When set, matching /api/events requests fail with the given status
 // before reaching the in-memory backend (failEventsApi below).
 let failure: { method: string; status: number } | null = null;
+// Same idea, scoped to GET /api/events/:id/participants (RUN-69).
+let participantsFailure: number | null = null;
 // When true, GET /api/events answers are withheld until release: the
 // response BODY is captured at request time (like a real server whose
 // pages predate a concurrent write), so tests can prove what a load that
@@ -145,6 +153,23 @@ export function handleEventsRequest(
     }
   }
 
+  const participants = url.match(/^\/api\/events\/([^/]+)\/participants$/);
+  if (participants && method === 'GET') {
+    // Its own failure switch, not the shared `failure` above: that one
+    // keys on the method, and failing every GET would take the events list
+    // down with it - the detail page's whole point is that the two loads
+    // are independent.
+    if (participantsFailure !== null) {
+      return Promise.resolve(jsonResponse(participantsFailure, { message: 'Simulated failure' }));
+    }
+    const eventId = participants[1];
+    if (!db.some((row) => row.id === eventId)) {
+      return Promise.resolve(jsonResponse(404, { message: 'Not found' }));
+    }
+    const items = participantDb.get(eventId) ?? [];
+    return Promise.resolve(jsonResponse(200, { items, total: items.length }));
+  }
+
   const byId = url.match(/^\/api\/events\/([^/]+)$/);
   if (byId && method === 'GET') {
     const event = db.find((row) => row.id === byId[1]);
@@ -160,13 +185,42 @@ export function handleEventsRequest(
 // to ready-and-empty.
 export function installEventsApiMock(): void {
   db = [];
+  participantDb = new Map();
   idCounter = 0;
   failure = null;
+  participantsFailure = null;
   holdListLoading = false;
   heldListResolvers = [];
   holdCreate = false;
   heldCreateResolvers = [];
   __resetEventsStoreForTests([]);
+  __resetEventParticipantsForTests(null);
+}
+
+// Seeds one event's participants (RUN-69). Ranks are given, not derived:
+// the server computes them, and a mock that re-derived them would be
+// testing itself. Anything omitted gets the "opted in with no runs" shape;
+// pass rank: null for the runner who is off leaderboards.
+export function seedParticipants(
+  eventId: string,
+  drafts: Array<Partial<EventParticipant> & { firstName: string }>,
+): EventParticipant[] {
+  const items = drafts.map((draft, index) => {
+    const ranked = draft.rank !== null;
+    return {
+      id: `user-${draft.firstName.toLowerCase()}`,
+      lastName: 'Tester',
+      joinedAt: `2026-08-0${index + 1}T09:00:00.000Z`,
+      me: false,
+      rank: ranked ? index + 1 : null,
+      totalKm: ranked ? 0 : null,
+      runCount: ranked ? 0 : null,
+      ...draft,
+    } as EventParticipant;
+  });
+  participantDb.set(eventId, items);
+  __resetEventParticipantsForTests(eventId, items);
+  return items;
 }
 
 // Seeds the in-memory backend AND primes the store cache. The dates
@@ -246,4 +300,15 @@ export function releaseEventsCreate(): void {
 export function makeEventsLoadFail(status = 500): void {
   failEventsApi('GET', status);
   __resetEventsStoreForTests(null);
+}
+
+// The same for the participants endpoint (RUN-69): re-arms that store
+// against a failing read, so the detail page's own error card renders.
+export function makeParticipantsLoadFail(status = 500): void {
+  participantsFailure = status;
+  __resetEventParticipantsForTests(null);
+}
+
+export function restoreParticipantsApi(): void {
+  participantsFailure = null;
 }

@@ -18,6 +18,7 @@ import { UpdateEventDto } from './dto/update-event.dto';
 import {
   EventsService,
   type EventListResponse,
+  type EventParticipantListResponse,
   type EventResponse,
 } from './events.service';
 
@@ -25,6 +26,7 @@ import {
 //   POST   /api/events           create (caller becomes owner + participant)
 //   GET    /api/events           list, paginated, ?state= filterable
 //   GET    /api/events/:id       one event
+//   GET    /api/events/:id/participants  members + their event standings
 //   POST   /api/events/:id/join  join (idempotent, notifies the owner)
 //   DELETE /api/events/:id/join  leave (idempotent; owner cannot)
 //   PATCH  /api/events/:id       owner-only update
@@ -56,6 +58,19 @@ export class EventsController {
     @Param('id') id: string,
   ): Promise<EventResponse> {
     return this.events.findOne(user.id, id);
+  }
+
+  // The detail page's one read for both of its lists (RUN-69): the members,
+  // and for those on leaderboards their ranked distance inside the event
+  // window. Sits next to findOne because it reads the same event; the
+  // ':id' route above cannot swallow it, since a path parameter matches one
+  // segment.
+  @Get(':id/participants')
+  listParticipants(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ): Promise<EventParticipantListResponse> {
+    return this.events.listParticipants(user.id, id);
   }
 
   // 200 rather than 201: this is "ensure I am in", and the repeat call

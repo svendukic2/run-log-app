@@ -21,6 +21,13 @@ export const APP_ROUTES = [
   ROUTES.settings,
 ] as const;
 
+// One runner's public profile (RUN-63 builds the page; RUN-69's
+// participant and leaderboard rows are its first callers). Not in
+// APP_ROUTES: it is reached from a row, never from the sidebar.
+export function personRoute(id: string): string {
+  return `/people/${id}`;
+}
+
 // Dashboard is the default view inside the shell (RUN-13 AC1).
 export const DEFAULT_APP_ROUTE = ROUTES.dashboard;
 
