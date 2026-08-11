@@ -189,6 +189,29 @@ describe('Follow API (e2e)', () => {
       .get('/api/me/following?page=abc')
       .set(ana.auth)
       .expect(400);
+    // An astronomical page passes @IsInt (1e20 is an "integer" to JS) but
+    // not @Max: bounded input stays a 400 instead of overflowing Prisma's
+    // skip into a 500.
+    await request(app.getHttpServer())
+      .get('/api/me/following?page=99999999999999999999')
+      .set(ana.auth)
+      .expect(400);
+    // Unknown query params are rejected by the app-wide whitelist pipe,
+    // the same contract as unknown body fields (the DTOs are the contract).
+    await request(app.getHttpServer())
+      .get('/api/me/following?utm_source=email')
+      .set(ana.auth)
+      .expect(400);
+  });
+
+  it('treats empty-but-present pagination params as unset, not zero', async () => {
+    // ?page= parses as '' and Number('') is 0; the DTO maps empty to
+    // undefined so the defaults apply instead of a @Min(1) rejection.
+    const response = (await followingOf(ana, '?page=&pageSize='))
+      .body as FollowListResponse;
+    expect(response.page).toBe(1);
+    expect(response.pageSize).toBe(20);
+    expect(response.total).toBe(2);
   });
 
   it('removes the row on unfollow and repeating it is harmless (AC2)', async () => {
