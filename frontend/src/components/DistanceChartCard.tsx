@@ -7,6 +7,7 @@ import {
   lastDays,
   roundKm,
   useRuns,
+  type Run,
 } from '@/lib/runs';
 import { useToday } from '@/lib/useToday';
 
@@ -15,10 +16,23 @@ const DAY_COUNT = 14;
 // The "Distance" card (RUN-19, redesigned): distance per day over the last 14
 // days as a bar chart, with today highlighted. No labels under the bars; each
 // bar's date and distance appear in a tooltip on hover instead. Bars derive
-// from the runs store, so a run saved on a past day moves that day's bar, not
-// today's.
-export default function DistanceChartCard() {
+// from the runs it is given, so a run saved on a past day moves that day's
+// bar, not today's.
+//
+// `runs` omitted means the signed-in user's own store (the dashboard);
+// given means someone else's public profile (RUN-63), which has no store
+// and no AppDataBoundary to read one through. Split into two components
+// because hooks cannot be called conditionally.
+export default function DistanceChartCard({ runs }: { runs?: Run[] }) {
+  return runs ? <Chart runs={runs} /> : <OwnChart />;
+}
+
+function OwnChart() {
   const runs = useRuns();
+  return <Chart runs={runs} />;
+}
+
+function Chart({ runs }: { runs: Run[] }) {
   const today = useToday();
 
   const days = lastDays(today, DAY_COUNT).map((date) => ({

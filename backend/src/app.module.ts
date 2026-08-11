@@ -17,6 +17,7 @@ import { PrivacyModule } from './privacy/privacy.module';
 import { ProfileModule } from './profile/profile.module';
 import { RoutesModule } from './routes/routes.module';
 import { RunsModule } from './runs/runs.module';
+import { UsersModule } from './users/users.module';
 import { WeekTargetsModule } from './week-targets/week-targets.module';
 
 @Module({
@@ -37,6 +38,7 @@ import { WeekTargetsModule } from './week-targets/week-targets.module';
     LeaderboardModule,
     FollowModule,
     AccountModule,
+    UsersModule,
     ProfileModule,
     PrivacyModule,
     GoalModule,

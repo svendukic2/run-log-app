@@ -23,6 +23,7 @@ import { jsonResponse } from './apiMockShared';
 import { handleEventsRequest } from './eventsApiMock';
 import { handleLeaderboardRequest } from './leaderboardApiMock';
 import { handleNotificationsRequest } from './notificationsApiMock';
+import { handleUsersRequest } from './usersApiMock';
 
 let db: Run[] = [];
 let idCounter = 0;
@@ -325,6 +326,17 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
       return Promise.resolve(jsonResponse(401, { message: 'Missing bearer token' }));
     }
     const handled = handleLeaderboardRequest(url, method);
+    if (handled) return handled;
+  }
+
+  // The users API (RUN-63's public profile read and the RUN-61 follow verbs
+  // its header calls): same arrangement again, one fetch mock and one
+  // Bearer handshake for every store.
+  if (url.startsWith('/api/users')) {
+    if (!authorized(init)) {
+      return Promise.resolve(jsonResponse(401, { message: 'Missing bearer token' }));
+    }
+    const handled = handleUsersRequest(url, method);
     if (handled) return handled;
   }
 

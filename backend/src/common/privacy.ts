@@ -43,9 +43,39 @@ export function appearsOnLeaderboard(
   return settings.showOnLeaderboard;
 }
 
-// profilePublic and showRoutes deliberately have no gating helper yet:
-// their only reader is RUN-63's public profile page, which does not exist
-// (the /people/:id route is still a placeholder). A helper written now
-// would be a guess at a call site nobody has, and an unused gate is worse
-// than no gate - it reads as protection that is actually never applied.
-// Storing and serving the flags is this ticket's half of that contract.
+// The other half of the contract RUN-64 left open: RUN-63's public profile
+// page is now the reader of profilePublic and showRoutes, so their gates
+// exist and are applied.
+//
+// Both take the VIEWER's id and the profile OWNER's id, because the owner
+// override is a viewer check, not a settings check: your own profile is
+// always fully visible to you, whatever the toggles say. Passing ids rather
+// than a boolean keeps the comparison itself in one place, so no call site
+// can get "is this me" subtly wrong.
+
+// Whether this account's body - records, weekly distance and runs - may be
+// served to this viewer. False means the response OMITS them: the header and
+// the follow button still render (a private profile is a normal 200, never a
+// 403, which would confirm the account exists to anyone probing ids), but
+// nothing below it is sent for a client to un-hide.
+export function canViewProfile(
+  settings: Pick<PrivacySettings, 'profilePublic'>,
+  viewerId: string,
+  ownerId: string,
+): boolean {
+  return viewerId === ownerId || settings.profilePublic;
+}
+
+// Whether this account's route maps may be shown to this viewer. Strictly
+// narrower than canViewProfile: a public profile with showRoutes off serves
+// its runs without their routes, so the grant is the AND of the two. Route
+// maps themselves are RUN-72 and render nothing yet; the gate exists now so
+// the payload never carried route data in the meantime.
+export function canViewRoutes(
+  settings: Pick<PrivacySettings, 'profilePublic' | 'showRoutes'>,
+  viewerId: string,
+  ownerId: string,
+): boolean {
+  if (viewerId === ownerId) return true;
+  return canViewProfile(settings, viewerId, ownerId) && settings.showRoutes;
+}

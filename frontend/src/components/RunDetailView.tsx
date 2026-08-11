@@ -17,8 +17,10 @@ import {
 import { useHydrated } from '@/lib/useHydrated';
 
 // A decorative route sketch with a start and an end dot, explicitly not a map
-// (DET-4): no coordinates exist to draw one from.
-function RouteSketch() {
+// (DET-4): no coordinates exist to draw one from. Exported since RUN-63 so
+// the read-only detail on a public profile draws the same Route card
+// instead of a second copy of it.
+export function RouteSketch() {
   return (
     <svg
       viewBox="0 0 680 260"
@@ -48,9 +50,9 @@ function RouteSketch() {
   );
 }
 
-const CARD = 'rounded-[18px] border border-line bg-white';
+export const CARD = 'rounded-[18px] border border-line bg-white';
 
-function StatCard({ label, value }: { label: string; value: React.ReactNode }) {
+export function StatCard({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className={`${CARD} flex flex-col gap-[8px] px-[24px] py-[22px]`}>
       <span className="text-[11px] font-medium tracking-[0.66px] text-tertiary uppercase">

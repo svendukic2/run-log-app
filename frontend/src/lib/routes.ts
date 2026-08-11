@@ -35,6 +35,14 @@ export function personRoute(id: string): string {
   return `/people/${id}`;
 }
 
+// One run on someone's public profile, read only (RUN-63 AC4). Nested under
+// the profile rather than reusing /runs/:id because the run is only
+// readable through the profile that owns it: the same privacy gate decides
+// both, and a flat route would invite reading a foreign run without one.
+export function personRunRoute(personId: string, runId: string): string {
+  return `${personRoute(personId)}/runs/${runId}`;
+}
+
 // Dashboard is the default view inside the shell (RUN-13 AC1).
 export const DEFAULT_APP_ROUTE = ROUTES.dashboard;
 
