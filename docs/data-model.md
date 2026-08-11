@@ -153,6 +153,39 @@ unknown query params are rejected like unknown body fields (the app-wide whiteli
 pipe). List items carry `{ id, firstName, lastName, followsYou, youFollow }` and the
 envelope carries `{ total, page, pageSize, counts: { followers, following } }`.
 
+### Notification (one per delivered notification, RUN-65)
+
+The bell's storage. Rows are only ever created by the social actions that cause
+them, inside those actions' transactions - a follow and its notification (or a
+run and its fan-out) commit together or not at all, which is what makes "exactly
+one notification per action" hold under retries.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| userId | string FK -> User | The recipient (whose bell it lands in); cascades on user delete |
+| type | string | `new-follower` \| `followed-ran` \| `event-joined` (the last is contract-only until events land in C2) |
+| payload | json | Self-contained snapshot taken at write time, see below |
+| readAt | timestamp, nullable | null = unread; set once by mark-read, never moved |
+| createdAt | timestamp | Orders the bell, newest first |
+
+The payload is deliberately **self-contained**: the actor's id and name (and for
+`followed-ran` the run's id and headline stats: routeName, distanceKm,
+durationSeconds, date) are copied in when the notification is written, never
+joined at read time. A later unfollow, account deletion or run delete therefore
+cannot break rendering a notification that already landed. The cost is accepted
+staleness: a renamed actor keeps their old name in old notifications.
+
+Fan-out is batched per run: one query for the follower ids, then `createMany` in
+bounded chunks - never a query or insert per follower.
+
+The API is `GET /api/me/notifications` (newest first, same pagination contract as
+the follow lists, envelope `{ items, total, page, pageSize, unreadCount }`), plus
+`POST /api/me/notifications/:id/read` and `POST /api/me/notifications/read-all`.
+Both mark-read calls are idempotent; a repeat changes nothing and answers like
+the first. Items carry `{ id, type, payload, readAt, createdAt }` with ISO
+instant timestamps (the bell renders "2h ago", so these are the app's one
+deliberate exception to the calendar-day rule).
+
 ### Profile (one per user since RUN-57)
 
 | Field | Type | Notes |

@@ -87,19 +87,20 @@ model Run {
 // privacy toggles (profilePublic, showOnLeaderboard, showRoutes) arrive
 // additively in RUN-64.
 model User {
-  id           String       @id @default(cuid())
-  email        String       @unique
-  passwordHash String
-  firstName    String
-  lastName     String
-  createdAt    DateTime     @default(now())
-  profile      Profile?
-  goal         Goal?
-  weekTargets  WeekTarget[]
-  runs         Run[]
-  coachPlans   CoachPlan[]
-  following    Follow[]     @relation("UserFollowing")
-  followers    Follow[]     @relation("UserFollowers")
+  id            String         @id @default(cuid())
+  email         String         @unique
+  passwordHash  String
+  firstName     String
+  lastName      String
+  createdAt     DateTime       @default(now())
+  profile       Profile?
+  goal          Goal?
+  weekTargets   WeekTarget[]
+  runs          Run[]
+  coachPlans    CoachPlan[]
+  following     Follow[]       @relation("UserFollowing")
+  followers     Follow[]       @relation("UserFollowers")
+  notifications Notification[]
 }
 
 // One row per follow edge (RUN-61): follower -> followee, one-directional
@@ -123,6 +124,29 @@ model Follow {
   @@unique([followerId, followeeId])
   @@index([followerId, createdAt, id])
   @@index([followeeId, createdAt, id])
+}
+
+// One row per delivered notification (RUN-65), owned by the user whose bell
+// it lands in. type is one of new-follower | followed-ran | event-joined
+// (NOTIFICATION_TYPES in notifications.service.ts; event-joined is defined
+// now and starts being written when events land in C2). payload is a
+// self-contained snapshot of everything rendering needs - actor name, run
+// stats - copied at write time, so a later unfollow or run delete can never
+// break the list (AC4). readAt null = unread; set once by mark-read.
+model Notification {
+  id        String    @id @default(cuid())
+  type      String // new-follower | followed-ran | event-joined
+  payload   Json
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // The list query's full shape: filter by owner, ORDER BY (createdAt, id)
+  // newest first - same reasoning as the Follow list indexes. The unread
+  // count filters on (userId, readAt), covered by its own index.
+  @@index([userId, createdAt, id])
+  @@index([userId, readAt])
 }
 
 // One row per generation (AIC-3..9). The newest row for the current week is
