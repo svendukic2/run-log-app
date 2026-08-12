@@ -125,6 +125,13 @@ model User {
   profilePublic       Boolean            @default(false)
   showOnLeaderboard   Boolean            @default(false)
   showRoutes          Boolean            @default(false)
+  // Bumped by POST /api/auth/logout to end every session this account has
+  // (RUN-74). Read only by the refresh endpoint, never by the request
+  // guard. The default of 0 is load-bearing: a pre-RUN-74 token carries no
+  // version claim, that absence reads as 0, and 0 is what this migration
+  // gives every row that already existed - which is what stops the deploy
+  // from signing out real users. See src/auth/token-lifecycle.ts.
+  tokenVersion        Int                @default(0)
   createdAt           DateTime           @default(now())
   profile             Profile?
   goal                Goal?

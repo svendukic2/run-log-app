@@ -10,6 +10,13 @@ import { PrismaService } from '../prisma/prisma.service';
 import type { User as UserRow } from '../generated/prisma/client';
 import { LoginDto } from './dto/login.dto';
 import { SignupDto } from './dto/signup.dto';
+import {
+  claimedTokenVersion,
+  sessionStartedAt,
+  REFRESH_IDLE_WINDOW_SECONDS,
+  SESSION_ABSOLUTE_MAX_SECONDS,
+  type AccessTokenClaims,
+} from './token-lifecycle';
 
 // What the API says about a user: exactly these four fields and nothing
 // else. passwordHash never leaves this service in any shape (AC4), and
@@ -34,6 +41,18 @@ export const BCRYPT_ROUNDS = 12;
 // message (or a different status) for "no such account" would let anyone
 // enumerate registered emails.
 export const INVALID_CREDENTIALS_MESSAGE = 'Invalid email or password';
+
+// The single answer for every way a refresh can be refused: expired beyond
+// the idle window, past the absolute ceiling, revoked by a logout, signed
+// with the wrong key, or naming a user who no longer exists. The caller's
+// fix is the same in all five cases (sign in again), and a more specific
+// message would only help someone probing which of our windows they are
+// outside of.
+export const SESSION_ENDED_MESSAGE = 'Session ended. Sign in again.';
+
+function nowInSeconds(): number {
+  return Math.floor(Date.now() / 1000);
+}
 
 // P2002 = unique constraint violation (see ../prisma/prisma-errors.ts).
 function isUniqueViolation(error: unknown): boolean {
@@ -64,10 +83,22 @@ export class AuthService {
     private readonly jwt: JwtService,
   ) {}
 
-  private async toAuthResponse(row: UserRow): Promise<AuthResponse> {
+  // Signup and login both start a NEW session, so the session clock starts
+  // now. Refresh is the one caller that passes a start time forward.
+  private async toAuthResponse(
+    row: UserRow,
+    startedAt: number = nowInSeconds(),
+  ): Promise<AuthResponse> {
     // The user id as the subject claim (AC3); email rides along so a future
     // guard can show who a token belongs to without a database roundtrip.
-    const token = await this.jwt.signAsync({ sub: row.id, email: row.email });
+    // `ver` and `sst` are RUN-74: see token-lifecycle.ts for what each one
+    // bounds. `iat` and `exp` are the library's, so they are not set here.
+    const token = await this.jwt.signAsync({
+      sub: row.id,
+      email: row.email,
+      ver: row.tokenVersion,
+      sst: startedAt,
+    });
     return {
       token,
       user: {
@@ -134,5 +165,105 @@ export class AuthService {
     }
 
     return this.toAuthResponse(row);
+  }
+
+  // Verifies a token that is allowed to be expired, WITHOUT applying any of
+  // the lifecycle rules. Shared by refresh and logout so there is one
+  // spelling of "is this really one of ours"; each caller then decides what
+  // an unusable token means for it (refresh throws, logout shrugs).
+  private async verifyIgnoringExpiry(
+    rawToken: string | null,
+  ): Promise<AccessTokenClaims | null> {
+    if (!rawToken) return null;
+    let claims: AccessTokenClaims;
+    try {
+      // The signature and the shape are both still enforced; only `exp` is
+      // waived, because renewing an expired token is the entire point of the
+      // endpoint. (The module configures no issuer or audience, so there is
+      // nothing else being checked here - do not read more into it.)
+      claims = await this.jwt.verifyAsync<AccessTokenClaims>(rawToken, {
+        ignoreExpiration: true,
+      });
+    } catch {
+      return null;
+    }
+    if (typeof claims.sub !== 'string' || claims.sub.length === 0) return null;
+    return claims;
+  }
+
+  // POST /api/auth/refresh (RUN-74). Trades a valid-or-recently-expired
+  // access token for a fresh one. Every rule it applies, and every threat it
+  // knowingly leaves open, is documented in token-lifecycle.ts.
+  async refresh(rawToken: string | null): Promise<AuthResponse> {
+    const claims = await this.verifyIgnoringExpiry(rawToken);
+    if (!claims) throw new UnauthorizedException(SESSION_ENDED_MESSAGE);
+
+    const now = nowInSeconds();
+
+    // Idle window, measured from when THIS token was issued. Every refresh
+    // mints a token with a fresh `iat`, so an active session keeps sliding
+    // and an abandoned one runs out.
+    const issuedAt = typeof claims.iat === 'number' ? claims.iat : null;
+    if (issuedAt === null || now - issuedAt > REFRESH_IDLE_WINDOW_SECONDS) {
+      throw new UnauthorizedException(SESSION_ENDED_MESSAGE);
+    }
+
+    // Absolute ceiling, measured from when the SESSION started. `sst` is
+    // copied forward unchanged below, which is what stops sliding from
+    // outrunning this. A pre-RUN-74 token has no `sst` and falls back to its
+    // own `iat`.
+    const startedAt = sessionStartedAt(claims);
+    if (startedAt === null || now - startedAt > SESSION_ABSOLUTE_MAX_SECONDS) {
+      throw new UnauthorizedException(SESSION_ENDED_MESSAGE);
+    }
+
+    const row = await this.prisma.user.findUnique({
+      where: { id: claims.sub as string },
+    });
+    // A deleted account, or a token from a database that no longer exists.
+    if (!row) throw new UnauthorizedException(SESSION_ENDED_MESSAGE);
+
+    // Revocation. A missing claim reads as 0, which is what the migration
+    // gave every pre-existing row, so tokens live in real browsers today
+    // pass this check rather than being logged out by the deploy.
+    if (claimedTokenVersion(claims) !== row.tokenVersion) {
+      throw new UnauthorizedException(SESSION_ENDED_MESSAGE);
+    }
+
+    return this.toAuthResponse(row, startedAt);
+  }
+
+  // POST /api/auth/logout (RUN-74). Ends every session this account has by
+  // bumping the version each outstanding token was minted against.
+  //
+  // It answers 204 for ANY token - none, garbage, expired, one naming a
+  // deleted user - and that is deliberate. Signing out is the one action
+  // that must never fail because of the credential being surrendered, and
+  // the client clears its own session regardless, so a 401 here would be a
+  // broken button reporting an outcome the user already got. It also cannot
+  // be used to probe: valid and invalid tokens answer identically.
+  //
+  // A DATABASE failure is still a 500, not a silent 204. "Cannot fail" means
+  // "cannot fail on the token", not "swallows everything".
+  //
+  // Expiry is ignored for the same reason. A user who left a tab open
+  // overnight and then clicks Sign out holds an expired token, and that is
+  // exactly the session most worth revoking.
+  async logout(rawToken: string | null): Promise<void> {
+    const claims = await this.verifyIgnoringExpiry(rawToken);
+    if (!claims) return;
+
+    try {
+      await this.prisma.user.update({
+        where: { id: claims.sub as string },
+        data: { tokenVersion: { increment: 1 } },
+      });
+    } catch (error) {
+      // P2025 = the user is already gone, so every token naming them is
+      // already dead. Anything else is a real database failure and must not
+      // be swallowed into a false 204.
+      if (isPrismaError(error, 'P2025')) return;
+      throw error;
+    }
   }
 }

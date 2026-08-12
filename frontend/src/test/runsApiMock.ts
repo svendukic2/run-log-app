@@ -36,6 +36,15 @@ let db: Run[] = [];
 let idCounter = 0;
 let tokenCounter = 0;
 let validTokens = new Set<string>();
+
+// Tokens POST /api/auth/refresh will still renew (RUN-74). A token normally
+// leaves `validTokens` (the guard rejects it) long before it leaves this
+// set, which is exactly the state the renewal path exists for; a token in
+// neither set is a session that is over.
+let refreshableTokens = new Set<string>();
+// When set, POST /api/auth/refresh answers with this status instead of
+// renewing (failRunsRefresh below).
+let refreshFailure: number | null = null;
 // When set, matching requests fail with the given status before reaching
 // the in-memory backend (failRunsApi below).
 let failure: { method: string; status: number } | null = null;
@@ -79,7 +88,11 @@ const ROUTE_PLAN_SOURCE = 'openrouteservice';
 // What POST /api/routes/plan answers with, and every point list it was asked
 // about (in order), so a test can assert the start/waypoints/finish split the
 // endpoint's request shape needs.
-let routePlanResult = { polyline: 'wap_IsyspAsFgc@cG{h@qFe{A', distanceKm: 5.1, durationSeconds: 3800 };
+let routePlanResult = {
+  polyline: 'wap_IsyspAsFgc@cG{h@qFe{A',
+  distanceKm: 5.1,
+  durationSeconds: 3800,
+};
 let routePlanRequests: RouteWaypoint[][] = [];
 let routePlanFailure: { status: number; code: string; message: string } | null = null;
 // When set, plan requests wait on this before answering (holdRoutePlan below).
@@ -124,6 +137,7 @@ function mintToken(): string {
   tokenCounter += 1;
   const token = `test-token-${tokenCounter}`;
   validTokens.add(token);
+  refreshableTokens.add(token);
   return token;
 }
 
@@ -150,6 +164,47 @@ function authorized(init: RequestInit): boolean {
 function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
   const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
   const method = (init.method ?? 'GET').toUpperCase();
+
+  // Silent renewal (RUN-74). Mirrors the real endpoint's contract: the
+  // presented token is allowed to be expired, an unrenewable one is a flat
+  // 401, and success returns the same { token, user } body login does.
+  if (url === '/api/auth/refresh') {
+    // A backend that is up but unwell (failRunsRefresh below). Distinct from
+    // a 401 on purpose: the session layer must not sign anyone out for it.
+    if (refreshFailure !== null) {
+      return Promise.resolve(jsonResponse(refreshFailure, { message: 'Server error' }));
+    }
+    const presented = (
+      (init.headers as Record<string, string> | undefined)?.Authorization ?? ''
+    ).replace(/^Bearer /, '');
+    if (!refreshableTokens.has(presented)) {
+      return Promise.resolve(jsonResponse(401, { message: 'Session ended. Sign in again.' }));
+    }
+    // Rotation: the presented token is spent, so a second renewal with it
+    // fails exactly as it would against the real backend.
+    refreshableTokens.delete(presented);
+    validTokens.delete(presented);
+    return Promise.resolve(
+      jsonResponse(200, {
+        token: mintToken(),
+        user: {
+          id: 'user-test',
+          email: 'test@example.com',
+          firstName: 'Test',
+          lastName: 'Runner',
+        },
+      }),
+    );
+  }
+
+  // Server-side sign-out (RUN-74): 204 to anything, and every token this
+  // mock ever issued stops working - the real endpoint bumps a per-account
+  // version, which has the same effect for a single-account test world.
+  if (url === '/api/auth/logout') {
+    validTokens.clear();
+    refreshableTokens.clear();
+    return Promise.resolve(jsonResponse(204, null));
+  }
 
   if (url === '/api/auth/login' || url === '/api/auth/signup') {
     // CONTRACT (RUN-56, load-bearing for RUN-50): signup creates a User row
@@ -475,6 +530,8 @@ export function installRunsApiMock(): void {
   idCounter = 0;
   tokenCounter = 0;
   validTokens = new Set();
+  refreshableTokens = new Set();
+  refreshFailure = null;
   failure = null;
   rejectedNames = new Set();
   authBroken = false;
@@ -493,7 +550,11 @@ export function installRunsApiMock(): void {
   weekTargetPutFailure = null;
   privacyDb = { ...PRIVACY_DEFAULTS };
   privacyPutFailure = null;
-  routePlanResult = { polyline: 'wap_IsyspAsFgc@cG{h@qFe{A', distanceKm: 5.1, durationSeconds: 3800 };
+  routePlanResult = {
+    polyline: 'wap_IsyspAsFgc@cG{h@qFe{A',
+    distanceKm: 5.1,
+    durationSeconds: 3800,
+  };
   routePlanRequests = [];
   routePlanFailure = null;
   routePlanGate = null;
@@ -565,10 +626,27 @@ export function clearTestSession(): void {
   }
 }
 
-// Invalidates every token issued so far: the next guarded request 401s and
-// the session layer signs out (there is no refresh endpoint, RUN-74).
+// Ends every session issued so far, renewal included: the next guarded
+// request 401s, the renewal attempt 401s too, and the session layer signs
+// out (RUN-58 AC6, still the contract after RUN-74). This is the helper for
+// asserting the sign-out path.
 export function expireRunsTokens(): void {
   validTokens.clear();
+  refreshableTokens.clear();
+}
+
+// The everyday case instead: the access token is too old for the guard but
+// the session is still alive, so the next guarded request 401s once and the
+// session layer renews and replays it. Nothing visible should happen.
+export function expireRunsAccessTokens(): void {
+  validTokens.clear();
+}
+
+// A renewal that cannot complete because the SERVER is unwell - mid-deploy
+// 502, a 500, anything that is not a 401. The session is still perfectly
+// good and the session layer must not end it (RUN-74).
+export function failRunsRefresh(status = 500): void {
+  refreshFailure = status;
 }
 
 // How many times an expired/missing session made the session layer redirect

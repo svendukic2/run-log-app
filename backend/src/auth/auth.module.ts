@@ -4,6 +4,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { PrismaModule } from '../prisma/prisma.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { ACCESS_TOKEN_TTL_SECONDS } from './token-lifecycle';
 
 // Feature module for accounts (RUN-56): signup and login issuing JWTs.
 // PrismaModule is imported explicitly on purpose - see prisma.module.ts.
@@ -31,10 +32,12 @@ import { AuthService } from './auth.service';
         }
         return {
           secret,
-          // Seven days: long enough that the demo never logs anyone out
-          // mid-sprint-review, short enough that a leaked token expires.
-          // Refresh tokens are deliberately out of scope for RUN-56.
-          signOptions: { expiresIn: '7d' },
+          // Fifteen minutes since RUN-74, down from seven days. That is only
+          // survivable because POST /api/auth/refresh now renews silently;
+          // the reasoning, and the two windows that bound the renewing, live
+          // in token-lifecycle.ts. Tokens signed before this change keep
+          // their seven day expiry and keep working until it arrives.
+          signOptions: { expiresIn: ACCESS_TOKEN_TTL_SECONDS },
         };
       },
     }),
