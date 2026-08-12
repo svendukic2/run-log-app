@@ -25,7 +25,10 @@ export function StatCard({ label, value }: { label: string; value: React.ReactNo
 }
 
 // A decorative route sketch with a start and an end dot, explicitly not a map
-// (DET-4): no coordinates exist to draw one from. Real route maps are RUN-72.
+// (DET-4). Still the right thing to draw for a run with NO route, which is
+// most of them: since RUN-55 a run that does have one gets a real map instead
+// (RouteCard chooses), and this stands in wherever there are no coordinates to
+// draw from.
 export function RouteSketch() {
   return (
     <svg

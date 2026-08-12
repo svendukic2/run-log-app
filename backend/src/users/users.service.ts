@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { resolvePagination } from '../common/pagination-query.dto';
-import { canViewProfile, canViewRoutes } from '../common/privacy';
+import { canViewProfile, routeVisibility } from '../common/privacy';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   runsNewestFirstOrder,
@@ -40,7 +40,10 @@ export interface PublicProfileResponse {
   // Whether route maps may be rendered for these runs. Since RUN-54 there is
   // real route data behind this, so it is BOTH a permission and a promise
   // about the payload: when it is false, every run below arrives with
-  // `route: null` regardless of what is stored.
+  // `route: null` regardless of what is stored. When it is true and the
+  // viewer is not the owner, the routes that DO arrive are trimmed - each
+  // one says so on itself (`route.trimmed`), because a route short enough to
+  // vanish under the trim still arrives as null on an otherwise routed run.
   showRoutes: boolean;
   runs: RunResponse[] | null;
 }
@@ -164,7 +167,10 @@ export class UsersService {
     // Computed once and used twice on purpose: the flag the page reads and
     // the gate the payload is built with have to be the same answer, or the
     // profile would advertise routes it did not send (or worse, the reverse).
-    const withRoute = canViewRoutes(user, viewerId, id);
+    // 'trimmed' is what a granted stranger gets since RUN-55 - the route
+    // without its first and last ~300 m, so a shared run does not carry the
+    // runner's front door with it.
+    const visibility = routeVisibility(user, viewerId, id);
 
     return {
       id,
@@ -176,15 +182,18 @@ export class UsersService {
       following: edge !== null,
       counts: { followers, following },
       visible,
-      showRoutes: withRoute,
+      showRoutes: visibility !== 'hidden',
       // Routes are private by default (RUN-64), so they are dropped from the
       // payload rather than hidden by the client: data the viewer may not see
       // must not be in the response for a devtools tab to un-hide (RUN-54,
-      // extending the rule RUN-63 already applies to the whole body).
+      // extending the rule RUN-63 already applies to the whole body). RUN-55
+      // applies the same rule to the ENDS of a granted route.
       runs:
         runs === null
           ? null
-          : runs.map((row) => toRunResponse(row, { withRoute })),
+          : runs.map((row) =>
+              toRunResponse(row, { routeVisibility: visibility }),
+            ),
     };
   }
 

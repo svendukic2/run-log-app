@@ -100,10 +100,17 @@ function routeRejection(route: RunDraft['route']): Response | null {
 }
 
 // What the server stores and echoes for a submitted route: the two accepted
-// fields plus its own source.
+// fields plus its own source. Never trimmed: /api/runs only ever serves the
+// caller their OWN runs, and the ~300 m trim is for strangers (RUN-55 AC3).
+// Somebody else's trimmed route comes from usersApiMock instead.
 function storedRoute(route: RunDraft['route']): Run['route'] {
   if (!route) return null;
-  return { polyline: route.polyline, waypoints: route.waypoints, source: ROUTE_PLAN_SOURCE };
+  return {
+    polyline: route.polyline,
+    waypoints: route.waypoints,
+    source: ROUTE_PLAN_SOURCE,
+    trimmed: false,
+  };
 }
 
 function nextId(): string {
