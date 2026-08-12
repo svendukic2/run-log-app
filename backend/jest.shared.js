@@ -3,6 +3,25 @@
 // Prisma 7's generated client load under Jest; docs/data-model.md has the
 // long-form story. Delete the whole file the day the generated client loads
 // cleanly under Jest's default CommonJS environment.
+//
+// RE-TESTED at Prisma 7.9.1 (prisma and @prisma/client both 7.9.1, RUN-79
+// item 10), by removing this config and running the unit suite. It is still
+// needed, and BOTH halves are: 13 of 29 suites failed, which is every suite
+// that reaches PrismaService.
+//
+//   - With neither half: "Cannot find module './internal/class.js' from
+//     'generated/prisma/client.ts'" - the generated client's ESM-style
+//     relative specifiers, exactly what moduleNameMapper below rewrites.
+//   - With moduleNameMapper but WITHOUT the tsconfig override: the same 13
+//     suites fail differently, resolving class-validator to
+//     node_modules/src/index.ts and dying inside libphonenumber-js's .cjs
+//     entry. The `.js` mapping is global, so under the app's nodenext
+//     resolution it reaches third-party packages too; node10 +
+//     resolvePackageJsonExports: false is what keeps that rewrite confined
+//     to a resolution mode that can take it.
+//
+// So the next person should not re-run the experiment before Prisma 8, or
+// before the generated client stops shipping those specifiers.
 module.exports = {
   // The generated client loads its WASM query compiler with a dynamic
   // import(), which the app's nodenext tsconfig keeps as a real import()

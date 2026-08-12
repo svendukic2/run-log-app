@@ -709,7 +709,10 @@ Prisma 7 wiring, for anyone touching it:
   the production build; the build step and the e2e-against-real-Postgres run
   in CI are what keep that divergence honest. Delete `jest.shared.js` the
   day Prisma's generated client loads cleanly under Jest's default CJS
-  environment.
+  environment. **Re-tested at Prisma 7.9.1 (RUN-79) and still needed**: without
+  the file, 13 of 29 unit suites fail, and dropping either half on its own
+  fails too. The file's own header records the two errors verbatim, so the
+  experiment does not have to be repeated blind.
 
 ## API validation (RUN-47)
 
@@ -725,7 +728,19 @@ Three server-side specifics worth knowing:
 - **Free-text bounds are API-side additions**: routeName is trimmed and capped at 120
   characters, note at 2000. The v1 forms enforce no lengths, so these exist to keep a
   stray script from storing megabytes in unbounded TEXT columns, not to police real
-  input.
+  input. Since RUN-79 the Add/Edit run modal mirrors both as `maxLength`, hand-copied
+  with a comment naming `create-run.dto.ts` as the source of truth (the `HelloResponse`
+  wart again): typing stops where the request would have been rejected, and the route
+  name says so once it lands on its bound, because 120 characters is reachable by
+  pasting and a silently truncated name looks like the app ate it.
+- **`GET /api/runs` is paginated (RUN-79)**, with the shared `?page`/`?pageSize`
+  contract and the shared `{ items, total, page, pageSize }` envelope. What this bounds
+  is one request's work, **not** what a screen sees: `frontend/src/lib/runs.ts` holds
+  the caller's whole history (weekly totals, records, goal progress and insights all
+  compute from that array), so its load walks pages of 100 until a short page ends the
+  walk. Anything that makes the endpoint answer with less than it was asked for would
+  end that walk early and make every one of those screens under-report with nothing
+  failing, which is worse than the unbounded endpoint this replaced.
 - **Sanity limits are enforced in the service, not the DTOs (RUN-72).**
   `src/common/runLimits.ts` holds both tiers as constants with the reasoning next to
   them. `RUN_LIMITS` is hard: distance at most **150 km**, duration at most **24 h**, and
