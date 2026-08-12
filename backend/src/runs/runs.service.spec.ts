@@ -59,6 +59,9 @@ const ROUTE_RESPONSE = {
   polyline: STORED_ROUTE.routePolyline,
   waypoints: STORED_ROUTE.routeWaypoints,
   source: STORED_ROUTE.routeSource,
+  // Never trimmed here: every response from this service is the owner's own
+  // run, and the ~300 m privacy trim is for strangers (RUN-55 AC3).
+  trimmed: false,
 };
 
 describe('RunsService', () => {

@@ -128,6 +128,10 @@ export default function RouteStep({
           polyline: result.polyline,
           waypoints: next,
           source: result.source,
+          // A route the owner just drew, so nothing is cut off it (RUN-55): the
+          // trim is applied on the way OUT to somebody else's browser, and
+          // `trimmed` is not part of what a save sends (RunRouteDraft).
+          trimmed: false,
         });
       })
       .catch((error: unknown) => {

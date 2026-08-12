@@ -1,5 +1,6 @@
 import { InternalServerErrorException } from '@nestjs/common';
 import { toIsoDate } from '../common/dates';
+import type { RouteVisibility } from '../common/privacy';
 import type { Prisma, Run as RunRow } from '../generated/prisma/client';
 import {
   EFFORT_LEVELS,
@@ -7,6 +8,7 @@ import {
   MIN_ROUTE_POINTS,
   type Effort,
 } from './dto/create-run.dto';
+import { trimPolylineEnds } from './route-trim';
 
 // The API shape of a run and the one mapper that produces it, split out of
 // runs.service in RUN-63 so the public profile can serve another runner's
@@ -35,13 +37,25 @@ export interface RouteWaypointResponse {
 // whole of "no route", and no caller can construct a polyline with no
 // waypoints.
 export interface RunRouteResponse {
-  // Encoded polyline, precision 5 (RUN-53: the decoder must be told 5).
+  // Encoded polyline, precision 5 (RUN-53: the decoder must be told 5). On a
+  // trimmed route this is the middle of the stored one, re-encoded.
   polyline: string;
   // The runner's tapped points: [0] is Start, the last is Finish, the rest are
   // the numbered waypoints, 2-5 in total.
+  //
+  // EMPTY on a trimmed route, and that is not an omission: the first and last
+  // tapped points are exactly the addresses the trim exists to hide, so sending
+  // them would undo it in one line. Nothing needs them there either - only the
+  // owner's Edit picker restores markers from waypoints, and the owner is never
+  // served a trimmed route.
   waypoints: RouteWaypointResponse[];
   // Who drew it, which is also what says "reconstruction, not GPS truth".
   source: string;
+  // Whether the ends were cut off before sending (RUN-55 AC4). The client is
+  // told rather than left to infer, because a trimmed line's first and last
+  // points are NOT the run's start and finish and must not be drawn as if they
+  // were - a "Start" pin 400 m up the road is a worse lie than no pin.
+  trimmed: boolean;
 }
 
 export interface RunResponse {
@@ -53,7 +67,7 @@ export interface RunResponse {
   effort: Effort;
   note: string;
   // null means EITHER "this run has no route" OR "this route is not yours to
-  // see" - see withRoute on the mapper below. The two are deliberately
+  // see" - see routeVisibility on the mapper below. The two are deliberately
   // indistinguishable to a viewer: a "there is a route here you may not see"
   // signal is itself information the owner did not share.
   route: RunRouteResponse | null;
@@ -116,7 +130,14 @@ function toRouteWaypoints(
 // cannot restore or a line with no provenance. The database CHECK added with
 // these columns makes the all-or-none half of this unreachable through SQL
 // too, so what is really left here is "the JSON is not a list of points".
-function toRoute(row: RunRow): RunRouteResponse | null {
+function toRoute(
+  row: RunRow,
+  visibility: RouteVisibility,
+): RunRouteResponse | null {
+  // Nothing is read at all in the hidden case: the route is not fetched and
+  // then dropped, which is what keeps a later `...row` spread from leaking it.
+  if (visibility === 'hidden') return null;
+
   const { routePolyline, routeWaypoints, routeSource } = row;
   if (
     routePolyline === null &&
@@ -131,18 +152,39 @@ function toRoute(row: RunRow): RunRouteResponse | null {
       `Run ${row.id} has an unreadable route: routePolyline, routeWaypoints (${MIN_ROUTE_POINTS}-${MAX_ROUTE_POINTS} {lat, lng} points) and routeSource must all be present or all be NULL. Fix the row.`,
     );
   }
-  return { polyline: routePolyline, waypoints, source: routeSource };
+  if (visibility === 'full') {
+    return {
+      polyline: routePolyline,
+      waypoints,
+      source: routeSource,
+      trimmed: false,
+    };
+  }
+
+  // A stranger's copy: ends cut off, tapped points dropped (RUN-55 AC4). null
+  // back from the trim means there was no honest middle left, and a route too
+  // short to trim is not served at all - see route-trim.ts.
+  const middle = trimPolylineEnds(routePolyline);
+  if (middle === null) return null;
+  return {
+    polyline: middle,
+    waypoints: [],
+    source: routeSource,
+    trimmed: true,
+  };
 }
 
-// `withRoute` is REQUIRED, with no default, and that is the point: routes are
-// private by default (User.showRoutes, RUN-64) and this mapper serves both the
-// owner's own runs and another runner's public profile. A default would let a
-// future third caller ship a route leak by simply not thinking about it; an
-// unavoidable parameter makes every call site answer the question. The public
-// profile answers it with canViewRoutes (common/privacy.ts).
+// `routeVisibility` is REQUIRED, with no default, and that is the point: routes
+// are private by default (User.showRoutes, RUN-64) and this mapper serves both
+// the owner's own runs and another runner's public profile. A default would let
+// a future third caller ship a route leak by simply not thinking about it; an
+// unavoidable parameter makes every call site answer the question. It is also
+// why the parameter is three-valued rather than a boolean since RUN-55 - a
+// granted route is not necessarily the WHOLE route. The public profile answers
+// it with routeVisibility() from common/privacy.ts.
 export function toRunResponse(
   row: RunRow,
-  { withRoute }: { withRoute: boolean },
+  { routeVisibility }: { routeVisibility: RouteVisibility },
 ): RunResponse {
   return {
     id: row.id,
@@ -152,7 +194,7 @@ export function toRunResponse(
     date: toIsoDate(row.date),
     effort: toEffort(row.id, row.effort),
     note: row.note,
-    route: withRoute ? toRoute(row) : null,
+    route: toRoute(row, routeVisibility),
   };
 }
 

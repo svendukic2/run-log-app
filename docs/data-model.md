@@ -130,7 +130,7 @@ data attaches to accounts. Community tasks (follow, notifications, events) hang 
 | lastName | string | Non-empty, mirrors WEL-5 rules |
 | profilePublic | boolean, default false | Opt-in: other runners may open this account's public profile (RUN-64; the page itself is RUN-63) |
 | showOnLeaderboard | boolean, default false | Opt-in to every leaderboard, global and per event. Pulled forward from RUN-64 by RUN-69, which cannot honour its own AC3 without it |
-| showRoutes | boolean, default false | Opt-in: route maps are shown to whoever can see the profile (RUN-64; route maps themselves are RUN-72) |
+| showRoutes | boolean, default false | Opt-in: route maps are shown to whoever can see the profile (RUN-64; the maps themselves are RUN-55, which also trims what a visitor is sent) |
 | createdAt | timestamp | Audit field (the `updatedAt` convention above extends to `createdAt` here) |
 
 The API endpoints are `POST /api/auth/signup` and `POST /api/auth/login`, both
@@ -155,8 +155,9 @@ is on leaderboards yet" state until runners opt in, and RUN-71's seeder opts its
 demo users in explicitly. The gating rules live in `backend/src/common/privacy.ts`
 (`appearsOnLeaderboard`, shared by the event leaderboard and RUN-70's global one;
 `canViewProfile` and `canViewRoutes`, added by RUN-63 when the public profile
-became their reader). All three are pure functions over the settings, so the
-policy is testable without a database and no call site re-derives it.
+became their reader; `routeVisibility`, added by RUN-55, which answers *how much*
+of a route rather than whether). All four are pure functions over the settings, so
+the policy is testable without a database and no call site re-derives it.
 
 **Reading another account (RUN-63).** `GET /api/users/:id` answers one runner's
 public profile: `{ id, firstName, lastName, me, following, counts: { followers,
@@ -186,11 +187,18 @@ has; ids are `cuid()`, so there is no id space to walk. Do not "fix" it by
 404ing private accounts - AC2 needs their header.
 
 `showRoutes` is strictly narrower than `profilePublic` (the grant is the AND of
-the two), and the owner overrides both on their own profile. Route maps
-themselves are RUN-72, so `showRoutes` gates only the run detail's Route card so
-far; it is honoured in the payload now so that route data was never exposed in
-the meantime. The endpoint lives in `backend/src/users/`, alongside the search
-below.
+the two), and the owner overrides both on their own profile. Since RUN-55 the
+grant is **three-valued rather than boolean** (`routeVisibility`): the owner gets
+`'full'`, a granted visitor gets `'trimmed'` and everybody else `'hidden'`. A
+trimmed route is the stored polyline with its **first and last ~300 m cut off**
+server-side and its waypoints dropped, because a route that starts at the
+runner's front door is their address, and the tapped points are exactly the two
+ends the trim removes. The trim lives in `backend/src/runs/route-trim.ts`; it
+drops whole points rather than interpolating to an exact 300 m mark, so it always
+removes *at least* the trim distance. A route too short to trim (under ~600 m)
+is **not served at all** rather than served whole - a `route: null` a viewer
+cannot tell apart from "this run has no route". The endpoint lives in
+`backend/src/users/`, alongside the search below.
 
 **Searching for runners (RUN-62).** `GET /api/users?search=` answers the People
 page: `{ items: [{ id, firstName, lastName, following }], total, page, pageSize,
@@ -534,12 +542,13 @@ how they are captured, they join as nullable fields in both places.
 ```ts
 interface RunRoute {
   polyline: string; // encoded polyline, precision 5 (RUN-53)
-  waypoints: Array<{ lat: number; lng: number }>; // 2-5: [0] Start, last Finish
+  waypoints: Array<{ lat: number; lng: number }>; // 2-5: [0] Start, last Finish; [] when trimmed
   source: string; // who drew it: 'openrouteservice' today
+  trimmed: boolean; // RUN-55: the ends were cut off before sending
 }
 ```
 
-Five things about it are decisions, not accidents:
+Six things about it are decisions, not accidents:
 
 - **Columns separate, API shape nested.** The columns are what the roadmap and the
   ticket specify (and what lets `routeSource` be filtered later); the single `route`
@@ -570,6 +579,14 @@ Five things about it are decisions, not accidents:
 - **The entered distance stays the source of truth.** The routed distance is never
   written to `distanceKm`; a mismatch over 20% is a hint in the form (RUN-54 AC2), never
   a correction and never a block on saving.
+- **`trimmed` is server-assigned, like `source`, and it changes what may be drawn**
+  (RUN-55 AC4). It is true only for somebody else's run on a public profile, where the
+  polyline arrives already shortened and `waypoints` is `[]`. The map must honour it:
+  the ends of a trimmed line are wherever the cut landed, so it draws no Start/Finish
+  pins and says the ends are hidden instead. The client is *told* rather than left to
+  infer it from `me`/`showRoutes`, so the two can never disagree; neither field is part
+  of a write (`RunRouteDraft` is `polyline` + `waypoints` only, and the whitelist pipe
+  400s a save that sends either).
 
 ### CoachPlan (one per generation)
 
