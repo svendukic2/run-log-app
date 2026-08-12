@@ -10,13 +10,18 @@
 // new token. The server-side rules that bound the renewing (an idle window,
 // an absolute session ceiling, and a revocation version bumped by logout)
 // are documented in backend/src/auth/token-lifecycle.ts and are deliberately
-// not mirrored here - the client's whole job is "try once, and if that
-// fails, sign out".
+// not mirrored here. The client's whole job is "try once, and then believe
+// the answer".
 //
-// When the renewal DOES fail, the behaviour is exactly what it was before
-// RUN-74 and RUN-58 AC6 is still the contract: clear the session, hard-load
-// Sign in, throw a terminal ApiError so nothing offers a retry that cannot
-// work. There is no state in between.
+// Believing the answer means distinguishing two failures that look alike and
+// are not. A 401 from the refresh endpoint is the SERVER saying the session
+// is over, and that degrades to exactly the pre-RUN-74 behaviour, with
+// RUN-58 AC6 still the contract: clear the session, hard-load Sign in, throw
+// a terminal ApiError so nothing offers a retry that cannot work. Anything
+// else - a 500, a proxy 502 during a deploy, an offline laptop, a timeout -
+// is not an answer at all, so the session stays exactly where it is and the
+// caller sees an ordinary retryable connection error. Signing out on those
+// would turn every backend restart into a mass logout.
 import { ROUTES } from './routes';
 
 const SESSION_KEY = 'runlog.session';
