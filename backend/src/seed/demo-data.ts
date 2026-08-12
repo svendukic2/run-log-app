@@ -21,6 +21,10 @@ import { PRIVACY_DEFAULTS, type PrivacySettings } from '../common/privacy';
 // it.
 import type { Effort } from '../runs/dto/create-run.dto';
 import type { RunningLevel } from '../profile/dto/put-profile.dto';
+// A VALUE import, unlike the two above: the eight prepared Zagreb routes are the
+// data this module hands out, and they are plain constants with no decorators
+// and no Prisma behind them (RUN-77 decision 5).
+import { DEMO_ROUTES, type DemoRoute } from './demo-routes';
 
 /* The RUN-72 contract ----------------------------------------------------- */
 
@@ -92,6 +96,13 @@ export interface DemoRun {
   // the run - it depends on an event that does not exist yet when the run is
   // generated. The writer turns it into Run.eventId.
   inEvent: boolean;
+  // The geometry, or null for the ordinary run with no route (RUN-77 AC6). Set
+  // by attachRoutes below, for the same reason inEvent is not set by buildRun:
+  // which runs get one depends on the event's participants, and a route also
+  // REPLACES the run's generated distance, so it cannot be decided while the
+  // distance is being generated. The writer turns it into the three Run route
+  // columns.
+  route: DemoRoute | null;
 }
 
 export interface DemoUser {
@@ -190,23 +201,33 @@ const LEVEL_PROFILES: readonly LevelProfile[] = [
   },
 ];
 
+// The sessions that have a NAME but no geometry: a track session and a set of
+// hill repeats are laps and reps rather than a line on a map, and the last two
+// name an occasion instead of a place. Every one of them is somewhere a Zagreb
+// runner actually goes (SRC Mladost is the athletics track; Sljeme is the
+// Medvednica summit road).
+const NAME_ONLY_ROUTE_NAMES = [
+  'Mladost track session',
+  'Sljeme hill repeats',
+  'Sunday long run',
+  'Morning commute run',
+];
+
 // Route names a runner would actually recognise on their own dashboard.
 // A fixed list rather than faker.location.street(): generated street names
 // read as noise in a demo, and the point of the seeder is a screen someone
 // can talk over.
+//
+// ZAGREB, and derived from DEMO_ROUTES rather than written out again (RUN-77
+// AC7). The list this replaced was city-agnostic and two of its entries were
+// plainly wrong for a landlocked city - 'Harbour promenade' and 'Canal path' -
+// which is exactly the drift a second hand-written list invites. Now the eight
+// names that CAN carry geometry are the geometry's own names, so a routed run's
+// label cannot disagree with the line it draws; nothing has to keep the two in
+// step because there is only one list.
 const ROUTE_NAMES = [
-  'Riverside loop',
-  'Park intervals',
-  'Lakeside out and back',
-  'Old town circuit',
-  'Hill repeats',
-  'Canal path',
-  'Forest trail',
-  'Stadium track session',
-  'Harbour promenade',
-  'Sunday long run',
-  'Morning commute run',
-  'Botanical gardens loop',
+  ...DEMO_ROUTES.map((route) => route.name),
+  ...NAME_ONLY_ROUTE_NAMES,
 ];
 
 // Everything that is not the weekly long run. Typed as Effort, so a change
@@ -295,6 +316,8 @@ function buildRun(
     // events, and the event's window is derived from these runs rather than the
     // other way round.
     inEvent: false,
+    // And routeless until attachRoutes says otherwise, for the same reason.
+    route: null,
   };
 }
 
@@ -522,6 +545,125 @@ function tagEventRuns(
   });
 }
 
+// RUN-77 AC6: one Zagreb route per participant, on the run they tagged to the
+// event - which is what the event's map draws.
+//
+// EVERY VISIBLE PARTICIPANT GETS A DIFFERENT ROUTE, and that is the whole
+// design of this function rather than a nicety. The map colours one line per
+// runner (AC1), so two runners handed the same route would draw two lines in two
+// colours along identical coordinates: one hides the other, and the legend
+// promises a distinction the map cannot show. DEMO_ROUTES has eight entries and
+// the demo event has eight participants who appear on the board, so distinct is
+// exactly achievable - which is also why that count is not a coincidence.
+//
+// WHO GETS ONE is exactly "whoever the map would draw", and that predicate has
+// three parts rather than one, because two different gates decide it: the run
+// feed withholds an opted-out runner's rows entirely (showOnLeaderboard, in
+// events.service listRuns) and the geometry is gated separately on
+// canViewRoutes (profilePublic AND showRoutes). An account failing any of the
+// three is never on anybody's map, so seeding it a route would only spend one
+// - and the private demo account, which fails all three, would end up drawing a
+// DUPLICATE of somebody else's line in its own view of the event (review
+// finding). It gets no route instead, which is also the honest answer for an
+// account that has opted out of sharing routes.
+//
+// Among those who do get one, the order is load-bearing:
+//   1. by running level, so the table's ascending lengths line up with who would
+//      plausibly run them - the beginners get Bundek and Maksimir, the advanced
+//      accounts get the Sava bridges loop and the 23 km embankment run. Cosmetic,
+//      but it is the difference between a demo and a demo that reads wrong.
+//   2. then by email, purely to make step 1's ties deterministic.
+//
+// THE ROUTE'S LENGTH WINS over the generated distance (see withRoute). Only the
+// tagged runs are touched - eight rows out of roughly five hundred.
+function attachRoutes(
+  users: DemoUser[],
+  event: Omit<DemoEvent, 'targetKm'>,
+): DemoUser[] {
+  const participants = new Set(event.participantEmails);
+  const levelRank = (level: RunningLevel): number =>
+    LEVEL_PROFILES.findIndex((profile) => profile.level === level);
+  // The two server gates as one predicate. Kept here rather than imported from
+  // common/privacy.ts because appearsOnLeaderboard/canViewRoutes take a viewer
+  // and an owner id, and there is no viewer at generation time - what this needs
+  // is "could ANY other participant see this line", which is the settings half of
+  // both rules with the owner override left out.
+  const drawnForOthers = (user: DemoUser): boolean =>
+    user.privacy.showOnLeaderboard &&
+    user.privacy.profilePublic &&
+    user.privacy.showRoutes;
+
+  const ordered = users
+    .filter(
+      (user) =>
+        participants.has(user.email) &&
+        // Nothing to draw it on.
+        user.runs.some((run) => run.inEvent) &&
+        drawnForOthers(user),
+    )
+    .sort(
+      (a, b) =>
+        levelRank(a.runningLevel) - levelRank(b.runningLevel) ||
+        a.email.localeCompare(b.email),
+    );
+
+  // Wraps only if a future edit adds a ninth drawable participant without adding
+  // a ninth route - which would put two identical lines under a legend claiming
+  // to tell them apart, so demo-data.spec asserts distinctness and fails then
+  // rather than shipping it.
+  const routeByEmail = new Map(
+    ordered.map((user, index) => [
+      user.email,
+      DEMO_ROUTES[index % DEMO_ROUTES.length],
+    ]),
+  );
+
+  return users.map((user) => {
+    const route = routeByEmail.get(user.email);
+    if (!route) return user;
+    return {
+      ...user,
+      runs: user.runs.map((run) => (run.inEvent ? withRoute(run, route) : run)),
+    };
+  });
+}
+
+// A run with geometry attached, and with its DISTANCE taken from that geometry.
+//
+// The distance has to move, rather than the route being chosen to fit it. A
+// 6.7 km Jarun lake loop drawn under an 18 km run is a run detail page
+// contradicting itself, and the Edit modal says so out loud: RouteStep compares
+// the entered distance with the polyline's own length and warns when they differ
+// by more than 20% (frontend polylineDistanceKm). Snapping makes that warning
+// impossible instead of merely unlikely.
+//
+// The PACE is what carries over, not the duration: keeping the runner's
+// seconds-per-kilometre is what keeps the new duration plausible for them, and
+// it is also what keeps the result inside DEMO_RUN_BOUNDS - a pace already
+// between 4:00 and 8:00 /km stays there whatever the distance, so no snapped run
+// can become one the guardrails flag (demo-data.spec asserts that).
+//
+// What it DOES move, said plainly rather than waved away as "eight rows out of
+// five hundred": those eight rows are not spread out, they are one week each. An
+// Advanced account's tagged 7 km easy run becoming the 23.6 km embankment route
+// adds ~17 km to that runner's week against a 57 km goal, so one week per
+// participant can swing by up to about 15 km. That matters because
+// LEVEL_PROFILES deliberately tunes each goal to the MEAN weekly volume to make
+// the Hit/Missed history roughly a coin flip; a single week landing on the other
+// side of that coin is acceptable, a systematic shift would not have been.
+function withRoute(run: DemoRun, route: DemoRoute): DemoRun {
+  const paceSecPerKm = run.durationSeconds / run.distanceKm;
+  return {
+    ...run,
+    // The name comes from the route too, so a routed run's label always
+    // describes the line under it (AC7).
+    routeName: route.name,
+    distanceKm: route.distanceKm,
+    durationSeconds: Math.round(route.distanceKm * paceSecPerKm),
+    route,
+  };
+}
+
 // The event's collective target, computed from the runs that were actually
 // TAGGED to it (AC6 changed what that means, so this changed with it).
 //
@@ -559,18 +701,23 @@ export function buildDemoDataset(
 
   const users = buildUsers(faker, today);
   const follows = buildFollows(faker, users);
-  // window -> tags -> target, each step needing the one before it: the window
-  // decides which runs may be tagged, and the target is scaled to what was
-  // tagged. A dependency, not a preference.
+  // window -> tags -> routes -> target, each step needing the one before it: the
+  // window decides which runs may be tagged, the tags decide which runs get a
+  // route, the routes REWRITE those runs' distances (attachRoutes), and the
+  // target is scaled to what was finally tagged. A dependency chain, not a
+  // preference - computing the target before the routes would scale it to
+  // distances the board no longer shows.
   const event = buildEvent(users, today);
   const tagged = tagEventRuns(users, event);
+  const routed = attachRoutes(tagged, event);
 
   return {
-    users: tagged,
+    users: routed,
     follows,
-    // Built from the ORIGINAL users: the tags change no field these read, and
-    // passing the tagged copy would only suggest they might.
+    // Built from the ORIGINAL users: neither the tags nor the routes change a
+    // field these read, and passing the rewritten copy would only suggest they
+    // might.
     notifications: buildNotifications(users, follows),
-    event: { ...event, targetKm: eventTargetKm(tagged, event) },
+    event: { ...event, targetKm: eventTargetKm(routed, event) },
   };
 }

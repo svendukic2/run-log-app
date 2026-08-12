@@ -14,6 +14,11 @@ import type {
   EventRunListResponse,
   TaggableEventListResponse,
 } from './../src/events/events.service';
+// Real Zagreb geometry for the RUN-77 test at the bottom: a synthetic polyline
+// short enough to hand-write would not survive RUN-55's 300 m trim, and the trim
+// is half of what that test proves.
+import { DEMO_ROUTES } from './../src/seed/demo-routes';
+import type { PublicProfileResponse } from './../src/users/users.service';
 import { createE2eApp, signupTestUser, TestUser } from './create-test-app';
 
 // RUN-67: the events API end to end. The tests run in order and share one
@@ -631,5 +636,150 @@ describe('Events API (e2e)', () => {
     const join = bell.items.find((item) => item.type === 'event-joined');
     expect(join).toBeDefined();
     expect((join?.payload as EventJoinedPayload).eventName).toBe('Summer 100k');
+  });
+
+  // RUN-77, and LAST in the suite on purpose: it creates an event and two more
+  // runs, which every ordered assertion above counts. Appending keeps that story
+  // intact.
+  //
+  // The interesting half is the CONTRAST, which is why the public profile is
+  // pulled into an events test: the same run, read two ways, comes back trimmed
+  // on run detail and whole on the event map. That is decision 1 and the hole
+  // decision 2 accepts, and it is the kind of thing a comment can claim while the
+  // code quietly does something else.
+  it('serves whole routes on the event feed while the public profile still trims them (RUN-77 AC1, AC3)', async () => {
+    // Real geometry from the checked-in demo table, because a short synthetic
+    // polyline would not survive the 300 m trim and the contrast would vanish.
+    const jarun = DEMO_ROUTES.find((route) => route.name === 'Jarun lake loop');
+    if (!jarun)
+      throw new Error('the demo route table lost the Jarun lake loop');
+
+    const created = (
+      await createEvent(ana, {
+        name: 'Zagreb routes',
+        startDate: addDaysIso(today, -2),
+        endDate: tomorrow,
+      }).expect(201)
+    ).body as EventResponse;
+    await request(app.getHttpServer())
+      .post(`/api/events/${created.id}/join`)
+      .set(bruno.auth)
+      .expect(200);
+
+    // Through the real Settings endpoint rather than a direct column write: the
+    // gate under test reads exactly what that endpoint stores.
+    const setPrivacy = (
+      user: TestUser,
+      settings: {
+        profilePublic: boolean;
+        showOnLeaderboard: boolean;
+        showRoutes: boolean;
+      },
+    ) =>
+      request(app.getHttpServer())
+        .put('/api/privacy')
+        .set(user.auth)
+        .send(settings)
+        .expect(200);
+
+    const allOn = {
+      profilePublic: true,
+      showOnLeaderboard: true,
+      showRoutes: true,
+    };
+    await setPrivacy(ana, allOn);
+    await setPrivacy(bruno, allOn);
+
+    const logRouted = (user: TestUser) =>
+      request(app.getHttpServer())
+        .post('/api/runs')
+        .set(user.auth)
+        .send({
+          routeName: jarun.name,
+          distanceKm: jarun.distanceKm,
+          // ~5:30 /km, comfortably inside RUN-72's pace limits.
+          durationSeconds: Math.round(jarun.distanceKm * 330),
+          date: today,
+          eventId: created.id,
+          route: { polyline: jarun.polyline, waypoints: jarun.waypoints },
+        })
+        .expect(201);
+
+    await logRouted(ana);
+    const brunoRun = (await logRouted(bruno)).body as { id: string };
+
+    const feed = () =>
+      request(app.getHttpServer())
+        .get(`/api/events/${created.id}/runs`)
+        .set(ana.auth)
+        .expect(200)
+        .then((response) => response.body as EventRunListResponse);
+    const rowFor = (body: EventRunListResponse, userId: string) =>
+      body.items.find((row) => row.runner.id === userId);
+
+    const whole = await feed();
+    expect(whole.total).toBe(2);
+    // AC1 plus decision 1: byte for byte the stored polyline, for the caller's
+    // own run AND for somebody else's granted one. Not a shortened copy.
+    for (const row of whole.items) {
+      expect(row.route).toEqual({ polyline: jarun.polyline });
+    }
+    // No waypoints, no source, no `trimmed` flag - the tapped points especially,
+    // since those are the addresses the trim exists to hide.
+    expect(JSON.stringify(whole)).not.toContain('waypoints');
+    // And no privacy settings, which this read has to look at but must not echo.
+    expect(JSON.stringify(whole)).not.toContain('showRoutes');
+    expect(JSON.stringify(whole)).not.toContain('profilePublic');
+
+    // The same run of bruno's, through his public profile: RUN-55 cuts the first
+    // and last ~300 m off and drops the tapped points. Two endpoints, two
+    // answers, on purpose.
+    const profile = (
+      await request(app.getHttpServer())
+        .get(`/api/users/${bruno.id}`)
+        .set(ana.auth)
+        .expect(200)
+    ).body as PublicProfileResponse;
+    const onDetail = profile.runs?.find((row) => row.id === brunoRun.id);
+    expect(onDetail?.route?.trimmed).toBe(true);
+    expect(onDetail?.route?.waypoints).toEqual([]);
+    expect(onDetail?.route?.polyline).not.toBe(jarun.polyline);
+    expect(onDetail?.route?.polyline.length).toBeLessThan(
+      jarun.polyline.length,
+    );
+
+    // AC3: bruno turns routes off. His RUN stays in the feed - the opt-out is
+    // about the geometry, not about taking part - and his line disappears.
+    await setPrivacy(bruno, { ...allOn, showRoutes: false });
+    const gated = await feed();
+    expect(gated.total).toBe(2);
+    expect(rowFor(gated, bruno.id)?.route).toBeNull();
+    // ana's own is untouched: the gate protects you from strangers, not from
+    // yourself.
+    expect(rowFor(gated, ana.id)?.route).toEqual({ polyline: jarun.polyline });
+
+    // The deliberate narrowing listRuns explains: routes back ON but the profile
+    // closed is still withheld, so this endpoint can never draw a line bruno's
+    // own profile page would refuse to serve.
+    await setPrivacy(bruno, { ...allOn, profilePublic: false });
+    expect(rowFor(await feed(), bruno.id)?.route).toBeNull();
+
+    // And the review finding, over HTTP: a signed-in account that has NOT joined
+    // this event reads the feed - which it may, an event is joinable and that is
+    // what makes it worth looking at - and gets no geometry at all. A fresh
+    // account rather than one of the fixture users, so this proves the membership
+    // gate rather than some leftover privacy setting.
+    await setPrivacy(bruno, allOn);
+    const dana = await signupTestUser(app, 'event-dana');
+    const outsider = (
+      await request(app.getHttpServer())
+        .get(`/api/events/${created.id}/runs`)
+        .set(dana.auth)
+        .expect(200)
+    ).body as EventRunListResponse;
+    expect(outsider.total).toBe(2);
+    expect(outsider.items.every((row) => row.route === null)).toBe(true);
+    // The rows themselves are intact, so "no geometry" is not "no feed".
+    expect(outsider.items.every((row) => row.distanceKm > 0)).toBe(true);
   });
 });

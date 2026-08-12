@@ -400,18 +400,56 @@ describe('EventsService', () => {
 
   // RUN-76 AC2: the event's own run feed.
   describe('listRuns (RUN-76)', () => {
-    function runRow(id: string, userId: string, firstName: string) {
+    // A tagged run as the projection returns it since RUN-77: the polyline, plus
+    // the two privacy columns canViewRoutes reads. Both settings default to
+    // GRANTED here so a test about something else does not have to think about
+    // them; the ones that are about them say so.
+    const POLYLINE = 'wap_IsyspAsFgc@cG{h@qFe{A';
+
+    // The event read, whose where-filtered `participants` answers "is the CALLER
+    // in this event" - the gate the geometry needs since the review finding.
+    // Defaults to joined, because that is the ordinary case and the one test that
+    // cares about the other passes false.
+    function joinedEvent(participates = true): void {
+      prisma.event.findUnique.mockResolvedValue({
+        id: 'event-1',
+        participants: participates ? [{ id: 'part-1' }] : [],
+      });
+    }
+
+    function runRow(
+      id: string,
+      userId: string,
+      firstName: string,
+      overrides: {
+        routePolyline?: string | null;
+        profilePublic?: boolean;
+        showRoutes?: boolean;
+      } = {},
+    ) {
+      const {
+        routePolyline = null,
+        profilePublic = true,
+        showRoutes = true,
+      } = overrides;
       return {
         id,
         date: toDbDate(TODAY),
         distanceKm: 8.2,
         durationSeconds: 2535,
-        user: { id: userId, firstName, lastName: 'Tester' },
+        routePolyline,
+        user: {
+          id: userId,
+          firstName,
+          lastName: 'Tester',
+          profilePublic,
+          showRoutes,
+        },
       };
     }
 
     it('lists the runs tagged to this event, newest first, with their runner', async () => {
-      prisma.event.findUnique.mockResolvedValue({ id: 'event-1' });
+      joinedEvent();
       prisma.run.findMany.mockResolvedValue([
         runRow('run-2', 'user-ana', 'Ana'),
         runRow('run-1', USER_ID, 'Me'),
@@ -425,6 +463,7 @@ describe('EventsService', () => {
         date: TODAY,
         distanceKm: 8.2,
         durationSeconds: 2535,
+        route: null,
         runner: { id: 'user-ana', firstName: 'Ana', lastName: 'Tester' },
       });
       // The filter IS the acceptance criterion: tagged to this event, and
@@ -434,10 +473,131 @@ describe('EventsService', () => {
         [{ where: Record<string, unknown> }]
       >;
       expect(call[0].where).toMatchObject({ eventId: 'event-1' });
-      // No note and no route in the projection: this is a feed of other
-      // people's runs and the route is gated by a setting this read does not
-      // look at (RUN-55).
-      expect(JSON.stringify(call[0])).not.toContain('routePolyline');
+      // Still no note: this is a feed of other people's runs and a note is the
+      // personal half of one. The route arrived in RUN-77 and is gated below.
+      expect(JSON.stringify(call[0])).not.toContain('note');
+    });
+
+    // RUN-77 AC1 and its decision 1, in one test because they are one behaviour:
+    // the map gets the whole line, not RUN-55's trimmed copy.
+    it('serves the whole polyline, untrimmed, to the owner and to a granted viewer (RUN-77 AC1)', async () => {
+      joinedEvent();
+      prisma.run.findMany.mockResolvedValue([
+        runRow('run-2', 'user-ana', 'Ana', { routePolyline: POLYLINE }),
+        runRow('run-1', USER_ID, 'Me', { routePolyline: POLYLINE }),
+      ]);
+
+      const { items } = await service.listRuns(USER_ID, 'event-1');
+
+      // Byte for byte the stored string for BOTH: somebody else's granted route
+      // and the caller's own. On run detail the first of those would come back
+      // with its first and last 300 m cut off (RUN-55 routeVisibility says
+      // 'trimmed' for a non-owner) - this map deliberately does not do that, and
+      // that hole is written down in listRuns.
+      expect(items.map((item) => item.route)).toEqual([
+        { polyline: POLYLINE },
+        { polyline: POLYLINE },
+      ]);
+      // Only the line: no waypoints, no source, no `trimmed` flag. Those are
+      // absent from the response type on purpose, and a spread that quietly
+      // reintroduced them would show up here.
+      expect(Object.keys(items[0].route ?? {})).toEqual(['polyline']);
+    });
+
+    // AC3. The map has to honour showRoutes even though the feed it decorates
+    // lists the run: the trim is 300 m of geometry, whereas this is a switch the
+    // runner deliberately turned off, and ignoring it would make that Settings
+    // toggle a lie.
+    it('withholds the route from a runner who has routes off, indistinguishably from having none (RUN-77 AC3)', async () => {
+      joinedEvent();
+      prisma.run.findMany.mockResolvedValue([
+        runRow('run-2', 'user-ana', 'Ana', {
+          routePolyline: POLYLINE,
+          showRoutes: false,
+        }),
+        // Routes on but the profile closed. canViewRoutes ANDs the two, so this
+        // is withheld as well - the deliberate narrowing listRuns explains,
+        // which keeps this endpoint from ever drawing a line that runner's own
+        // profile page would refuse to serve.
+        runRow('run-3', 'user-bruno', 'Bruno', {
+          routePolyline: POLYLINE,
+          profilePublic: false,
+          showRoutes: true,
+        }),
+      ]);
+
+      const { items } = await service.listRuns(USER_ID, 'event-1');
+
+      // null, exactly like a run that has no route: a "there is a line here you
+      // may not see" signal would itself be something the runner did not share.
+      expect(items.map((item) => item.route)).toEqual([null, null]);
+      // And the run is still listed - the opt-out is about the geometry, not
+      // about taking part.
+      expect(items).toHaveLength(2);
+    });
+
+    // Your own route is always yours, whatever your own toggles say: the gate
+    // protects you from strangers, and hiding your own line from you would just
+    // be a broken map.
+    it('serves the caller their own route even with both of their own toggles off', async () => {
+      joinedEvent();
+      prisma.run.findMany.mockResolvedValue([
+        runRow('run-1', USER_ID, 'Me', {
+          routePolyline: POLYLINE,
+          profilePublic: false,
+          showRoutes: false,
+        }),
+      ]);
+
+      const { items } = await service.listRuns(USER_ID, 'event-1');
+
+      expect(items[0].route).toEqual({ polyline: POLYLINE });
+    });
+
+    // The review finding. Every event id is enumerable through GET /api/events, so
+    // without this the untrimmed start point of every route-sharing runner in the
+    // database would be one signup away - three times the blast radius decision 2
+    // accepted, and nobody decided it.
+    it('withholds the geometry from a caller who has not joined the event, but still lists the runs', async () => {
+      joinedEvent(false);
+      prisma.run.findMany.mockResolvedValue([
+        runRow('run-2', 'user-ana', 'Ana', { routePolyline: POLYLINE }),
+      ]);
+
+      const { items } = await service.listRuns(USER_ID, 'event-1');
+
+      // The ROW is still served: an event is joinable, so who ran what is what
+      // makes it worth looking at before joining. Only the line is withheld.
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({
+        distanceKm: 8.2,
+        runner: { id: 'user-ana', firstName: 'Ana' },
+      });
+      expect(items[0].route).toBeNull();
+    });
+
+    it('never echoes another runner’s privacy settings back to the caller', async () => {
+      joinedEvent();
+      prisma.run.findMany.mockResolvedValue([
+        runRow('run-2', 'user-ana', 'Ana', {
+          routePolyline: POLYLINE,
+          showRoutes: false,
+        }),
+      ]);
+
+      const { items } = await service.listRuns(USER_ID, 'event-1');
+
+      // The projection has to READ profilePublic and showRoutes to apply the
+      // gate; the response must not carry them. The runner object is rebuilt
+      // field by field for exactly this reason, and a `...row.user` spread
+      // slipping back in is what this catches.
+      expect(items[0].runner).toEqual({
+        id: 'user-ana',
+        firstName: 'Ana',
+        lastName: 'Tester',
+      });
+      expect(JSON.stringify(items)).not.toContain('showRoutes');
+      expect(JSON.stringify(items)).not.toContain('profilePublic');
     });
 
     // The rule the ticket does not mention and the leaderboard beside this
@@ -445,7 +605,7 @@ describe('EventsService', () => {
     // feed of their rows would rebuild exactly the total that withholding
     // hides. Your own runs are always yours to see.
     it('reads only runs of current participants who are on leaderboards, plus the caller’s own', async () => {
-      prisma.event.findUnique.mockResolvedValue({ id: 'event-1' });
+      joinedEvent();
       prisma.run.findMany.mockResolvedValue([]);
 
       await service.listRuns(USER_ID, 'event-1');
