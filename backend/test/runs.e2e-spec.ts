@@ -80,15 +80,48 @@ describe('Runs API (e2e)', () => {
       // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.any is typed any
       id: expect.any(String),
       routeName: 'Morning loop',
+      // A plain JSON number even though the column is NUMERIC(5, 2) since
+      // RUN-78: this is the assertion that would catch a Decimal escaping the
+      // backend boundary, because toEqual against 8.2 fails on {s, e, d}.
       distanceKm: 8.2,
       durationSeconds: 2535,
       date: '2026-07-14',
+      // When the run was LOGGED, an ISO instant, unlike `date` above which is
+      // the calendar day it was run on (RUN-78).
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.any is typed any
+      createdAt: expect.any(String),
       effort: 'Medium',
       note: '',
       // Present and null on every run: this one was saved without opening the
       // Route step (RUN-54 AC3).
       route: null,
     });
+  });
+
+  it('orders same-day runs by when they were logged, newest first (AC4)', async () => {
+    // The gap RUN-78 closed: before createdAt, two runs on one calendar day
+    // were ordered by cuid, which is deterministic but arbitrary - so the
+    // run entered second could come back either side of the first. Sending
+    // them in a known order and reading them back reversed is the whole
+    // check, and it is an e2e test rather than a unit one because what is
+    // being proved is that the DATABASE sorts this way.
+    const server = app.getHttpServer();
+    for (const routeName of ['First', 'Second', 'Third']) {
+      await request(server)
+        .post('/api/runs')
+        .set(auth)
+        .send({ ...validRun(), routeName })
+        .expect(201);
+    }
+
+    const response = await request(server)
+      .get('/api/runs')
+      .set(auth)
+      .expect(200);
+
+    expect(
+      (response.body as RunResponse[]).map((run) => run.routeName),
+    ).toEqual(['Third', 'Second', 'First']);
   });
 
   it('defaults effort and note when the payload omits them (ADD-8)', async () => {

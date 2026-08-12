@@ -13,14 +13,19 @@ import { RunsService } from './runs.service';
 const USER_ID = 'user-1';
 
 // A stored row as Prisma returns it: the DATE column comes back as a JS Date
-// pinned to UTC midnight.
+// pinned to UTC midnight, and distanceKm as a Decimal rather than a number
+// since RUN-78 made the column NUMERIC(5, 2). The Decimal is not decoration -
+// a fixture holding a plain number here would let a missing conversion at the
+// mapper boundary pass every test in this file and still serve the browser
+// {"s":1,"e":0,"d":[8,2]}.
 function row(overrides: Partial<Record<string, unknown>> = {}) {
   const merged = {
     id: 'run-1',
     routeName: 'Morning loop',
-    distanceKm: 8.2,
+    distanceKm: new Prisma.Decimal('8.20'),
     durationSeconds: 2535,
     date: new Date('2026-07-14T00:00:00.000Z'),
+    createdAt: new Date('2026-07-14T06:31:00.000Z'),
     effort: 'Medium',
     note: '',
     // A run with no route: all three columns NULL, which is what every run
@@ -125,12 +130,19 @@ describe('RunsService', () => {
     const runs = await service.findAll(USER_ID);
 
     // The owner is part of the query itself, not a JS filter (AC2).
+    //
+    // The ordering is the whole of RUN-78 AC4 on this side: createdAt sits
+    // between the calendar day and the id, so two runs logged on the same day
+    // come back in the order they were entered instead of in cuid order, and
+    // the id survives only for rows that predate that column. The client
+    // mirrors this list in compareRunsNewestFirst and the two have to agree.
     expect(prisma.run.findMany).toHaveBeenCalledWith({
       where: { userId: USER_ID },
-      orderBy: [{ date: 'desc' }, { id: 'desc' }],
+      orderBy: [{ date: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
     });
-    // The response is the contract shape: date is a yyyy-mm-dd string and
-    // userId stays internal.
+    // The response is the contract shape: date is a yyyy-mm-dd string,
+    // createdAt an ISO instant, distanceKm a plain JSON number (never the
+    // stored Decimal, RUN-78 AC3) and userId stays internal.
     expect(runs).toEqual([
       {
         id: 'run-1',
@@ -138,6 +150,7 @@ describe('RunsService', () => {
         distanceKm: 8.2,
         durationSeconds: 2535,
         date: '2026-07-14',
+        createdAt: '2026-07-14T06:31:00.000Z',
         effort: 'Medium',
         note: '',
         // Every run carries the route key; null is a run with no route
@@ -165,15 +178,24 @@ describe('RunsService', () => {
     );
   });
 
-  it('fails loudly on a stored effort outside the contract vocabulary', async () => {
-    // Plain TEXT column until the schema-hardening ticket adds an enum: a
-    // row edited via psql can hold anything, and that must not reach the
-    // frontend as a silently wrong Effort.
-    prisma.run.findFirst.mockResolvedValue(row({ effort: 'banana' }));
+  // The test that used to sit here asserted a 500 on a stored effort outside
+  // the vocabulary ('banana'). RUN-78 made the column a database enum, so
+  // that row can no longer exist and the guard that produced the 500 is gone
+  // with it; asserting the enum's own behaviour here would be testing Prisma.
 
-    await expect(service.findOne(USER_ID, 'run-1')).rejects.toThrow(
-      /Run run-1 has stored effort "banana"/,
+  it('serves the stored distance exactly, as a number and not a Decimal (AC3)', async () => {
+    // The column is NUMERIC(5, 2), which arrives as a decimal.js object. The
+    // contract is a plain JSON number, and 8.05 is the interesting value:
+    // the old DOUBLE PRECISION column stored it as 8.0500000000000007, so an
+    // exact match here is the round trip the numeric type was adopted for.
+    prisma.run.findFirst.mockResolvedValue(
+      row({ distanceKm: new Prisma.Decimal('8.05') }),
     );
+
+    const run = await service.findOne(USER_ID, 'run-1');
+
+    expect(run.distanceKm).toBe(8.05);
+    expect(typeof run.distanceKm).toBe('number');
   });
 
   it('creates with the owner and the calendar day stored at UTC midnight', async () => {
