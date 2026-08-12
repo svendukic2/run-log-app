@@ -1,10 +1,10 @@
 import { deriveInsights, derivePastPlans, formatWeekRange } from './insights';
 import type { Run } from './runs';
 
-// Reference day: Wed 5 Aug 2026. The insight window is the four *full*
-// Mon-Sun weeks Jul 6-12, Jul 13-19, Jul 20-26 and Jul 27-Aug 2; the prior
-// window ("last month") is Jun 8 through Jul 5. The running week Aug 3-9 is
-// excluded everywhere.
+// Reference day: Wed 5 Aug 2026. The insight window is the rolling 28 days
+// Jul 9 through Aug 5 (today included), bucketed for the spike check into
+// Jul 9-15, Jul 16-22, Jul 23-29 and Jul 30-Aug 5; the prior window ("last
+// month") is Jun 11 through Jul 8.
 const TODAY = '2026-08-05';
 
 let nextId = 0;
@@ -36,34 +36,44 @@ describe('deriveInsights (RUN-34)', () => {
   });
 
   describe('recent load', () => {
-    it('sums the four full weeks, ignoring the running week and older runs', () => {
+    it('sums the rolling 28 days, today included, ignoring older runs', () => {
       const runs = [
         makeRun({ date: '2026-07-28', distanceKm: 10.24 }),
-        // The running week belongs to the live plan card, not the window.
+        // Inside the running week: it counts (a runner whose history starts
+        // this week must not see a dead card).
         makeRun({ date: '2026-08-04', distanceKm: 5 }),
         // Jun 20 sits in the prior window.
         makeRun({ date: '2026-06-20', distanceKm: 40 }),
       ];
 
-      expect(insight(runs, 'load').value).toBe('10.2 km');
+      expect(insight(runs, 'load').value).toBe('15.2 km');
     });
 
-    it('reports the same numbers on Monday as at the end of the week', () => {
-      // The window never contains a half-finished week, so nothing dips on
-      // Monday morning: 3 runs a week reads 3 / week on any weekday.
-      const dates = ['2026-07-07', '2026-07-08', '2026-07-14', '2026-07-15'];
-      const runs = dates.map((date) => makeRun({ date, distanceKm: 10 }));
+    it('counts a run logged today', () => {
+      const runs = [makeRun({ date: TODAY, distanceKm: 5 })];
 
-      const monday = deriveInsights(runs, 20, '2026-08-03');
-      const friday = deriveInsights(runs, 20, '2026-08-07');
-      expect(monday).toEqual(friday);
-      expect(monday[0].value).toBe('40 km');
+      expect(insight(runs, 'load').value).toBe('5 km');
+    });
+
+    it('splits the window from last month exactly 28 days back', () => {
+      const runs = [
+        // Jul 9 is the oldest in-window day; Jul 8 is the newest prior day.
+        makeRun({ date: '2026-07-09', distanceKm: 7 }),
+        makeRun({ date: '2026-07-08', distanceKm: 40 }),
+      ];
+
+      // The 40 km run stays out of the load...
+      expect(insight(runs, 'load').value).toBe('7 km');
+      // ...but lands in the prior window: the pace caption compares against
+      // it instead of claiming a first month.
+      expect(insight(runs, 'pace').caption).toBe('471% slower than last month');
     });
 
     it('leaves a single active week unjudged', () => {
-      const runs = [makeRun({ date: '2026-07-28' }), makeRun({ date: '2026-07-30' })];
+      // Both runs sit in the same seven-day bucket (Jul 23-29).
+      const runs = [makeRun({ date: '2026-07-24' }), makeRun({ date: '2026-07-28' })];
 
-      expect(insight(runs, 'load').caption).toBe('Over the last 4 full weeks');
+      expect(insight(runs, 'load').caption).toBe('Over the last 4 weeks');
     });
 
     it.each([
@@ -72,15 +82,16 @@ describe('deriveInsights (RUN-34)', () => {
       ['one week towering over the rest', [10, 10, 10, 25], 'spike'],
       ['tiny distances, whatever the ratio', [1, 2], 'steady'],
     ])('calls %s %s', (_label, weeklyKm, verdict) => {
-      const weekStarts = ['2026-07-06', '2026-07-13', '2026-07-20', '2026-07-27'];
+      // One date inside each of the window's four seven-day buckets.
+      const bucketDates = ['2026-07-10', '2026-07-17', '2026-07-24', '2026-07-31'];
       const runs = weeklyKm.map((distanceKm, index) =>
-        makeRun({ date: weekStarts[weekStarts.length - weeklyKm.length + index], distanceKm }),
+        makeRun({ date: bucketDates[bucketDates.length - weeklyKm.length + index], distanceKm }),
       );
 
       expect(insight(runs, 'load').caption).toBe(
         verdict === 'spike'
-          ? 'Includes a spike week in the last 4 full weeks'
-          : 'Steady over the last 4 full weeks, no spikes',
+          ? 'Includes a spike week in the last 4 weeks'
+          : 'Steady over the last 4 weeks, no spikes',
       );
     });
   });
@@ -123,13 +134,12 @@ describe('deriveInsights (RUN-34)', () => {
     });
 
     it('never fabricates a pace from an empty window', () => {
-      // A run exists, but only in the running week: no full-week distance,
-      // no pace.
-      const runs = [makeRun({ date: '2026-08-04' })];
+      // A run exists, but it predates both windows: no distance, no pace.
+      const runs = [makeRun({ date: '2026-05-01' })];
 
       const pace = insight(runs, 'pace');
       expect(pace.value).toBe('No pace yet');
-      expect(pace.caption).toBe('Nothing logged in the last 4 full weeks');
+      expect(pace.caption).toBe('Nothing logged in the last 4 weeks');
     });
 
     it('survives a corrupt zero-duration prior month', () => {
@@ -145,18 +155,18 @@ describe('deriveInsights (RUN-34)', () => {
 
   describe('consistency', () => {
     it('judges the displayed runs-per-week against the plan bracket', () => {
-      // Three runs in each full week: 3 / week against a 3-4 session
-      // bracket (last week ran 3 times).
+      // Twelve runs across the window is 3 / week, against a 3-4 session
+      // bracket (last week, Jul 27-Aug 2, ran 3 times).
       const dates = [
-        '2026-07-07',
-        '2026-07-08',
-        '2026-07-09',
-        '2026-07-14',
-        '2026-07-15',
+        '2026-07-10',
+        '2026-07-11',
+        '2026-07-12',
         '2026-07-16',
-        '2026-07-21',
-        '2026-07-22',
+        '2026-07-17',
+        '2026-07-18',
         '2026-07-23',
+        '2026-07-24',
+        '2026-07-25',
         '2026-07-28',
         '2026-07-29',
         '2026-07-30',
@@ -172,17 +182,17 @@ describe('deriveInsights (RUN-34)', () => {
       // Last week held one run (a 1-2 session bracket) but the month
       // averages 3 runs a week.
       const dates = [
-        '2026-07-07',
-        '2026-07-08',
-        '2026-07-09',
         '2026-07-10',
-        '2026-07-14',
-        '2026-07-15',
+        '2026-07-11',
+        '2026-07-12',
+        '2026-07-13',
         '2026-07-16',
         '2026-07-17',
-        '2026-07-21',
-        '2026-07-22',
+        '2026-07-18',
+        '2026-07-19',
         '2026-07-23',
+        '2026-07-24',
+        '2026-07-25',
         '2026-07-28',
       ];
       const runs = dates.map((date) => makeRun({ date, distanceKm: 5 }));
@@ -193,7 +203,7 @@ describe('deriveInsights (RUN-34)', () => {
     });
 
     it('shows a fractional cadence instead of rounding it away', () => {
-      // Two runs across four full weeks is 0.5 / week, not "1 / week".
+      // Two runs across four weeks is 0.5 / week, not "1 / week".
       const runs = [makeRun({ date: '2026-07-21' }), makeRun({ date: '2026-07-23' })];
 
       const consistency = insight(runs, 'consistency');
@@ -263,11 +273,7 @@ describe('derivePastPlans (RUN-34)', () => {
     ];
 
     const plans = derivePastPlans(runs, 20, TODAY);
-    expect(plans.map((plan) => plan.weekStart)).toEqual([
-      '2026-07-27',
-      '2026-07-20',
-      '2026-07-13',
-    ]);
+    expect(plans.map((plan) => plan.weekStart)).toEqual(['2026-07-27', '2026-07-20', '2026-07-13']);
     // The oldest row steps up its own reference week (10 km), untouched by
     // the 20 km logged later: history never rewrites itself.
     expect(plans[2]).toMatchObject({ targetKm: 11, ranKm: 12, hit: true });

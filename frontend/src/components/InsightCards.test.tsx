@@ -31,7 +31,7 @@ async function logRun(overrides: Partial<Omit<Run, 'id'>> = {}): Promise<void> {
 describe('Insight cards (RUN-34)', () => {
   beforeEach(() => {
     window.localStorage.clear();
-    // Wed 5 Aug 2026: the window spans Jul 13 through Aug 9.
+    // Wed 5 Aug 2026: the rolling window spans Jul 9 through Aug 5.
     jest.useFakeTimers().setSystemTime(new Date(2026, 7, 5, 9, 0));
   });
 
@@ -54,7 +54,9 @@ describe('Insight cards (RUN-34)', () => {
     const load = within(cards[0]);
     expect(load.getByRole('heading', { name: 'Recent load' })).toBeInTheDocument();
     expect(load.getByText('20 km')).toBeInTheDocument();
-    expect(load.getByText('Over the last 4 full weeks')).toBeInTheDocument();
+    // Jul 28 and Jul 30 land in two different seven-day buckets, so the
+    // spike check runs and calls them steady.
+    expect(load.getByText('Steady over the last 4 weeks, no spikes')).toBeInTheDocument();
 
     const pace = within(cards[1]);
     expect(pace.getByRole('heading', { name: 'Pace trend' })).toBeInTheDocument();
