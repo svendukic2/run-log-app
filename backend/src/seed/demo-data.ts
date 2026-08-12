@@ -447,79 +447,100 @@ function buildNotifications(
 // The window reaches back far enough that every participant already has runs
 // inside it, which is what makes the event leaderboard populated rather than
 // a list of zeros.
-function buildEvent(users: DemoUser[], today: string): DemoEvent {
+// Everything about the event EXCEPT its target, which cannot be computed here
+// any more: since RUN-76 AC6 the target is derived from the runs tagged to the
+// event, and the tags are derived from this window. So the order is window ->
+// tags -> target, and that is a dependency rather than a preference (see
+// buildDemoDataset).
+function buildEvent(
+  users: DemoUser[],
+  today: string,
+): Omit<DemoEvent, 'targetKm'> {
   const participants = [
     ...users.slice(0, 8),
     // The private account joins too, so the event board demonstrates a
     // participant whose rank and distance are withheld.
     users[DEMO_USER_COUNT - 1],
   ];
-  const startDate = addDaysIso(today, -10);
-  const endDate = addDaysIso(today, 11);
-
-  // Derived from what these participants actually run, exactly like the
-  // window is derived from today, rather than being a round number picked in
-  // advance. A fixed target ages badly in one direction only: this group
-  // logs ~700 km in the ten days before the seed, so any number small enough
-  // to look like a challenge has already been passed before the demo opens,
-  // which makes it the one figure on the page that contradicts the data
-  // under it. Scaling the pace so far by the days remaining puts the target
-  // ahead of the group with the event still worth finishing.
-  const kmSoFar = participants.reduce(
-    (total, user) =>
-      total +
-      user.runs
-        .filter((run) => run.date >= startDate && run.date <= endDate)
-        .reduce((sum, run) => sum + run.distanceKm, 0),
-    0,
-  );
-  const elapsedDays = 11; // startDate through today, inclusive
-  const wholeWindowDays = 22;
-  const projected = (kmSoFar / elapsedDays) * wholeWindowDays;
-  // Rounded to a talkable number, and always ahead of the projection.
-  const targetKm = Math.ceil((projected * 1.1) / 100) * 100;
 
   return {
     // Season-neutral on purpose: the window is derived from whatever day the
     // seeder runs on, so "Spring Challenge" would be wrong most of the year.
     name: 'Decode Community Challenge',
     description:
-      'Three weeks, one collective target. Every kilometre logged inside the window counts.',
-    startDate,
-    endDate,
-    targetKm,
+      'Three weeks, one collective target. Tag a run to this event and it counts.',
+    startDate: addDaysIso(today, -10),
+    endDate: addDaysIso(today, 11),
     ownerEmail: users[0].email,
     participantEmails: participants.map((user) => user.email),
   };
 }
 
-// AC5, and since RUN-76 it is what makes the event page populated at all: the
-// event leaderboard counts TAGGED runs, so an untagged demo would show nine
+// AC5 and AC6. Since RUN-76 this is what makes the event page populated at all:
+// the leaderboard counts TAGGED runs, so an untagged demo would show nine
 // participants on zero kilometres and an empty run feed - the exact empty table
 // this seeder exists to prevent.
 //
-// Every in-window run of every participant is tagged, which restores precisely
-// the set the leaderboard used to sum implicitly, so the board reads the same as
-// it did before that change. Runs outside the window and non-participants' runs
-// stay untagged, which is also what proves the feed is filtering rather than
-// listing everything.
+// EXACTLY ONE RUN PER PARTICIPANT (AC6), not every run inside the window. Nine
+// participants running 3-5 times a week across a 21-day window is on the order of
+// a hundred runs, and an event page listing a hundred rows is not a demo of
+// anything. One each also matches the scale the ticket's own decision 1 assumes
+// ("roughly 5 participants with one run each").
+//
+// Which one: the LATEST in-window run, which is the most recent thing that
+// runner did for the event and therefore the one a demo would talk about. The
+// pick is deterministic, like everything else here, so two seeds on the same day
+// produce the same page.
+//
+// Both AC3 rules are re-checked while choosing, and that is not belt-and-braces:
+// the seeder writes rows straight through Prisma, so it bypasses the DTO and
+// assertTaggable entirely. Nothing but this function stops it writing a tag the
+// API itself would reject.
 //
 // Returns new objects instead of mutating: the generator is a pure function and
-// the spec relies on that (same dataset for the same seed, no order-dependent
-// surprises).
-function tagEventRuns(users: DemoUser[], event: DemoEvent): DemoUser[] {
+// the spec relies on that.
+function tagEventRuns(
+  users: DemoUser[],
+  event: Omit<DemoEvent, 'targetKm'>,
+): DemoUser[] {
   const participants = new Set(event.participantEmails);
   return users.map((user) => {
     if (!participants.has(user.email)) return user;
+    // Runs are generated oldest first, so the last match is the latest.
+    const chosen = user.runs.reduce<DemoRun | null>(
+      (latest, run) =>
+        run.date >= event.startDate && run.date <= event.endDate ? run : latest,
+      null,
+    );
+    if (!chosen) return user;
     return {
       ...user,
       runs: user.runs.map((run) =>
-        run.date >= event.startDate && run.date <= event.endDate
-          ? { ...run, inEvent: true }
-          : run,
+        run === chosen ? { ...run, inEvent: true } : run,
       ),
     };
   });
+}
+
+// The event's collective target, computed from the runs that were actually
+// TAGGED to it (AC6 changed what that means, so this changed with it).
+//
+// It has to be derived rather than picked, and from the tagged set rather than
+// from everything in the window: the board now shows one run per participant, so
+// a target scaled to the ~700 km this group runs in the window would be the one
+// figure on the page contradicting the data under it - unreachable by a factor of
+// ten. Doubling what is on the board leaves the event visibly worth finishing
+// with about half its window still to go, and the number stays talkable.
+function eventTargetKm(
+  users: DemoUser[],
+  event: Omit<DemoEvent, 'targetKm'>,
+): number {
+  const participants = new Set(event.participantEmails);
+  const taggedKm = users
+    .filter((user) => participants.has(user.email))
+    .flatMap((user) => user.runs.filter((run) => run.inEvent))
+    .reduce((total, run) => total + run.distanceKm, 0);
+  return Math.max(10, Math.ceil((taggedKm * 2) / 10) * 10);
 }
 
 export interface BuildDemoDatasetOptions {
@@ -538,17 +559,18 @@ export function buildDemoDataset(
 
   const users = buildUsers(faker, today);
   const follows = buildFollows(faker, users);
-  // The event is derived from the runs (its window and its target), and the
-  // tags are then derived from the event - so this order is the dependency, not
-  // a preference.
+  // window -> tags -> target, each step needing the one before it: the window
+  // decides which runs may be tagged, and the target is scaled to what was
+  // tagged. A dependency, not a preference.
   const event = buildEvent(users, today);
+  const tagged = tagEventRuns(users, event);
 
   return {
-    users: tagEventRuns(users, event),
+    users: tagged,
     follows,
     // Built from the ORIGINAL users: the tags change no field these read, and
     // passing the tagged copy would only suggest they might.
     notifications: buildNotifications(users, follows),
-    event,
+    event: { ...event, targetKm: eventTargetKm(tagged, event) },
   };
 }

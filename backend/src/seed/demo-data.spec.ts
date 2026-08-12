@@ -99,28 +99,40 @@ describe('demo dataset (RUN-71)', () => {
       event.participantEmails.length,
     );
 
-    // RUN-76 AC5: the event's runs are TAGGED. Since tagging became explicit,
-    // an untagged demo would show nine participants on zero kilometres and an
-    // empty run feed - the empty table this whole seeder exists to prevent.
+    // RUN-76 AC5 + AC6: the event's runs are TAGGED, and there is EXACTLY ONE
+    // per participant. Both halves matter for different reasons - untagged, the
+    // board would show nine participants on zero kilometres; tagged wholesale, a
+    // hundred rows would land on one event page.
     const participants = new Set(event.participantEmails);
-    const tagged = dataset.users.flatMap((user) =>
-      user.runs
-        .filter((run) => run.inEvent)
-        .map((run) => ({ email: user.email, date: run.date })),
+    const taggedPerUser = new Map(
+      dataset.users.map((user) => [
+        user.email,
+        user.runs.filter((run) => run.inEvent),
+      ]),
     );
-    expect(tagged.length).toBeGreaterThan(20);
-    for (const run of tagged) {
-      // Exactly the set the API would accept for these accounts: a participant
-      // of this event, on a day inside its window (runs.service assertTaggable).
-      expect(participants).toContain(run.email);
-      expect(run.date >= event.startDate).toBe(true);
-      expect(run.date <= event.endDate).toBe(true);
+
+    for (const [email, tagged] of taggedPerUser) {
+      // Only participants have tags, and each of them has exactly one.
+      expect(tagged).toHaveLength(participants.has(email) ? 1 : 0);
+      for (const run of tagged) {
+        // The two rules the API would apply (runs.service assertTaggable), and
+        // they are asserted HERE because the seeder writes through Prisma: it
+        // bypasses the DTO and the service, so nothing else would stop it
+        // writing a tag the API itself rejects.
+        expect(run.date >= event.startDate).toBe(true);
+        expect(run.date <= event.endDate).toBe(true);
+      }
     }
-    // And the filtering is real rather than "everything is tagged": history
-    // older than the window stays out of the event.
-    expect(
-      dataset.users.some((user) => user.runs.some((run) => !run.inEvent)),
-    ).toBe(true);
+    expect(participants.size).toBeGreaterThan(5);
+
+    // The target is scaled to what was tagged, so the page's headline number and
+    // the board under it are talking about the same runs: ahead of the total,
+    // within reach of it.
+    const taggedKm = [...taggedPerUser.values()]
+      .flat()
+      .reduce((total, run) => total + run.distanceKm, 0);
+    expect(event.targetKm).toBeGreaterThan(taggedKm);
+    expect(event.targetKm).toBeLessThan(taggedKm * 3);
 
     // Determinism (house rule): the same day produces the same demo, so the
     // screens can be talked about the same way twice.

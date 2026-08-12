@@ -7,6 +7,7 @@ import type { AuthResponse } from '../src/auth/auth.service';
 import type {
   EventListResponse,
   EventParticipantListResponse,
+  EventRunListResponse,
 } from '../src/events/events.service';
 import type { LeaderboardResponse } from '../src/leaderboard/leaderboard.service';
 import {
@@ -141,6 +142,22 @@ describe('Demo seeder (e2e)', () => {
       // The one account deliberately left private is a participant with its
       // numbers withheld, which is what makes the privacy gate demonstrable.
       expect(board2.items.some((row) => row.rank === null)).toBe(true);
+
+      // RUN-76 AC5 + AC6, over HTTP: the event's runs are tagged, and there is
+      // exactly ONE per participant - a hundred rows on one event page would be
+      // a demo of nothing. The private participant's run is not in the feed at
+      // all, because a feed of their rows would rebuild the total the board
+      // beside it withholds.
+      const feed = await request(app.getHttpServer())
+        .get(`/api/events/${list.items[0].id}/runs`)
+        .set(auth)
+        .expect(200);
+      const runs = feed.body as EventRunListResponse;
+      expect(runs.items).toHaveLength(ranked.length);
+      expect(new Set(runs.items.map((run) => run.runner.id)).size).toBe(
+        runs.items.length,
+      );
+      expect(runs.items.every((run) => run.distanceKm > 0)).toBe(true);
     },
     SEED_TEST_TIMEOUT_MS,
   );
