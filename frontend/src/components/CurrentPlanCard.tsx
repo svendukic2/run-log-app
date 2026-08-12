@@ -4,7 +4,13 @@ import { useEffect, useState } from 'react';
 import SparkleIcon from '@/components/SparkleIcon';
 import { applyGoalTarget, useGoalTarget } from '@/lib/goal';
 import { ApiError } from '@/lib/session';
-import { derivePlan, formatUpdatedAgo, stampPlanGenerated, usePlanGeneratedAt } from '@/lib/plan';
+import {
+  derivePlan,
+  derivePlanReasoning,
+  formatUpdatedAgo,
+  stampPlanGenerated,
+  usePlanGeneratedAt,
+} from '@/lib/plan';
 import { useRuns } from '@/lib/runs';
 import { useToday } from '@/lib/useToday';
 
@@ -30,8 +36,8 @@ function RegenerateIcon() {
 // headline, an explanation paragraph and four stats. The numbers derive from
 // the runs store at render time, so they follow the data; the stamp persists
 // so the caption survives reloads (A16). "Apply to weekly goal" makes the
-// suggestion this week's goal (RUN-33, A15); "See the reasoning" stays
-// non-functional by design (A21).
+// suggestion this week's goal (RUN-33, A15); "See the reasoning" expands an
+// inline account of how the numbers were derived.
 //
 // Regeneration (RUN-35) is orchestrated by the page: the card swap and the
 // dimming of the neighbouring cards belong to CoachView, so the button only
@@ -53,6 +59,10 @@ export default function CurrentPlanCard({ onRegenerate }: { onRegenerate?: () =>
   // button disables while in flight and a failure says so inline.
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState('');
+  // "See the reasoning" is a plain disclosure: the content derives from the
+  // same inputs as the plan, so there is nothing to fetch and nothing to
+  // persist. Closed on every mount, like any other collapsed detail.
+  const [reasoningOpen, setReasoningOpen] = useState(false);
 
   const hasRuns = runs.length > 0;
 
@@ -159,7 +169,7 @@ export default function CurrentPlanCard({ onRegenerate }: { onRegenerate?: () =>
 
       {/* Plan actions are AIC-5: "Apply to weekly goal" adopts the suggestion
           as this week's goal without a confirmation step and the page stays
-          put (A15); "See the reasoning" stays non-functional by design (A21). */}
+          put (A15); "See the reasoning" toggles the derivation notes below. */}
       <div className="mt-[26px] flex flex-wrap items-center gap-x-[24px] gap-y-3">
         <button
           type="button"
@@ -192,16 +202,12 @@ export default function CurrentPlanCard({ onRegenerate }: { onRegenerate?: () =>
         </button>
         <button
           type="button"
-          aria-disabled="true"
-          aria-describedby="reasoning-seam-note"
-          title="The reasoning view is not available yet"
+          aria-expanded={reasoningOpen}
+          onClick={() => setReasoningOpen((open) => !open)}
           className="text-[13.5px] font-medium text-white/80 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
         >
-          See the reasoning
+          {reasoningOpen ? 'Hide the reasoning' : 'See the reasoning'}
         </button>
-        <span id="reasoning-seam-note" className="sr-only">
-          Not available yet.
-        </span>
         {/* Always mounted so screen readers announce the text appearing. The
             goal-target guard keeps the line honest: anything that moves this
             week's target from elsewhere (another tab, a later apply) makes
@@ -217,6 +223,21 @@ export default function CurrentPlanCard({ onRegenerate }: { onRegenerate?: () =>
           </p>
         )}
       </div>
+
+      {/* The reasoning itself, mounted only while open. The toggle announces
+          its state via aria-expanded alone; the list renders below the
+          actions row. Recomputed on render like every other derived number,
+          so it always describes the plan currently on the card. */}
+      {reasoningOpen && (
+        <ul
+          role="list"
+          className="mt-[20px] flex list-disc flex-col gap-[8px] border-t border-white/10 pt-[18px] pl-[18px] text-[13.5px] leading-[1.6] text-white/70"
+        >
+          {derivePlanReasoning(runs, goalTargetKm, today).map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }

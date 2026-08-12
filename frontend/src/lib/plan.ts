@@ -5,7 +5,7 @@
 // timestamp persists (runlog.plan): it feeds the "updated {time} ago" caption
 // and is the seam RUN-35's Regenerate re-stamps.
 import { useMemo, useSyncExternalStore } from 'react';
-import { lastWeekStarts, totalsForWeek, type Run } from './runs';
+import { formatKm, lastWeekStarts, totalsForWeek, type Run } from './runs';
 
 export interface Plan {
   targetKm: number;
@@ -64,6 +64,38 @@ export function derivePlan(runs: Run[], goalKm: number, isoToday: string): Plan 
     // One quality session per week is the coach's fixed suggestion (AIC-4).
     keyWorkout: '1 tempo',
   };
+}
+
+// The plain-language account of how derivePlan got its numbers, for the plan
+// card's "See the reasoning" disclosure (RUN-33 AC3). Lives here next to the
+// formula so the two cannot drift: every sentence restates a branch of
+// derivePlan above, and both read the same inputs.
+export function derivePlanReasoning(runs: Run[], goalKm: number, isoToday: string): string[] {
+  const [previousWeek] = lastWeekStarts(isoToday, 2);
+  const lastWeek = totalsForWeek(runs, previousWeek);
+  const plan = derivePlan(runs, goalKm, isoToday);
+
+  // The step is quoted from vsLastWeekPercent, not from the 10% factor, for
+  // the same reason the card's stat is: rounding (and the 1 km floor) can
+  // make the delivered step differ from the factor, and the reasoning must
+  // never contradict the numbers on the card.
+  const target =
+    lastWeek.distanceKm > 0
+      ? plan.vsLastWeekPercent === 0
+        ? `You ran ${formatKm(lastWeek.distanceKm)} km last week; a safe 10% step rounds back to the same distance, so the target holds at ${plan.targetKm} km.`
+        : `You ran ${formatKm(lastWeek.distanceKm)} km last week; stepping that up ${plan.vsLastWeekPercent}% gives this week's ${plan.targetKm} km target.`
+      : `There is no distance from last week to build on, so the target starts from your weekly goal, rounded to ${plan.targetKm} km.`;
+
+  const sessions =
+    lastWeek.runCount > 0
+      ? `You went out ${lastWeek.runCount === 1 ? 'once' : `${lastWeek.runCount} times`} last week, so ${plan.sessionsMin}-${plan.sessionsMax} sessions keeps that rhythm without a sudden jump.`
+      : `The ${plan.sessionsMin}-${plan.sessionsMax} session bracket follows how often you are running right now.`;
+
+  return [
+    target,
+    sessions,
+    `One tempo run is the week's quality workout; keeping the rest easy avoids stacking two hard days back to back.`,
+  ];
 }
 
 // "just now" under a minute, then minutes, hours, days.
