@@ -24,33 +24,22 @@ import type { RunningLevel } from '../profile/dto/put-profile.dto';
 
 /* The RUN-72 contract ----------------------------------------------------- */
 
-// RUN-72 (anti-cheat guardrails) owns the authoritative copy of these
-// numbers in backend/src/common/runLimits.ts. That ticket is being built in
-// parallel and its file does not exist on this branch, so the agreed values
-// are restated here under their agreed names. When RUN-72 lands, delete this
-// block and replace it with
-//   export { RUN_LIMITS, RUN_OUTLIER_THRESHOLDS } from '../common/runLimits';
-// Nothing else in this file or its spec has to change.
-export const RUN_LIMITS = {
-  maxDistanceKm: 150,
-  fastestPaceSecPerKm: 150, // 2:30 /km
-  slowestPaceSecPerKm: 1200, // 20:00 /km
-  maxDurationSec: 86400, // 24 h
-} as const;
-
-export const RUN_OUTLIER_THRESHOLDS = {
-  fastPaceSecPerKm: 210, // 3:30 /km
-  longDistanceKm: 60,
-} as const;
-
-// AC3 says "no flagged demo data", which is stricter than "legal": a run
-// inside RUN_LIMITS but outside RUN_OUTLIER_THRESHOLDS is still legal and
-// still flagged, so the generator has to stay inside the tighter pair. These
-// are the bounds it actually generates within, deliberately well inside the
-// thresholds rather than pressed against them - a demo dataset that only
-// just escapes being flagged would be one rounding change away from failing.
-// Amateur paces and distances sit here naturally, so the margin costs
-// nothing.
+// The authoritative limits live in common/runLimits.ts (RUN-72) and are NOT
+// repeated here. This module does not import them either: it does not need
+// to decide anything at generation time, it needs to stay well clear, and
+// the spec is where the two are actually reconciled - it runs every
+// generated run through RUN-72's own runLimitViolation() and isOutlierRun(),
+// so demo data cannot drift past the rules that guard real data even if
+// those rules change.
+//
+// AC3 is "no flagged demo data", which is stricter than "legal": a run
+// inside RUN_LIMITS but past RUN_OUTLIER_THRESHOLDS is still legal, still
+// stored, and still marked unverified on every leaderboard. So the
+// generator has to stay inside the SOFT thresholds too. These are the bounds
+// it generates within, deliberately well clear of them rather than pressed
+// against them - a demo dataset that only just escapes being flagged would
+// be one rounding change away from failing. Amateur paces and distances sit
+// here naturally, so the margin costs nothing.
 export const DEMO_RUN_BOUNDS = {
   fastestPaceSecPerKm: 240, // 4:00 /km, comfortably slower than 3:30
   slowestPaceSecPerKm: 480, // 8:00 /km, nowhere near the 20:00 floor

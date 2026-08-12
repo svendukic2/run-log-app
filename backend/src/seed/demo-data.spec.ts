@@ -1,11 +1,10 @@
 import { mondayOf } from '../common/dates';
+import { isOutlierRun, runLimitViolation } from '../common/runLimits';
 import {
   buildDemoDataset,
   DEMO_EMAIL_DOMAIN,
   DEMO_PRIMARY_EMAIL,
   DEMO_USER_COUNT,
-  RUN_LIMITS,
-  RUN_OUTLIER_THRESHOLDS,
 } from './demo-data';
 
 // Two tests, and they are the two the ticket cannot be proved without on a
@@ -27,19 +26,16 @@ describe('demo dataset (RUN-71)', () => {
     expect(runs.length).toBeGreaterThan(200);
 
     for (const run of runs) {
-      const paceSecPerKm = run.durationSeconds / run.distanceKm;
-      // AC3 is "not flagged", which is stricter than "legal": the outlier
-      // thresholds have to hold, not just the hard limits.
-      expect(paceSecPerKm).toBeGreaterThan(
-        RUN_OUTLIER_THRESHOLDS.fastPaceSecPerKm,
-      );
-      expect(run.distanceKm).toBeLessThan(
-        RUN_OUTLIER_THRESHOLDS.longDistanceKm,
-      );
-      expect(paceSecPerKm).toBeLessThan(RUN_LIMITS.slowestPaceSecPerKm);
-      expect(run.distanceKm).toBeGreaterThan(0);
-      expect(run.durationSeconds).toBeGreaterThan(0);
-      expect(run.durationSeconds).toBeLessThan(RUN_LIMITS.maxDurationSec);
+      // Asserted with RUN-72's OWN functions rather than against numbers
+      // copied out of it, so this fails if the guardrails ever tighten past
+      // what the seeder generates - which is the whole point of AC3.
+      //
+      // Both tiers, because AC3 is "not flagged", which is stricter than
+      // "legal": runLimitViolation is the hard check that would refuse the
+      // write, isOutlierRun is the soft one that would still store the run
+      // and mark it unverified on every leaderboard.
+      expect(runLimitViolation(run)).toBeNull();
+      expect(isOutlierRun(run)).toBe(false);
       // Runs use a DATE column and the API refuses future days, so no
       // generated day may be past today.
       expect(run.date <= TODAY).toBe(true);
