@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import EffortField from '@/components/EffortField';
+import EventField from '@/components/EventField';
 import RouteStep, { type RoutePlanFailure } from '@/components/RouteStep';
 import TextArea from '@/components/TextArea';
 import TextField from '@/components/TextField';
@@ -42,6 +43,23 @@ const FIELD_IDS: Record<RunFormField, string> = {
   date: 'run-date',
 };
 const FIELD_ORDER: RunFormField[] = ['routeName', 'distance', 'duration', 'date'];
+
+// Mirrors ROUTE_NAME_MAX_LENGTH and NOTE_MAX_LENGTH in the backend's
+// create-run.dto.ts, which is the source of truth for both. Hand-mirrored
+// because the frontend cannot import across the app boundary - the same wart
+// CLAUDE.md documents for HelloResponse, and the same shape RUN-62 used for
+// the search bound in PeopleView. Without them a runner can type 3000
+// characters and learn about the limit from a rejected save (RUN-79 AC1).
+const ROUTE_NAME_MAX_LENGTH = 120;
+const NOTE_MAX_LENGTH = 2000;
+
+// maxLength refuses further typing silently, which is invisible and fine for
+// a 2000 character note nobody reaches. The route name is different: 120
+// characters is reachable by pasting, and a name that arrives truncated with
+// no explanation looks like the app ate it. One line, and only once the
+// bound is actually reached - not a character counter ticking from the
+// first keystroke.
+const ROUTE_NAME_LIMIT_HINT = `Route names stop at ${ROUTE_NAME_MAX_LENGTH} characters.`;
 
 // Two steps since RUN-54 (Figma "STEP 1 OF 2" / "STEP 2 OF 2"): the run's
 // details, then the optional route. The order is what AC1 asks for - the map
@@ -102,6 +120,13 @@ export default function RunModal({ run, onClose }: RunModalProps) {
 
   const setValue = <Field extends keyof RunFormValues>(field: Field, value: RunFormValues[Field]) =>
     setValues((current) => ({ ...current, [field]: value }));
+
+  // Stable across renders, and that is load-bearing rather than tidy: the event
+  // picker re-reads its options in an effect that depends on this callback, so a
+  // fresh function every render would refetch on every keystroke in the form.
+  const setEventId = useCallback((eventId: string) => {
+    setValues((current) => ({ ...current, eventId }));
+  }, []);
 
   // Dismissal is refused while a save is in flight (RUN-68 review fix,
   // back-ported here: the two modals share the pattern): closing mid-save
@@ -264,6 +289,10 @@ export default function RunModal({ run, onClose }: RunModalProps) {
               placeholder="e.g. Evening tempo"
               value={values.routeName}
               onChange={(value) => setValue('routeName', value)}
+              maxLength={ROUTE_NAME_MAX_LENGTH}
+              hint={
+                values.routeName.length >= ROUTE_NAME_MAX_LENGTH ? ROUTE_NAME_LIMIT_HINT : undefined
+              }
               error={errors.routeName}
             />
 
@@ -279,11 +308,13 @@ export default function RunModal({ run, onClose }: RunModalProps) {
                 onChange={(value) => setValue('distance', value)}
                 error={errors.distance}
               />
+              {/* No inputMode here on purpose: the value is "mm:ss" and the
+                  mobile numeric keypad has no colon, which made the format
+                  impossible to type on a phone. The standard keyboard does. */}
               <TextField
                 id={FIELD_IDS.duration}
                 label="Duration"
                 placeholder="00:00"
-                inputMode="numeric"
                 value={values.duration}
                 onChange={(value) => setValue('duration', value)}
                 error={errors.duration}
@@ -302,6 +333,11 @@ export default function RunModal({ run, onClose }: RunModalProps) {
               error={errors.date}
             />
 
+            {/* Directly under the date, because its options ARE a function of
+                the date: an event can only be chosen for a run inside its
+                window (RUN-76 AC1). */}
+            <EventField date={values.date} value={values.eventId} onChange={setEventId} />
+
             <EffortField value={values.effort} onChange={(effort) => setValue('effort', effort)} />
 
             <TextArea
@@ -310,6 +346,7 @@ export default function RunModal({ run, onClose }: RunModalProps) {
               placeholder="How did it feel? Terrain, weather, splits…"
               value={values.note}
               onChange={(value) => setValue('note', value)}
+              maxLength={NOTE_MAX_LENGTH}
             />
           </div>
 

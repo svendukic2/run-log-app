@@ -8,12 +8,18 @@ import {
   Param,
   Patch,
   Post,
+  Query,
 } from '@nestjs/common';
 import { CurrentUser } from '../auth/current-user.decorator';
 import type { AuthenticatedUser } from '../auth/jwt-auth.guard';
+import { PaginationQueryDto } from '../common/pagination-query.dto';
 import { CreateRunDto } from './dto/create-run.dto';
 import { UpdateRunDto } from './dto/update-run.dto';
-import { RunsService, type RunResponse } from './runs.service';
+import {
+  RunsService,
+  type RunListResponse,
+  type RunResponse,
+} from './runs.service';
 
 // Served under the global 'api' prefix (main.ts): GET/POST /api/runs,
 // GET/PATCH/DELETE /api/runs/:id. Bodies are validated by the app-wide
@@ -24,9 +30,16 @@ import { RunsService, type RunResponse } from './runs.service';
 export class RunsController {
   constructor(private readonly runs: RunsService) {}
 
+  // Paginated since RUN-79: ?page and ?pageSize through the shared
+  // PaginationQueryDto, answering the shared envelope. The frontend store
+  // walks every page, so what this bounds is one request's work, never the
+  // history a screen computes from.
   @Get()
-  findAll(@CurrentUser() user: AuthenticatedUser): Promise<RunResponse[]> {
-    return this.runs.findAll(user.id);
+  findAll(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: PaginationQueryDto,
+  ): Promise<RunListResponse> {
+    return this.runs.findAll(user.id, query);
   }
 
   @Get(':id')

@@ -2,13 +2,18 @@ import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { PrismaService } from './../src/prisma/prisma.service';
-import type { RunResponse } from './../src/runs/runs.service';
+import type { RunListResponse, RunResponse } from './../src/runs/runs.service';
 import { createE2eApp, signupUser } from './create-test-app';
 
-// supertest types response.body as any; these two keep the assertions
+// supertest types response.body as any; these three keep the assertions
 // type-checked instead of sprinkling casts through every test.
 function runBody(response: request.Response): RunResponse {
   return response.body as RunResponse;
+}
+
+// GET /api/runs answers the shared pagination envelope since RUN-79.
+function listBody(response: request.Response): RunListResponse {
+  return response.body as RunListResponse;
 }
 
 function errorMessages(response: request.Response): string[] {
@@ -80,15 +85,54 @@ describe('Runs API (e2e)', () => {
       // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.any is typed any
       id: expect.any(String),
       routeName: 'Morning loop',
+      // A plain JSON number even though the column is NUMERIC(5, 2) since
+      // RUN-78: this is the assertion that would catch a Decimal escaping the
+      // backend boundary, because toEqual against 8.2 fails on {s, e, d}.
       distanceKm: 8.2,
       durationSeconds: 2535,
       date: '2026-07-14',
+      // When the run was LOGGED, an ISO instant, unlike `date` above which is
+      // the calendar day it was run on (RUN-78).
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.any is typed any
+      createdAt: expect.any(String),
       effort: 'Medium',
       note: '',
       // Present and null on every run: this one was saved without opening the
       // Route step (RUN-54 AC3).
       route: null,
+      // Untagged, like every run this suite logs: tagging one to an event
+      // needs an event and a membership, so it lives in events.e2e-spec.ts
+      // (RUN-76 AC3) next to the fixture that can build both.
+      eventId: null,
     });
+  });
+
+  it('orders same-day runs by when they were logged, newest first (AC4)', async () => {
+    // The gap RUN-78 closed: before createdAt, two runs on one calendar day
+    // were ordered by cuid, which is deterministic but arbitrary - so the
+    // run entered second could come back either side of the first. Sending
+    // them in a known order and reading them back reversed is the whole
+    // check, and it is an e2e test rather than a unit one because what is
+    // being proved is that the DATABASE sorts this way.
+    const server = app.getHttpServer();
+    for (const routeName of ['First', 'Second', 'Third']) {
+      await request(server)
+        .post('/api/runs')
+        .set(auth)
+        .send({ ...validRun(), routeName })
+        .expect(201);
+    }
+
+    const response = await request(server)
+      .get('/api/runs')
+      .set(auth)
+      .expect(200);
+
+    expect(listBody(response).items.map((run) => run.routeName)).toEqual([
+      'Third',
+      'Second',
+      'First',
+    ]);
   });
 
   it('defaults effort and note when the payload omits them (ADD-8)', async () => {
@@ -123,9 +167,29 @@ describe('Runs API (e2e)', () => {
       .set(auth)
       .expect(200);
 
-    expect(
-      (response.body as RunResponse[]).map((run) => run.routeName),
-    ).toEqual(['Newer', 'Older']);
+    expect(listBody(response).items.map((run) => run.routeName)).toEqual([
+      'Newer',
+      'Older',
+    ]);
+    expect(listBody(response)).toMatchObject({ total: 2, page: 1 });
+
+    // RUN-79, against real skip/take: a page is a window on that same
+    // ordering, and `total` still counts everything behind it - which is
+    // what lets the store walk to the end instead of stopping at what one
+    // request happened to return.
+    const secondPage = await request(server)
+      .get('/api/runs?page=2&pageSize=1')
+      .set(auth)
+      .expect(200);
+
+    expect(listBody(secondPage).items.map((run) => run.routeName)).toEqual([
+      'Older',
+    ]);
+    expect(listBody(secondPage)).toMatchObject({
+      total: 2,
+      page: 2,
+      pageSize: 1,
+    });
   });
 
   it('round-trips one run through GET /api/runs/:id', async () => {
@@ -183,7 +247,8 @@ describe('Runs API (e2e)', () => {
       .get('/api/runs')
       .set(auth)
       .expect(200);
-    expect(list.body).toEqual([]);
+    expect(listBody(list).items).toEqual([]);
+    expect(listBody(list).total).toBe(0);
   });
 
   it('404s with a message on a missing id for GET, PATCH and DELETE', async () => {

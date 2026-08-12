@@ -103,8 +103,14 @@ way: **client-side calls to same-origin `/api/*`**, which `next.config.ts` rewri
 the backend server-side, so `BACKEND_URL` never reaches the browser bundle and CORS
 still never enters the picture. Those calls carry a Bearer token from the
 Sign in / Sign up screens (RUN-58, `frontend/src/lib/session.ts`): `runlog.session`
-stores token + email, a 401 signs the user out cleanly (no refresh endpoint yet,
-RUN-74), and every guarded screen sits behind `RequireSession`. CORS stays
+stores token + email, and every guarded screen sits behind `RequireSession`. Since
+RUN-74 the token lives 15 minutes and renews itself: a 401 buys exactly one
+`POST /api/auth/refresh` and one replay, concurrent 401s share the single in-flight
+renewal, and a renewal that fails degrades to the RUN-58 AC6 behaviour (clean
+sign-out, Sign in, terminal error). The lifecycle decision, its two bounding windows
+and the threats it deliberately leaves open are written out in
+`backend/src/auth/token-lifecycle.ts`; read that before changing anything about
+tokens. CORS stays
 enabled on the backend (`main.ts`, origin `FRONTEND_URL`) for any genuinely cross-origin
 fetch.
 
@@ -131,6 +137,13 @@ open profile), `leaderboard.ts` (RUN-70, one open week) and `userSearch.ts`
 (RUN-62, one open search query, whose load token is what stops a slow "an" from
 landing on top of "ana").
 
+`frontend/src/lib/eventRuns.ts` (RUN-76) is the same per-entity shape applied to
+a second question on the same screen, and deliberately a **copy rather than a
+generalisation**: two 150-line modules that each read one endpoint are easier to
+follow than one abstraction with an endpoint parameter, and the two cards on the
+event page have to fail and retry independently - a run feed that did not load
+must not take the leaderboard down with it.
+
 A third variation, and the one to copy for anything that is a **command rather
 than a cache**: `frontend/src/lib/routePlan.ts` (RUN-54) has no store at all. A
 planned route belongs to one open modal, is thrown away when it closes, and no
@@ -156,6 +169,18 @@ test, because the picker sits inside the Add run modal and any test that opens
 that modal would otherwise boot a map in jsdom. The stub records what was drawn
 and exposes `fireMapClick` / `fireMarkerDragEnd` / `fireMarkerClick`, so each
 component's own wiring stays under test.
+
+**A run counts for an event only if it is TAGGED to it (RUN-76).** `Run.eventId`
+is a nullable FK, and it replaced the rule the event leaderboard used to apply -
+"every run of every participant whose date falls inside the window". That is a
+behaviour change, not a refactor: joining an event no longer enrols all of your
+running, and an untagged run counts for nothing. The two rules that make a tag
+legal (an event you have joined, a date inside its window) live in
+`runs.service.assertTaggable`, never in a DTO, because neither is knowable from
+the payload - and they are re-checked on the MERGED row for a PATCH, so moving a
+date cannot slide a tagged run out of its event. The form's picker reads
+`GET /api/events/taggable?date=`, which answers exactly the set that write path
+accepts; if the two ever disagree, the endpoint is the half that is wrong.
 
 **A route served to somebody else is not the same route (RUN-55).** Route data is
 gated three ways rather than two: `routeVisibility` in `backend/src/common/privacy.ts`
@@ -221,6 +246,31 @@ runtime reads ConfigService inside `PrismaService`), and the client is **generat
 TypeScript** in `backend/src/generated/` (gitignored, recreated by the `postinstall`
 script). Feature modules import `PrismaModule` explicitly - it is deliberately not
 `@Global` - and inject `PrismaService`, the app's single database entry point.
+
+**Migrations are hand written, and every one must survive a table with rows
+(RUN-78).** There is no local database on most clones, so the check is
+`npx prisma migrate diff --from-empty --to-schema ./prisma/schema.prisma --script`
+from `backend/`, which renders the schema's SHAPE and is not a template you can paste:
+its output for a new `updatedAt` is a bare `NOT NULL`, which fails on any table that
+already holds data. The pattern that works is to add the column WITH a default and then
+`DROP DEFAULT`, so existing rows are backfilled and the column still matches what Prisma
+expects to find. Enum casts need the same care in the other direction: normalize stray
+values BEFORE `ALTER TABLE ... TYPE ... USING`, because one bad row aborts the whole
+deploy. Know what CI proves and what it does not: `prisma migrate deploy` runs against a
+**fresh, empty** Postgres 18 container, so it proves the SQL parses and the end shape
+matches Prisma, and it never executes a single backfill or normalization because there
+are no rows to touch. The half of a migration this repo cares most about is the half CI
+cannot reach, so read that half yourself.
+
+**No `Decimal` ever leaves the backend (RUN-78).** `Run.distanceKm` is `NUMERIC(5, 2)`,
+which Prisma types as a decimal.js object. It is converted to a plain number the moment
+it comes out of Prisma, and `backend/src/common/decimal.ts` lists every site that does
+so. This is not tidiness: `decimal > 150` is false for every Decimal, so a missed
+conversion disables a limit or an outlier marker silently and passes every type check.
+Pure modules (`runLimits`, `ranking`) take plain numbers and know nothing about Decimal.
+Relatedly, the runs ordering (`runsNewestFirstOrder` in `backend/src/runs/run-response.ts`
+and `compareRunsNewestFirst` in `frontend/src/lib/runs.ts`) is one decision written in
+two places and the two must change together.
 
 **API response contract is hand-mirrored, and that is a known wart.** `HelloResponse`
 is declared in `backend/src/app.service.ts` (the source of truth) and copied by hand

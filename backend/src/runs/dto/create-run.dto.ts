@@ -12,11 +12,13 @@ import {
   IsString,
   Matches,
   MaxLength,
+  Min,
   registerDecorator,
   ValidateNested,
   type ValidationOptions,
 } from 'class-validator';
 import { addDaysIso, isRealCalendarDay, utcTodayIso } from '../../common/dates';
+import type { $Enums } from '../../generated/prisma/client';
 import { ValidateIfNotNull, ValidateIfPresent } from '../../common/validation';
 import { CoordinateDto, MAX_WAYPOINTS } from '../../routes/dto/plan-route.dto';
 
@@ -27,8 +29,31 @@ export { ValidateIfNotNull, ValidateIfPresent };
 
 // Mirrors frontend/src/lib/runs.ts EFFORT_LEVELS; the API and the UI must
 // agree on the capitalized spellings (docs/data-model.md).
-export const EFFORT_LEVELS = ['Easy', 'Medium', 'Hard'] as const;
+//
+// `satisfies` ties it to the database enum in both directions (RUN-78 review
+// fix). Since the column became an enum, the read-side guard that used to
+// catch a mismatch is gone, so an extra value added here without a migration
+// would validate happily and then fail at write time as an unmapped Prisma
+// error - a worse 500 than the guard that was removed. The satisfies clause
+// catches a value this array has and the enum does not; the alias below
+// catches the reverse.
+export const EFFORT_LEVELS = [
+  'Easy',
+  'Medium',
+  'Hard',
+] as const satisfies readonly $Enums.Effort[];
 export type Effort = (typeof EFFORT_LEVELS)[number];
+
+// Compile error if the database enum ever gains a value this array lacks.
+// Exported because it is the invariant, not a scratch alias: it resolves to
+// `true` exactly while the two agree.
+export type EffortCoversTheDatabaseEnum =
+  Exclude<$Enums.Effort, Effort> extends never ? true : never;
+
+// The smallest distance the storage type can hold without rounding to zero:
+// Run.distanceKm is NUMERIC(5, 2) since RUN-78. Shared by both runs DTOs so
+// create and update agree.
+export const MIN_DISTANCE_KM = 0.01;
 
 // Medium is what the Add run modal preselects (ADD-8), so it is also what a
 // payload without an effort means. Omitted, not null: an explicit null is
@@ -38,10 +63,20 @@ export const DEFAULT_EFFORT: Effort = 'Medium';
 // API-side bounds for the two free-text fields (documented in
 // docs/data-model.md). The v1 forms enforce no lengths, so these exist to
 // keep a stray script from storing megabytes in an unbounded TEXT column,
-// not to police real input. RUN-73 mirrors these in the forms when the
-// frontend switches to the API.
+// not to police real input. RUN-79 mirrors both in the Add/Edit run form as
+// maxLength (frontend/src/components/RunModal.tsx names this file as the
+// source of truth), so the two must change together.
 export const ROUTE_NAME_MAX_LENGTH = 120;
 export const NOTE_MAX_LENGTH = 2000;
+
+// A bound on the event id (RUN-76), the same kind of thing as the two above:
+// ids are cuid()s of about 25 characters, so this is far above anything real
+// and far below "a stray script sent a megabyte". Deliberately NOT a cuid
+// format check - the id's real validation is the lookup in runs.service, which
+// has to happen anyway (the event must exist, be one the caller joined, and
+// contain the run's date), and a format rule here would only turn a 400 that
+// explains itself into a 400 about syntax.
+export const EVENT_ID_MAX_LENGTH = 64;
 
 // The latest calendar day the API accepts: tomorrow in UTC, computed from
 // UTC getters end to end (local getters here would silently shrink the
@@ -138,8 +173,17 @@ export class CreateRunDto {
   })
   routeName!: string;
 
+  // The floor is 0.01, not "greater than 0", since the column became
+  // NUMERIC(5, 2) (RUN-78 review fix). Postgres rounds a third decimal away
+  // on write, which is the intended behaviour for 8.234 and a hole for 0.004:
+  // it passes IsPositive, passes the pace check, and then stores as 0.00 - a
+  // value the API's own rules forbid, and a divisor of zero for every pace
+  // derivation downstream. Rejecting it is cheaper than defending against it.
   @IsNumber({}, { message: 'distanceKm must be a number' })
   @IsPositive({ message: 'distanceKm must be greater than 0' })
+  @Min(MIN_DISTANCE_KM, {
+    message: `distanceKm must be at least ${MIN_DISTANCE_KM}`,
+  })
   distanceKm!: number;
 
   @IsInt({ message: 'durationSeconds must be an integer number' })
@@ -183,4 +227,22 @@ export class CreateRunDto {
   @ValidateNested()
   @Type(() => RunRouteDto)
   route?: RunRouteDto | null;
+
+  // The event this run counts towards (RUN-76 AC1), or null / omitted for the
+  // ordinary untagged run. null is accepted here for the same reason it is on
+  // `route` above: the run form submits its complete shape on every save, so
+  // "No event" has to be sayable.
+  //
+  // Everything that makes a tag LEGAL is checked in runs.service, not here:
+  // the event has to exist, the caller has to have joined it, and the run's
+  // date has to fall inside its window (AC3). None of those are knowable from
+  // the payload alone, and splitting the rules across two files is how one of
+  // them ends up enforced on create but not on PATCH.
+  @ValidateIfNotNull()
+  @IsString({ message: 'eventId must be a string' })
+  @IsNotEmpty({ message: 'eventId must not be empty' })
+  @MaxLength(EVENT_ID_MAX_LENGTH, {
+    message: `eventId must be at most ${EVENT_ID_MAX_LENGTH} characters`,
+  })
+  eventId?: string | null;
 }

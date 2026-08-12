@@ -1,4 +1,10 @@
-import { derivePlan, formatUpdatedAgo, getPlanGeneratedAt, stampPlanGenerated } from './plan';
+import {
+  derivePlan,
+  derivePlanReasoning,
+  formatUpdatedAgo,
+  getPlanGeneratedAt,
+  stampPlanGenerated,
+} from './plan';
 import type { Run } from './runs';
 
 const NOW = 1_700_000_000_000;
@@ -86,6 +92,36 @@ describe('derivePlan (RUN-32)', () => {
   it('never suggests a 0 km target', () => {
     const plan = derivePlan([], 0.2, TODAY);
     expect(plan.targetKm).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('derivePlanReasoning (RUN-33 AC3)', () => {
+  const TODAY = '2026-08-05';
+
+  it('restates the step-up plan in the plan card’s own numbers', () => {
+    const runs = [
+      makeRun({ id: 'a', date: '2026-07-28', distanceKm: 10 }),
+      makeRun({ id: 'b', date: '2026-07-30', distanceKm: 10 }),
+    ];
+
+    const lines = derivePlanReasoning(runs, 20, TODAY);
+
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toContain('You ran 20 km last week');
+    // The quoted step comes from vsLastWeekPercent, matching the card's stat.
+    expect(lines[0]).toContain('stepping that up 10%');
+    expect(lines[0]).toContain("this week's 22 km target");
+    expect(lines[1]).toContain('2 times last week');
+    expect(lines[1]).toContain('2-3 sessions');
+  });
+
+  it('explains the goal fallback when last week is empty', () => {
+    const runs = [makeRun({ date: '2026-08-04', distanceKm: 5 })];
+
+    const lines = derivePlanReasoning(runs, 20, TODAY);
+
+    expect(lines[0]).toContain('rounded to 20 km');
+    expect(lines[1]).toContain('1-2 session bracket');
   });
 });
 

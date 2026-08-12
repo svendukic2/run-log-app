@@ -1,9 +1,9 @@
 import { InternalServerErrorException } from '@nestjs/common';
 import { toIsoDate } from '../common/dates';
+import { kmNumber } from '../common/decimal';
 import type { RouteVisibility } from '../common/privacy';
 import type { Prisma, Run as RunRow } from '../generated/prisma/client';
 import {
-  EFFORT_LEVELS,
   MAX_ROUTE_POINTS,
   MIN_ROUTE_POINTS,
   type Effort,
@@ -66,25 +66,36 @@ export interface RunResponse {
   date: string;
   effort: Effort;
   note: string;
+  // When the run was logged, an ISO instant (not a calendar day like `date`,
+  // which is when it was RUN). Part of the contract since RUN-78 because it
+  // is the same-day tiebreak: the client re-sorts its cache after every
+  // mutation, so it has to be able to sort by what the server sorted by.
+  // Read-only - it is never part of a write, and the API ignores one that is
+  // sent.
+  createdAt: string;
   // null means EITHER "this run has no route" OR "this route is not yours to
   // see" - see routeVisibility on the mapper below. The two are deliberately
   // indistinguishable to a viewer: a "there is a route here you may not see"
   // signal is itself information the owner did not share.
   route: RunRouteResponse | null;
+  // The event this run was logged for (RUN-76), or null for the ordinary
+  // untagged run. Just the id: the run form's picker needs to know which option
+  // is selected, and everything else about the event (its name, its window) is
+  // the events store's job - denormalising a name into every run row would only
+  // give it somewhere to go stale.
+  //
+  // Not gated by privacy, unlike `route`: which event a run counts towards is
+  // exactly what the event's own run feed publishes, so it is not a secret from
+  // someone reading that runner's public profile.
+  eventId: string | null;
 }
 
-// The column is plain TEXT until RUN-73 adds a real enum, so a row edited
-// outside the API (psql, a seed script) can hold anything. A loud 500 that
-// names the row beats a silently wrong Effort type reaching the frontend's
-// exhaustive switches.
-function toEffort(rowId: string, value: string): Effort {
-  if (!(EFFORT_LEVELS as readonly string[]).includes(value)) {
-    throw new InternalServerErrorException(
-      `Run ${rowId} has stored effort "${value}", not one of: ${EFFORT_LEVELS.join(', ')}. Fix the row (RUN-73 adds the enum that prevents this).`,
-    );
-  }
-  return value as Effort;
-}
+// There was a toEffort guard here until RUN-78, throwing a 500 on a stored
+// value outside the vocabulary. The column is a database enum now, so a row
+// holding 'banana' is unreachable through any path - psql included - and the
+// guard was checking something the database will not let happen. Its type is
+// the generated $Enums.Effort, the same three capitalized values as the DTO's
+// union, so the mapper below assigns it straight across.
 
 // routeWaypoints is a JSONB column, so its contents are untrusted the same way
 // a provider body is: this is the only place their shape is assumed.
@@ -189,18 +200,31 @@ export function toRunResponse(
   return {
     id: row.id,
     routeName: row.routeName,
-    distanceKm: row.distanceKm,
+    // The Decimal boundary (RUN-78): NUMERIC(5, 2) arrives as a decimal.js
+    // object and leaves here as the plain JSON number the contract promises.
+    distanceKm: kmNumber(row.distanceKm),
     durationSeconds: row.durationSeconds,
     date: toIsoDate(row.date),
-    effort: toEffort(row.id, row.effort),
+    effort: row.effort,
     note: row.note,
+    createdAt: row.createdAt.toISOString(),
     route: toRoute(row, routeVisibility),
+    eventId: row.eventId,
   };
 }
 
-// The order every screen shows runs in, newest first. Same-day runs have no
-// insertion timestamp in the contract (docs/data-model.md), so the id is the
-// tiebreak: arbitrary but deterministic across requests. Shared with the
-// public profile read so both lists arrive in the same order, and mirrored
-// on the client by compareRunsNewestFirst in frontend/src/lib/runs.ts.
-export const runsNewestFirstOrder = [{ date: 'desc' }, { id: 'desc' }] as const;
+// The order every screen shows runs in, newest first: the calendar day, then
+// the moment the row was written, then the id. createdAt joined it in RUN-78
+// and is the reason same-day runs now come back in insertion order rather
+// than cuid order; the id stays as the last resort for rows that predate that
+// migration and therefore share its timestamp.
+//
+// Shared with the public profile read so both lists arrive in the same order,
+// and mirrored on the client by compareRunsNewestFirst in
+// frontend/src/lib/runs.ts. Those two MUST change together - a divergence
+// makes a freshly added same-day run jump position on the next full load.
+export const runsNewestFirstOrder = [
+  { date: 'desc' },
+  { createdAt: 'desc' },
+  { id: 'desc' },
+] as const;

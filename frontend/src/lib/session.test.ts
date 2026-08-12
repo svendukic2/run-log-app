@@ -7,7 +7,9 @@
 import {
   breakRunsAuth,
   clearTestSession,
+  expireRunsAccessTokens,
   expireRunsTokens,
+  failRunsRefresh,
   signInRedirectCount,
 } from '@/test/runsApiMock';
 import {
@@ -101,12 +103,15 @@ describe('signIn / signUp (RUN-58)', () => {
     expect(hasStoredSession()).toBe(false);
   });
 
-  it('signOut clears the session and lands on Sign in', () => {
+  it('signOut clears the session and lands on Sign in', async () => {
     // The default test session is planted; signing out must drop it whole.
     expect(hasStoredSession()).toBe(true);
 
-    signOut();
+    await signOut();
 
+    // The server is told first (RUN-74), so the token cannot be renewed by
+    // anyone who kept a copy; the local clear and the redirect follow.
+    expect(fetchCalls().some(([url]) => url === '/api/auth/logout')).toBe(true);
     expect(hasStoredSession()).toBe(false);
     expect(window.localStorage.getItem('runlog.session')).toBeNull();
     expect(signInRedirectCount()).toBe(1);
@@ -127,8 +132,8 @@ describe('apiFetch (RUN-58 AC6)', () => {
   });
 
   it('signs out on a 401: session cleared, redirect fired, terminal error thrown', async () => {
-    // No refresh endpoint exists (RUN-74): an expired token is a clean
-    // sign-out, never a silent re-authentication.
+    // A session that renewal cannot save (RUN-74) degrades to exactly the
+    // pre-refresh behaviour: a clean sign-out, never a half-broken screen.
     expireRunsTokens();
 
     const failure = await apiFetch('/api/runs').catch((error: unknown) => error);
@@ -136,6 +141,9 @@ describe('apiFetch (RUN-58 AC6)', () => {
     expect(failure).toBeInstanceOf(ApiError);
     expect((failure as ApiError).message).toBe(SESSION_EXPIRED_MESSAGE);
     expect((failure as ApiError).terminal).toBe(true);
+    // Renewal was tried exactly once and refused; it is not retried on the
+    // way out, which is what keeps a dead session from looping.
+    expect(fetchCalls().filter(([url]) => url === '/api/auth/refresh')).toHaveLength(1);
     expect(hasStoredSession()).toBe(false);
     expect(signInRedirectCount()).toBe(1);
   });
@@ -157,5 +165,64 @@ describe('apiFetch (RUN-58 AC6)', () => {
 
     await expect(apiFetch('/api/runs')).rejects.toBeInstanceOf(ApiError);
     await expect(apiFetch('/api/runs')).rejects.toThrow(/Couldn't reach the server/);
+  });
+});
+
+describe('silent token renewal (RUN-74)', () => {
+  it('renews once on a 401 and replays the request with the new token', async () => {
+    const stale = storedSession()?.token as string;
+    // The guard no longer accepts the token, but the session is alive: the
+    // everyday case a fifteen-minute token creates several times a day.
+    expireRunsAccessTokens();
+
+    const response = await apiFetch('/api/runs');
+
+    expect(response.ok).toBe(true);
+    const fresh = storedSession()?.token as string;
+    expect(fresh).not.toBe(stale);
+    // Nothing user-visible happened: no sign-out, no redirect.
+    expect(hasStoredSession()).toBe(true);
+    expect(signInRedirectCount()).toBe(0);
+    // First the 401, then the renewal, then the replay carrying the new token.
+    expect(fetchCalls().map(([url]) => url)).toEqual([
+      '/api/runs',
+      '/api/auth/refresh',
+      '/api/runs',
+    ]);
+    const replayHeaders = fetchCalls()[2][1]?.headers as Record<string, string>;
+    expect(replayHeaders.Authorization).toBe(`Bearer ${fresh}`);
+  });
+
+  it('keeps the session when the renewal fails for any reason other than a 401', async () => {
+    // A backend restart, a proxy 502, an offline laptop. The server never
+    // said the session was over, so signing out here would log every user
+    // out of a perfectly good session several times a deploy.
+    expireRunsAccessTokens();
+    failRunsRefresh(500);
+
+    const failure = await apiFetch('/api/runs').catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ApiError);
+    expect((failure as ApiError).terminal).toBe(false);
+    expect(hasStoredSession()).toBe(true);
+    expect(signInRedirectCount()).toBe(0);
+  });
+
+  it('shares ONE renewal between requests that 401 together', async () => {
+    // Several stores read at once on a screen load, so a stale token 401s
+    // all of them in the same tick. One renewal, awaited by the rest: N
+    // renewals would rotate the token out from under each other and all but
+    // one would fail.
+    expireRunsAccessTokens();
+
+    const responses = await Promise.all([
+      apiFetch('/api/runs'),
+      apiFetch('/api/runs'),
+      apiFetch('/api/runs'),
+    ]);
+
+    expect(responses.every((response) => response.ok)).toBe(true);
+    expect(fetchCalls().filter(([url]) => url === '/api/auth/refresh')).toHaveLength(1);
+    expect(signInRedirectCount()).toBe(0);
   });
 });

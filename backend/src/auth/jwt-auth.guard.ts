@@ -8,6 +8,7 @@ import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import type { Request } from 'express';
 import { IS_PUBLIC_KEY } from './public.decorator';
+import { extractBearerToken } from './token-lifecycle';
 
 // What the guard attaches to the request and @CurrentUser() hands to
 // controllers: the verified subject, nothing fetched from the database.
@@ -44,14 +45,13 @@ export class JwtAuthGuard implements CanActivate {
     if (isPublic) return true;
 
     const request = context.switchToHttp().getRequest<Request>();
-    // RFC 9110 makes the auth-scheme case-insensitive and RFC 6750 allows
-    // any amount of whitespace between scheme and token, so match the
-    // grammar rather than one exact spelling.
-    const match = /^Bearer\s+(\S+)$/i.exec(request.headers.authorization ?? '');
-    if (!match) {
+    // The bearer grammar lives in token-lifecycle.ts since RUN-74, because
+    // the refresh and logout routes parse the same header and two copies of
+    // one rule is how they drift.
+    const token = extractBearerToken(request.headers.authorization);
+    if (!token) {
       throw new UnauthorizedException('Missing bearer token');
     }
-    const token = match[1];
 
     let payload: { sub?: unknown };
     try {

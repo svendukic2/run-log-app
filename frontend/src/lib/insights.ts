@@ -3,6 +3,7 @@ import {
   formatDuration,
   formatKm,
   fromIsoDate,
+  lastDays,
   lastWeekStarts,
   paceSecondsPerKm,
   roundKm,
@@ -17,12 +18,16 @@ import {
 // outcome is ever stored, so edits and deletions can never leave stale
 // numbers behind.
 //
-// Every window counts *full* Mon-Sun weeks and excludes the running week: a
-// fixed four-week denominator over a window that grows during the week would
-// under-report load and cadence every Monday and drift back by Sunday. The
-// copy says "full weeks" for the same reason.
+// The window is the ROLLING last 28 days ending today, against the 28 days
+// before it. Rolling by day rather than by calendar week keeps two promises
+// at once: the denominator is always exactly four weeks (nothing dips on a
+// Monday morning the way a half-finished calendar week would), and a run
+// logged today shows up immediately - the earlier full-Mon-Sun-weeks window
+// excluded the running week entirely, which left every card at zero for a
+// runner whose history starts this week and made them read as broken.
 
 const INSIGHT_WEEKS = 4;
+const INSIGHT_DAYS = 7 * INSIGHT_WEEKS;
 
 export interface Insight {
   key: 'load' | 'pace' | 'consistency';
@@ -42,6 +47,21 @@ function sumTotals(weeks: WeekTotals[]): WeekTotals {
   );
 }
 
+// Totals over an inclusive day range. Run.date is a plain ISO day string, so
+// membership is lexicographic comparison, like every other date selector.
+function totalsForRange(runs: Run[], fromIso: string, toIso: string): WeekTotals {
+  return runs
+    .filter((run) => run.date >= fromIso && run.date <= toIso)
+    .reduce<WeekTotals>(
+      (totals, run) => ({
+        runCount: totals.runCount + 1,
+        distanceKm: totals.distanceKm + run.distanceKm,
+        durationSeconds: totals.durationSeconds + run.durationSeconds,
+      }),
+      { runCount: 0, distanceKm: 0, durationSeconds: 0 },
+    );
+}
+
 // A spike is one week towering over the runner's other active weeks: half
 // again their average and meaningfully bigger in absolute terms, so a 5 km
 // week next to a 6 km week never trips it. A single active week is a runner
@@ -51,12 +71,12 @@ const SPIKE_MIN_DELTA_KM = 3;
 
 function loadCaption(weekly: number[]): string {
   const active = weekly.filter((km) => km > 0);
-  if (active.length < 2) return 'Over the last 4 full weeks';
+  if (active.length < 2) return 'Over the last 4 weeks';
   const max = Math.max(...active);
   const othersMean = (active.reduce((sum, km) => sum + km, 0) - max) / (active.length - 1);
   return max > SPIKE_RATIO * othersMean && max - othersMean >= SPIKE_MIN_DELTA_KM
-    ? 'Includes a spike week in the last 4 full weeks'
-    : 'Steady over the last 4 full weeks, no spikes';
+    ? 'Includes a spike week in the last 4 weeks'
+    : 'Steady over the last 4 weeks, no spikes';
 }
 
 // Whole runs-per-week figures drop the decimal ("3 / week"), fractional ones
@@ -70,15 +90,16 @@ function formatPerWeek(perWeek: number): string {
 // cadence") are illustrative; these derive the honest equivalent and say so
 // plainly when there is not enough history to compare against.
 export function deriveInsights(runs: Run[], goalKm: number, isoToday: string): Insight[] {
-  // 2x4 full weeks plus the excluded running week at the end.
-  const weeks = lastWeekStarts(isoToday, 2 * INSIGHT_WEEKS + 1);
-  const windowTotals = weeks
-    .slice(INSIGHT_WEEKS, 2 * INSIGHT_WEEKS)
-    .map((weekStart) => totalsForWeek(runs, weekStart));
-  const window = sumTotals(windowTotals);
-  const prior = sumTotals(
-    weeks.slice(0, INSIGHT_WEEKS).map((weekStart) => totalsForWeek(runs, weekStart)),
+  // The last 56 days ending today, oldest first: the second half is the
+  // window, the first half is "last month" to compare against.
+  const days = lastDays(isoToday, 2 * INSIGHT_DAYS);
+  // Seven-day buckets of the window (oldest first), feeding the spike check:
+  // "a week" for the caption is any seven-day stretch, aligned to today.
+  const windowTotals = Array.from({ length: INSIGHT_WEEKS }, (_, index) =>
+    totalsForRange(runs, days[INSIGHT_DAYS + 7 * index], days[INSIGHT_DAYS + 7 * index + 6]),
   );
+  const window = sumTotals(windowTotals);
+  const prior = totalsForRange(runs, days[0], days[INSIGHT_DAYS - 1]);
 
   const load: Insight = {
     key: 'load',
@@ -93,7 +114,7 @@ export function deriveInsights(runs: Run[], goalKm: number, isoToday: string): I
       key: 'pace',
       label: 'Pace trend',
       value: 'No pace yet',
-      caption: 'Nothing logged in the last 4 full weeks',
+      caption: 'Nothing logged in the last 4 weeks',
     };
   } else {
     const windowPace = paceSecondsPerKm(window);
@@ -117,7 +138,7 @@ export function deriveInsights(runs: Run[], goalKm: number, isoToday: string): I
     }
   }
 
-  // Actual cadence over the four full weeks, judged against the current
+  // Actual cadence over the four-week window, judged against the current
   // plan's session bracket: the plan is the only "planned cadence" that
   // exists, and the caption answers whether the runner's habit matches what
   // this week's plan asks. Both sides use the displayed one-decimal figure,

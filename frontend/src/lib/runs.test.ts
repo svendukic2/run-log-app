@@ -9,6 +9,7 @@ import {
   rejectRunsNamed,
   restoreRunsApi,
   seedLegacyRuns,
+  seedRuns,
 } from '@/test/runsApiMock';
 import {
   __resetRunsStoreForTests,
@@ -78,6 +79,8 @@ function makeForm(overrides: Partial<RunFormValues> = {}): RunFormValues {
     date: '2026-07-14',
     effort: 'Medium',
     note: '',
+    // '' is the picker's "No event" (RUN-76), which is what most runs are.
+    eventId: '',
     ...overrides,
   };
 }
@@ -342,6 +345,9 @@ describe('toRunDraft', () => {
       // Always explicit, null included: null is how the API is told there is
       // no route, and on an edit it is what clears a stored one (RUN-54).
       route: null,
+      // Same for the event tag (RUN-76): '' in the form is null on the wire,
+      // and sending it is what makes clearing the picker survive a save.
+      eventId: null,
     });
   });
 
@@ -388,6 +394,9 @@ describe('runToForm (RUN-28 AC1)', () => {
     expect({ ...toRunDraft(runToForm(run), run.route ?? null), id: run.id }).toEqual({
       ...run,
       route: run.route ?? null,
+      // The draft always states the tag, so an untagged run round-trips as an
+      // explicit null rather than an absent key (RUN-76).
+      eventId: run.eventId ?? null,
     });
   });
 });
@@ -408,6 +417,8 @@ describe('emptyRunForm (AC1)', () => {
       date: '2026-07-14',
       effort: 'Medium',
       note: '',
+      // No event: tagging is a deliberate act (RUN-76 AC7).
+      eventId: '',
     });
   });
 });
@@ -420,6 +431,34 @@ describe('store (API-backed since RUN-48)', () => {
   // memory copy is the source of truth, RUN-58).
   beforeEach(() => {
     window.localStorage.clear();
+  });
+
+  // The RUN-79 regression guard, and the whole reason the load walks pages:
+  // /api/runs is paginated now, but the dashboard, the records, the weekly
+  // goal and insights.ts all compute from the FULL array this store holds.
+  // A store that stopped at the server's first page would not fail anything
+  // - it would silently under-report every one of them (AC4).
+  it('loads the whole history across more than one server page (RUN-79 AC4)', async () => {
+    seedRuns(
+      Array.from({ length: 250 }, (_, index) => ({
+        routeName: `Run ${index + 1}`,
+        distanceKm: 8.2,
+        durationSeconds: 2535,
+        // Same day throughout, so paging depends on the id tiebreak rather
+        // than on conveniently distinct dates.
+        date: '2026-07-14',
+        effort: 'Medium' as const,
+        note: '',
+      })),
+    );
+    __resetRunsStoreForTests(null); // re-arm the load against the seeded backend
+
+    render(React.createElement(StatusProbe));
+    await waitFor(() => expect(screen.getByTestId('runs-status')).toHaveTextContent('ready'));
+
+    expect(getRuns()).toHaveLength(250);
+    // No page landed twice: duplicate ids would reach React as duplicate keys.
+    expect(new Set(getRuns().map((run) => run.id)).size).toBe(250);
   });
 
   it('starts empty and keeps what it is given', async () => {
@@ -436,6 +475,44 @@ describe('store (API-backed since RUN-48)', () => {
     await addRun(toRunDraft(makeForm({ routeName: 'Newer', date: '2026-07-20' })));
 
     expect(getRuns().map((run) => run.routeName)).toEqual(['Newer', 'Older']);
+  });
+
+  it('orders same-day runs by when they were logged, not by id (RUN-78)', async () => {
+    // The ids deliberately run OPPOSITE to the timestamps, and that is the
+    // whole design of this test (review fix). Ordering by id descending - what
+    // the client did before createdAt - would answer ['Early', 'Late'], so
+    // only a sort that actually reads createdAt can produce the expectation
+    // below. Without the contradiction the test passes against both the old
+    // and the new comparator and proves nothing.
+    const sameDay = { date: '2026-07-10', distanceKm: 8.2, durationSeconds: 2535 };
+    seedRuns([
+      {
+        ...sameDay,
+        id: 'run-zzz',
+        routeName: 'Early',
+        createdAt: '2026-07-10T06:00:00.000Z',
+        effort: 'Medium',
+        note: '',
+      },
+      {
+        ...sameDay,
+        id: 'run-aaa',
+        routeName: 'Late',
+        createdAt: '2026-07-10T18:00:00.000Z',
+        effort: 'Medium',
+        note: '',
+      },
+    ]);
+
+    expect(getRuns().map((run) => run.routeName)).toEqual(['Late', 'Early']);
+
+    // And the server's own order agrees, which is the half that matters: the
+    // cache re-sorts itself after every mutation while a full page load takes
+    // whatever the API sent, so a divergence would move a run on refresh.
+    __resetRunsStoreForTests(null);
+    reloadRuns();
+    await waitFor(() => expect(getRuns()).toHaveLength(2));
+    expect(getRuns().map((run) => run.routeName)).toEqual(['Late', 'Early']);
   });
 
   it('rejects with the failure and caches nothing when the save fails', async () => {
@@ -618,7 +695,6 @@ describe('store (API-backed since RUN-48)', () => {
     expect(() => render(React.createElement(Ungated))).toThrow(/AppDataBoundary/);
     consoleError.mockRestore();
   });
-
 });
 
 describe('one-time import of v1 localStorage runs (RUN-48)', () => {

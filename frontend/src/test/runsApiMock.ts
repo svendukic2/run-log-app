@@ -27,15 +27,25 @@ import {
 import { __resetSessionForTests, __setHardNavigateForTests, hasStoredSession } from '@/lib/session';
 import { jsonResponse } from './apiMockShared';
 import { resetLeafletMock } from './leafletMock';
-import { handleEventsRequest } from './eventsApiMock';
+import { acceptsRunTag, handleEventsRequest } from './eventsApiMock';
 import { handleLeaderboardRequest } from './leaderboardApiMock';
 import { handleNotificationsRequest } from './notificationsApiMock';
 import { handleUsersRequest } from './usersApiMock';
 
 let db: Run[] = [];
 let idCounter = 0;
+let createdAtCounter = 0;
 let tokenCounter = 0;
 let validTokens = new Set<string>();
+
+// Tokens POST /api/auth/refresh will still renew (RUN-74). A token normally
+// leaves `validTokens` (the guard rejects it) long before it leaves this
+// set, which is exactly the state the renewal path exists for; a token in
+// neither set is a session that is over.
+let refreshableTokens = new Set<string>();
+// When set, POST /api/auth/refresh answers with this status instead of
+// renewing (failRunsRefresh below).
+let refreshFailure: number | null = null;
 // When set, matching requests fail with the given status before reaching
 // the in-memory backend (failRunsApi below).
 let failure: { method: string; status: number } | null = null;
@@ -79,7 +89,11 @@ const ROUTE_PLAN_SOURCE = 'openrouteservice';
 // What POST /api/routes/plan answers with, and every point list it was asked
 // about (in order), so a test can assert the start/waypoints/finish split the
 // endpoint's request shape needs.
-let routePlanResult = { polyline: 'wap_IsyspAsFgc@cG{h@qFe{A', distanceKm: 5.1, durationSeconds: 3800 };
+let routePlanResult = {
+  polyline: 'wap_IsyspAsFgc@cG{h@qFe{A',
+  distanceKm: 5.1,
+  durationSeconds: 3800,
+};
 let routePlanRequests: RouteWaypoint[][] = [];
 let routePlanFailure: { status: number; code: string; message: string } | null = null;
 // When set, plan requests wait on this before answering (holdRoutePlan below).
@@ -96,6 +110,20 @@ function routeRejection(route: RunDraft['route']): Response | null {
   if (unknown.length === 0) return null;
   return jsonResponse(400, {
     message: unknown.map((key) => `property route.${key} should not exist`),
+  });
+}
+
+// The event tag rules (RUN-76 AC3), mirrored from the events mock next door for
+// the same reason routeRejection mirrors the whitelist pipe: the real API
+// refuses a tag to an event the caller has not joined or whose window does not
+// contain the run's date, and a mock that accepted any id would let a broken
+// form pass its tests. `date` is the run's MERGED date, which is what the server
+// checks on a PATCH.
+function eventTagRejection(eventId: string | null | undefined, date: string): Response | null {
+  if (!eventId) return null;
+  if (acceptsRunTag(eventId, date)) return null;
+  return jsonResponse(400, {
+    message: ['eventId must be an event you have joined'],
   });
 }
 
@@ -120,17 +148,35 @@ function nextId(): string {
   return `run-${String(idCounter).padStart(6, '0')}`;
 }
 
+// The insertion timestamp the real server stamps (RUN-78). A counter rather
+// than Date.now(): several runs seeded in one test would otherwise share a
+// millisecond and stop being ordered at all, which is the very thing the
+// column exists to fix. Monotonic and ISO-shaped, so it sorts as a string
+// exactly like the server's.
+function nextCreatedAt(): string {
+  createdAtCounter += 1;
+  return new Date(Date.UTC(2026, 0, 1, 0, 0, createdAtCounter)).toISOString();
+}
+
 function mintToken(): string {
   tokenCounter += 1;
   const token = `test-token-${tokenCounter}`;
   validTokens.add(token);
+  refreshableTokens.add(token);
   return token;
 }
 
-// Newest first: date descending, id descending, matching the real endpoint
-// (and compareRunsNewestFirst on the client).
+// Newest first: date, then createdAt, then id, all descending - the real
+// endpoint's runsNewestFirstOrder, and compareRunsNewestFirst on the client.
+// All three of these have to say the same thing; a mock that sorted its own
+// way would let a client/server divergence pass the whole suite.
 function sorted(): Run[] {
-  return [...db].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+  return [...db].sort(
+    (a, b) =>
+      b.date.localeCompare(a.date) ||
+      (b.createdAt ?? '').localeCompare(a.createdAt ?? '') ||
+      b.id.localeCompare(a.id),
+  );
 }
 
 // What a fresh week's target snapshots to: the same seed order as the real
@@ -150,6 +196,47 @@ function authorized(init: RequestInit): boolean {
 function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
   const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
   const method = (init.method ?? 'GET').toUpperCase();
+
+  // Silent renewal (RUN-74). Mirrors the real endpoint's contract: the
+  // presented token is allowed to be expired, an unrenewable one is a flat
+  // 401, and success returns the same { token, user } body login does.
+  if (url === '/api/auth/refresh') {
+    // A backend that is up but unwell (failRunsRefresh below). Distinct from
+    // a 401 on purpose: the session layer must not sign anyone out for it.
+    if (refreshFailure !== null) {
+      return Promise.resolve(jsonResponse(refreshFailure, { message: 'Server error' }));
+    }
+    const presented = (
+      (init.headers as Record<string, string> | undefined)?.Authorization ?? ''
+    ).replace(/^Bearer /, '');
+    if (!refreshableTokens.has(presented)) {
+      return Promise.resolve(jsonResponse(401, { message: 'Session ended. Sign in again.' }));
+    }
+    // Rotation: the presented token is spent, so a second renewal with it
+    // fails exactly as it would against the real backend.
+    refreshableTokens.delete(presented);
+    validTokens.delete(presented);
+    return Promise.resolve(
+      jsonResponse(200, {
+        token: mintToken(),
+        user: {
+          id: 'user-test',
+          email: 'test@example.com',
+          firstName: 'Test',
+          lastName: 'Runner',
+        },
+      }),
+    );
+  }
+
+  // Server-side sign-out (RUN-74): 204 to anything, and every token this
+  // mock ever issued stops working - the real endpoint bumps a per-account
+  // version, which has the same effect for a single-account test world.
+  if (url === '/api/auth/logout') {
+    validTokens.clear();
+    refreshableTokens.clear();
+    return Promise.resolve(jsonResponse(204, null));
+  }
 
   if (url === '/api/auth/login' || url === '/api/auth/signup') {
     // CONTRACT (RUN-56, load-bearing for RUN-50): signup creates a User row
@@ -320,7 +407,7 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
     }
   }
 
-  if (url === '/api/runs' && method === 'GET') {
+  if (url.split('?')[0] === '/api/runs' && method === 'GET') {
     if (holdLoading) {
       // Never resolves on its own; rejects if the caller's timeout aborts,
       // like a real fetch would.
@@ -330,7 +417,32 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
         );
       });
     }
-    return Promise.resolve(jsonResponse(200, sorted()));
+    // Paginated like the real endpoint since RUN-79, envelope included. A
+    // mock that kept answering with the whole array would let the store's
+    // page walk go untested and green while production stopped at page one.
+    const params = new URLSearchParams(url.split('?')[1] ?? '');
+    const page = Number(params.get('page') ?? '1');
+    // DEFAULT_PAGE_SIZE and MAX_PAGE_SIZE from the backend's
+    // pagination-query.dto.ts, hand-mirrored like every other cross-app
+    // constant. The cap is enforced rather than obeyed politely (review fix):
+    // the store asks for exactly 100, so a mock that served 200 would let
+    // someone raise LOAD_PAGE_SIZE, watch the suite stay green, and ship a
+    // store that 400s on its first load for every user.
+    const pageSize = Number(params.get('pageSize') ?? '20');
+    if (pageSize > 100) {
+      return Promise.resolve(
+        jsonResponse(400, { message: ['pageSize must not be greater than 100'] }),
+      );
+    }
+    const all = sorted();
+    return Promise.resolve(
+      jsonResponse(200, {
+        items: all.slice((page - 1) * pageSize, page * pageSize),
+        total: all.length,
+        page,
+        pageSize,
+      }),
+    );
   }
 
   if (url === '/api/runs' && method === 'POST') {
@@ -338,17 +450,24 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
     if (rejectedNames.has(draft.routeName)) {
       return Promise.resolve(jsonResponse(400, { message: ['routeName rejected'] }));
     }
-    const rejection = routeRejection(draft.route);
+    const rejection = routeRejection(draft.route) ?? eventTagRejection(draft.eventId, draft.date);
     if (rejection) return Promise.resolve(rejection);
     const run: Run = {
       ...draft,
       effort: draft.effort ?? 'Medium',
       note: draft.note ?? '',
+      // Absent and null are both "no event"; the key is always present in a
+      // served run (RUN-76 AC7).
+      eventId: draft.eventId ?? null,
       // The real server stamps the source itself and answers with the key
       // present, null included (RUN-54). Mirroring that here is what keeps a
       // frontend test from passing against a shape the API never sends.
       route: storedRoute(draft.route),
       id: nextId(),
+      // Server-assigned like the id and the route source (RUN-78). A draft
+      // cannot carry one - RunDraft omits it and the real whitelist pipe 400s
+      // a payload that sends one - so this is stamped after the spread.
+      createdAt: nextCreatedAt(),
     };
     db.push(run);
     return Promise.resolve(jsonResponse(201, run));
@@ -441,7 +560,14 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
     if (method === 'PATCH') {
       if (index === -1) return Promise.resolve(jsonResponse(404, { message: 'Not found' }));
       const patch = JSON.parse(String(init.body)) as Partial<RunDraft>;
-      const rejection = routeRejection(patch.route);
+      // The MERGED pair, like the service: a PATCH moving only the date has to
+      // be checked against the stored tag, and one moving only the tag against
+      // the stored date.
+      const mergedEventId =
+        patch.eventId !== undefined ? patch.eventId : db[index].eventId;
+      const rejection =
+        routeRejection(patch.route) ??
+        eventTagRejection(mergedEventId, patch.date ?? db[index].date);
       if (rejection) return Promise.resolve(rejection);
       // The route is pulled out of the spread because the submitted shape and
       // the stored one differ (no client-supplied source), and because absent /
@@ -473,8 +599,11 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
 export function installRunsApiMock(): void {
   db = [];
   idCounter = 0;
+  createdAtCounter = 0;
   tokenCounter = 0;
   validTokens = new Set();
+  refreshableTokens = new Set();
+  refreshFailure = null;
   failure = null;
   rejectedNames = new Set();
   authBroken = false;
@@ -493,7 +622,11 @@ export function installRunsApiMock(): void {
   weekTargetPutFailure = null;
   privacyDb = { ...PRIVACY_DEFAULTS };
   privacyPutFailure = null;
-  routePlanResult = { polyline: 'wap_IsyspAsFgc@cG{h@qFe{A', distanceKm: 5.1, durationSeconds: 3800 };
+  routePlanResult = {
+    polyline: 'wap_IsyspAsFgc@cG{h@qFe{A',
+    distanceKm: 5.1,
+    durationSeconds: 3800,
+  };
   routePlanRequests = [];
   routePlanFailure = null;
   routePlanGate = null;
@@ -532,7 +665,14 @@ export function installRunsApiMock(): void {
 // Seeds the in-memory backend AND primes the store cache, so the seeded
 // runs are on screen from the first render with no async settling.
 export function seedRuns(drafts: Array<Omit<Run, 'id'> & { id?: string }>): Run[] {
-  const runs = drafts.map((draft) => ({ ...draft, id: draft.id ?? nextId() }));
+  const runs = drafts.map((draft) => ({
+    ...draft,
+    id: draft.id ?? nextId(),
+    // Stamped like the server does, in the order seeded, unless the test
+    // pinned one itself. This is why no existing fixture needed touching when
+    // RUN-78 added the field.
+    createdAt: draft.createdAt ?? nextCreatedAt(),
+  }));
   db.push(...runs);
   __resetRunsStoreForTests(sorted());
   return runs;
@@ -565,10 +705,27 @@ export function clearTestSession(): void {
   }
 }
 
-// Invalidates every token issued so far: the next guarded request 401s and
-// the session layer signs out (there is no refresh endpoint, RUN-74).
+// Ends every session issued so far, renewal included: the next guarded
+// request 401s, the renewal attempt 401s too, and the session layer signs
+// out (RUN-58 AC6, still the contract after RUN-74). This is the helper for
+// asserting the sign-out path.
 export function expireRunsTokens(): void {
   validTokens.clear();
+  refreshableTokens.clear();
+}
+
+// The everyday case instead: the access token is too old for the guard but
+// the session is still alive, so the next guarded request 401s once and the
+// session layer renews and replays it. Nothing visible should happen.
+export function expireRunsAccessTokens(): void {
+  validTokens.clear();
+}
+
+// A renewal that cannot complete because the SERVER is unwell - mid-deploy
+// 502, a 500, anything that is not a 401. The session is still perfectly
+// good and the session layer must not end it (RUN-74).
+export function failRunsRefresh(status = 500): void {
+  refreshFailure = status;
 }
 
 // How many times an expired/missing session made the session layer redirect

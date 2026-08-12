@@ -71,6 +71,11 @@ describe('Add run modal (RUN-23)', () => {
     // The caret starts in the first field, and the page behind cannot scroll.
     expect(screen.getByLabelText('Route name')).toHaveFocus();
     expect(document.body.style.overflow).toBe('hidden');
+
+    // The API's own bounds reach the elements (RUN-79 AC1): the form stops
+    // typing where the request would have been rejected.
+    expect(screen.getByLabelText('Route name')).toHaveAttribute('maxlength', '120');
+    expect(screen.getByLabelText('Note (optional)')).toHaveAttribute('maxlength', '2000');
   });
 
   it('creates the run and closes when the form is valid (AC2)', async () => {
@@ -92,11 +97,16 @@ describe('Add run modal (RUN-23)', () => {
         distanceKm: 8.2,
         durationSeconds: 2535,
         date: '2026-07-14',
+        // Server-assigned, like the id above: the form never sends one
+        // (RUN-78).
+        createdAt: expect.any(String),
         effort: 'Hard',
         note: 'Windy',
         // Nobody opened the map, so the run stores no route and is
-        // indistinguishable from one saved before RUN-54 (AC3).
+        // indistinguishable from one saved before RUN-54 (AC3). Nobody touched
+        // the event picker either, so it belongs to no event (RUN-76 AC7).
         route: null,
+        eventId: null,
       },
     ]);
     expect(onClose).toHaveBeenCalled();
@@ -303,9 +313,13 @@ describe('Edit run modal (RUN-28)', () => {
         distanceKm: 10,
         durationSeconds: 2535,
         date: '2026-07-07',
+        // Untouched by the edit: an edit changes the run, not when it was
+        // logged (RUN-78).
+        createdAt: run.createdAt,
         effort: 'Hard',
         note: 'Felt smooth, negative splits.',
         route: null,
+        eventId: null,
       },
     ]);
     expect(onClose).toHaveBeenCalled();

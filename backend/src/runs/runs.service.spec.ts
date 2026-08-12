@@ -4,23 +4,30 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { DEFAULT_PAGE_SIZE } from '../common/pagination-query.dto';
 import { Prisma } from '../generated/prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { runsNewestFirstOrder } from './run-response';
 import { RunsService } from './runs.service';
 
 // The owner every test acts as (RUN-57: all service methods are scoped).
 const USER_ID = 'user-1';
 
 // A stored row as Prisma returns it: the DATE column comes back as a JS Date
-// pinned to UTC midnight.
+// pinned to UTC midnight, and distanceKm as a Decimal rather than a number
+// since RUN-78 made the column NUMERIC(5, 2). The Decimal is not decoration -
+// a fixture holding a plain number here would let a missing conversion at the
+// mapper boundary pass every test in this file and still serve the browser
+// {"s":1,"e":0,"d":[8,2]}.
 function row(overrides: Partial<Record<string, unknown>> = {}) {
   const merged = {
     id: 'run-1',
     routeName: 'Morning loop',
-    distanceKm: 8.2,
+    distanceKm: new Prisma.Decimal('8.20'),
     durationSeconds: 2535,
     date: new Date('2026-07-14T00:00:00.000Z'),
+    createdAt: new Date('2026-07-14T06:31:00.000Z'),
     effort: 'Medium',
     note: '',
     // A run with no route: all three columns NULL, which is what every run
@@ -28,6 +35,8 @@ function row(overrides: Partial<Record<string, unknown>> = {}) {
     routePolyline: null,
     routeWaypoints: null,
     routeSource: null,
+    // Untagged, like every run stored before RUN-76 and like most runs after it.
+    eventId: null,
     userId: USER_ID,
     ...overrides,
   };
@@ -69,10 +78,12 @@ describe('RunsService', () => {
   const prisma: {
     run: Record<string, jest.Mock>;
     user: Record<string, jest.Mock>;
+    event: Record<string, jest.Mock>;
     $transaction: jest.Mock;
   } = {
     run: {
       findMany: jest.fn(),
+      count: jest.fn(),
       findFirst: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
@@ -80,6 +91,11 @@ describe('RunsService', () => {
     },
     user: {
       findUnique: jest.fn(),
+    },
+    // The event lookup behind the tag rules (RUN-76): one findFirst that
+    // answers "does this event exist AND has the caller joined it".
+    event: {
+      findFirst: jest.fn(),
     },
     // The interactive-transaction mock hands the callback the same mock
     // client, so tests assert on prisma.run.create as before; a thrown
@@ -121,30 +137,79 @@ describe('RunsService', () => {
 
   it('lists only the callers runs, newest first with a deterministic tiebreak (AC2)', async () => {
     prisma.run.findMany.mockResolvedValue([row()]);
+    prisma.run.count.mockResolvedValue(1);
 
-    const runs = await service.findAll(USER_ID);
+    const list = await service.findAll(USER_ID, {});
 
-    // The owner is part of the query itself, not a JS filter (AC2).
+    // The owner is part of the query itself, not a JS filter (AC2). The
+    // ordering is asserted through the shared constant rather than a copy of
+    // its contents: this test's job is that findAll USES it, and a literal
+    // here would have to be edited every time the ordering gains a tiebreak.
     expect(prisma.run.findMany).toHaveBeenCalledWith({
       where: { userId: USER_ID },
-      orderBy: [{ date: 'desc' }, { id: 'desc' }],
+      orderBy: [...runsNewestFirstOrder],
+      skip: 0,
+      take: DEFAULT_PAGE_SIZE,
     });
-    // The response is the contract shape: date is a yyyy-mm-dd string and
-    // userId stays internal.
-    expect(runs).toEqual([
-      {
-        id: 'run-1',
-        routeName: 'Morning loop',
-        distanceKm: 8.2,
-        durationSeconds: 2535,
-        date: '2026-07-14',
-        effort: 'Medium',
-        note: '',
-        // Every run carries the route key; null is a run with no route
-        // (RUN-54 AC3), which is what the list looked like before it existed.
-        route: null,
-      },
+    // What that constant CONTAINS is pinned once, right here, because it is a
+    // contract rather than an implementation detail (merge of RUN-78 and
+    // RUN-79): createdAt sits between the calendar day and the id so same-day
+    // runs come back in the order they were entered, the id survives only for
+    // rows that predate that column, and frontend compareRunsNewestFirst
+    // mirrors this exact list. The two must never drift apart.
+    expect([...runsNewestFirstOrder]).toEqual([
+      { date: 'desc' },
+      { createdAt: 'desc' },
+      { id: 'desc' },
     ]);
+    // The response is the contract shape: date is a yyyy-mm-dd string,
+    // createdAt an ISO instant, distanceKm a plain JSON number (never the
+    // stored Decimal, RUN-78 AC3) and userId stays internal, inside the
+    // shared pagination envelope (RUN-79).
+    expect(list).toEqual({
+      items: [
+        {
+          id: 'run-1',
+          routeName: 'Morning loop',
+          distanceKm: 8.2,
+          durationSeconds: 2535,
+          date: '2026-07-14',
+          createdAt: '2026-07-14T06:31:00.000Z',
+          effort: 'Medium',
+          note: '',
+          // Every run carries the route key; null is a run with no route
+          // (RUN-54 AC3), which is what the list looked like before it
+          // existed.
+          route: null,
+          // Same for the event tag (RUN-76 AC7): the key is always there, null
+          // means this run belongs to no event.
+          eventId: null,
+        },
+      ],
+      total: 1,
+      page: 1,
+      pageSize: DEFAULT_PAGE_SIZE,
+    });
+  });
+
+  // The half of RUN-79 that AC4 depends on: an explicit pageSize must reach
+  // the query untouched, because the store asks for 100 at a time and walks
+  // until a short page ends the walk. A pageSize the endpoint quietly
+  // overrides would end that walk early on a full page, and the dashboard
+  // would under-report with nothing failing.
+  it('pages on the callers request and echoes the page it served (RUN-79)', async () => {
+    prisma.run.findMany.mockResolvedValue([row({ id: 'run-3' })]);
+    prisma.run.count.mockResolvedValue(201);
+
+    const list = await service.findAll(USER_ID, { page: 3, pageSize: 100 });
+
+    expect(prisma.run.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ skip: 200, take: 100 }),
+    );
+    // `total` counts the whole history, not the page: the client needs to
+    // know there are 201 runs behind these.
+    expect(list).toMatchObject({ total: 201, page: 3, pageSize: 100 });
+    expect(list.items).toHaveLength(1);
   });
 
   it('returns one run by id scoped to the owner and 404s on a miss', async () => {
@@ -165,15 +230,24 @@ describe('RunsService', () => {
     );
   });
 
-  it('fails loudly on a stored effort outside the contract vocabulary', async () => {
-    // Plain TEXT column until the schema-hardening ticket adds an enum: a
-    // row edited via psql can hold anything, and that must not reach the
-    // frontend as a silently wrong Effort.
-    prisma.run.findFirst.mockResolvedValue(row({ effort: 'banana' }));
+  // The test that used to sit here asserted a 500 on a stored effort outside
+  // the vocabulary ('banana'). RUN-78 made the column a database enum, so
+  // that row can no longer exist and the guard that produced the 500 is gone
+  // with it; asserting the enum's own behaviour here would be testing Prisma.
 
-    await expect(service.findOne(USER_ID, 'run-1')).rejects.toThrow(
-      /Run run-1 has stored effort "banana"/,
+  it('serves the stored distance exactly, as a number and not a Decimal (AC3)', async () => {
+    // The column is NUMERIC(5, 2), which arrives as a decimal.js object. The
+    // contract is a plain JSON number, and 8.05 is the interesting value:
+    // the old DOUBLE PRECISION column stored it as 8.0500000000000007, so an
+    // exact match here is the round trip the numeric type was adopted for.
+    prisma.run.findFirst.mockResolvedValue(
+      row({ distanceKm: new Prisma.Decimal('8.05') }),
     );
+
+    const run = await service.findOne(USER_ID, 'run-1');
+
+    expect(run.distanceKm).toBe(8.05);
+    expect(typeof run.distanceKm).toBe('number');
   });
 
   it('creates with the owner and the calendar day stored at UTC midnight', async () => {
@@ -460,6 +534,198 @@ describe('RunsService', () => {
     await expect(service.findOne(USER_ID, 'run-1')).rejects.toThrow(
       /Run run-1 has an unreadable route/,
     );
+  });
+
+  /* The event tag (RUN-76) ------------------------------------------------ */
+
+  // Every test here goes straight at the service, which is the point: AC3 asks
+  // for the rules to be enforced where a client cannot reach around them, so
+  // the form is not involved in proving any of it.
+  describe('event tagging', () => {
+    // An event the caller has joined, containing 2026-08-03.
+    const JOINED_EVENT = {
+      name: 'Summer 100k',
+      startDate: new Date('2026-08-01T00:00:00.000Z'),
+      endDate: new Date('2026-08-31T00:00:00.000Z'),
+    };
+
+    function validRun() {
+      return {
+        routeName: 'Event run',
+        distanceKm: 8,
+        durationSeconds: 2400,
+        date: '2026-08-03',
+      };
+    }
+
+    it('stores the tag when the caller joined the event and the date is inside it (AC1)', async () => {
+      prisma.event.findFirst.mockResolvedValue(JOINED_EVENT);
+      prisma.run.create.mockImplementation(
+        ({ data }: { data: Record<string, unknown> }) =>
+          Promise.resolve(row({ ...data, id: 'run-7' })),
+      );
+
+      const created = await service.create(USER_ID, {
+        ...validRun(),
+        eventId: 'event-1',
+      });
+
+      expect(created.eventId).toBe('event-1');
+      // Membership is the WHERE clause, not a filter applied afterwards: one
+      // query answers "exists" and "joined" together, which is also what makes
+      // the two indistinguishable to the caller.
+      expect(prisma.event.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            id: 'event-1',
+            participants: { some: { userId: USER_ID } },
+          },
+        }),
+      );
+    });
+
+    it('rejects an event the caller has not joined, and stores nothing (AC3)', async () => {
+      // An unknown id and an unjoined event are the same empty result, which is
+      // why one message covers both: a run POST must not be a way to find out
+      // which event ids exist.
+      prisma.event.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.create(USER_ID, { ...validRun(), eventId: 'event-theirs' }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.run.create).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['before the window', '2026-07-31'],
+      ['after the window', '2026-09-01'],
+    ])(
+      'rejects a run dated %s, and stores nothing (AC3)',
+      async (_case, date) => {
+        prisma.event.findFirst.mockResolvedValue(JOINED_EVENT);
+
+        await expect(
+          service.create(USER_ID, { ...validRun(), date, eventId: 'event-1' }),
+        ).rejects.toThrow(/must fall inside Summer 100k/);
+        expect(prisma.run.create).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      ['the first day', '2026-08-01'],
+      ['the last day', '2026-08-31'],
+    ])(
+      'accepts a run dated on %s: the window is inclusive',
+      async (_case, date) => {
+        prisma.event.findFirst.mockResolvedValue(JOINED_EVENT);
+        prisma.run.create.mockImplementation(
+          ({ data }: { data: Record<string, unknown> }) =>
+            Promise.resolve(row({ ...data })),
+        );
+
+        await expect(
+          service.create(USER_ID, { ...validRun(), date, eventId: 'event-1' }),
+        ).resolves.toMatchObject({ eventId: 'event-1' });
+      },
+    );
+
+    it('untags on an explicit null and leaves the tag alone when absent (AC6)', async () => {
+      prisma.run.findFirst.mockResolvedValue(
+        row({ eventId: 'event-1', date: new Date('2026-08-03T00:00:00.000Z') }),
+      );
+      prisma.run.update.mockImplementation(
+        ({ data }: { data: Record<string, unknown> }) =>
+          Promise.resolve(row({ eventId: 'event-1', ...data })),
+      );
+
+      const untagged = await service.update(USER_ID, 'run-1', {
+        eventId: null,
+      });
+      expect(untagged.eventId).toBeNull();
+      // No event lookup at all: there is no event left to be outside of.
+      expect(prisma.event.findFirst).not.toHaveBeenCalled();
+
+      // A PATCH that says nothing about the event keeps it, exactly like the
+      // route - an edit that never touched the picker cannot lose the tag.
+      const kept = await service.update(USER_ID, 'run-1', {
+        routeName: 'Renamed',
+      });
+      expect(prisma.run.update).toHaveBeenLastCalledWith({
+        where: { id: 'run-1', userId: USER_ID },
+        data: { routeName: 'Renamed' },
+      });
+      expect(kept.eventId).toBe('event-1');
+    });
+
+    // The merged-pair rule, and the case a naive implementation gets wrong:
+    // the PATCH says nothing about the event, so the tag has to be re-checked
+    // against the NEW date rather than left alone.
+    it('rejects a date move that would take a tagged run out of its event (AC3)', async () => {
+      prisma.run.findFirst.mockResolvedValue(
+        row({ eventId: 'event-1', date: new Date('2026-08-03T00:00:00.000Z') }),
+      );
+      prisma.event.findFirst.mockResolvedValue(JOINED_EVENT);
+
+      await expect(
+        service.update(USER_ID, 'run-1', { date: '2026-09-05' }),
+      ).rejects.toThrow(/must fall inside Summer 100k/);
+      expect(prisma.run.update).not.toHaveBeenCalled();
+    });
+
+    // The mirror image: the PATCH says nothing about the date, so the new tag
+    // is checked against the STORED one.
+    it('checks a new tag against the stored date (AC3)', async () => {
+      prisma.run.findFirst.mockResolvedValue(
+        row({ date: new Date('2026-07-14T00:00:00.000Z') }),
+      );
+      prisma.event.findFirst.mockResolvedValue(JOINED_EVENT);
+
+      await expect(
+        service.update(USER_ID, 'run-1', { eventId: 'event-1' }),
+      ).rejects.toThrow(/must fall inside Summer 100k/);
+      expect(prisma.run.update).not.toHaveBeenCalled();
+    });
+
+    // The review finding: the FK is the backstop for an event deleted between
+    // the tag check and the insert, and it used to escape as a 500. Nothing was
+    // stored either way; what changes is that the caller is told why.
+    it('answers 400 when the event vanishes between the check and the write', async () => {
+      prisma.event.findFirst.mockResolvedValue(JOINED_EVENT);
+      prisma.run.create.mockRejectedValue(
+        prismaError('P2003', 'Run_eventId_fkey'),
+      );
+
+      await expect(
+        service.create(USER_ID, { ...validRun(), eventId: 'event-1' }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('answers 400 for the same race on a PATCH', async () => {
+      prisma.run.findFirst.mockResolvedValue(
+        row({ date: new Date('2026-08-03T00:00:00.000Z') }),
+      );
+      prisma.event.findFirst.mockResolvedValue(JOINED_EVENT);
+      prisma.run.update.mockRejectedValue(
+        prismaError('P2003', 'Run_eventId_fkey'),
+      );
+
+      await expect(
+        service.update(USER_ID, 'run-1', { eventId: 'event-1' }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('never looks an event up for an untagged run (AC7)', async () => {
+      prisma.run.create.mockImplementation(
+        ({ data }: { data: Record<string, unknown> }) =>
+          Promise.resolve(row({ ...data })),
+      );
+
+      const created = await service.create(USER_ID, validRun());
+
+      expect(created.eventId).toBeNull();
+      expect(prisma.event.findFirst).not.toHaveBeenCalled();
+    });
   });
 
   it('deletes scoped to the owner and 404s when nothing matched', async () => {

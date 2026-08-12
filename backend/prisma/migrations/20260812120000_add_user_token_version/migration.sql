@@ -1,0 +1,11 @@
+-- Session revocation (RUN-74). One additive column, no table, no backfill:
+-- the refresh endpoint compares a token's `ver` claim against this, and
+-- POST /api/auth/logout increments it to end every session the account has.
+--
+-- The DEFAULT 0 is the part to be careful with. This migration runs on a
+-- deploy with real users holding pre-RUN-74 tokens that carry no `ver`
+-- claim at all. The refresh endpoint reads a missing claim as 0, so those
+-- tokens match the value this line writes and renew normally. Change the
+-- default and every already-signed-in user is logged out at their next
+-- refresh. See backend/src/auth/token-lifecycle.ts.
+ALTER TABLE "User" ADD COLUMN "tokenVersion" INTEGER NOT NULL DEFAULT 0;

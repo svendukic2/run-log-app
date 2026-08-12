@@ -65,8 +65,11 @@ export interface RunRoute {
 // contract, not an oversight.
 export type RunRouteDraft = Pick<RunRoute, 'polyline' | 'waypoints'>;
 
-// A run as it is SUBMITTED: no id, and the write-shaped route above.
-export interface RunDraft extends Omit<Run, 'id' | 'route'> {
+// A run as it is SUBMITTED: no id, no createdAt, and the write-shaped route
+// above. createdAt is omitted rather than left optional because the API's
+// whitelist pipe 400s any property the write DTO does not declare, so a draft
+// that could carry one would be a rejected save waiting to happen.
+export interface RunDraft extends Omit<Run, 'id' | 'createdAt' | 'route'> {
   route?: RunRouteDraft | null;
 }
 
@@ -156,11 +159,36 @@ export interface Run {
   date: string;
   effort: Effort;
   note: string;
+  // When the run was LOGGED, as an ISO instant - not to be confused with
+  // `date` above, which is the calendar day it was run on. Server-assigned
+  // and read-only: it is not part of RunDraft, and sending one is ignored.
+  //
+  // It is here because ordering needs it (RUN-78). GET /api/runs sorts by
+  // (date, createdAt, id) and the cache re-sorts itself after every mutation
+  // with compareRunsNewestFirst, so without this field on the client the two
+  // orderings would disagree about same-day runs and a freshly added run
+  // would jump position on the next full load.
+  //
+  // Optional for one reason, and it is not the API: v1 runs imported from
+  // localStorage (readLegacyRuns) were written before any server saw them and
+  // have none. Every run the API serves carries it, and isRun below REFUSES a
+  // server body without one - a guard deliberately stricter than this type,
+  // because a response that quietly stopped carrying createdAt is exactly the
+  // ordering divergence this field exists to prevent.
+  createdAt?: string;
   // The optional drawn route (RUN-54). The API always sends the key (null for
   // a run with no route), but it stays optional in the type because absent and
   // null mean the same thing and every run that predates the field - the v1
   // localStorage import among them - arrives without it.
   route?: RunRoute | null;
+  // The event this run was logged for (RUN-76), or null for the ordinary
+  // untagged run. Optional for the same reason as `route`: absent and null mean
+  // the same thing, and runs stored before the field existed carry neither.
+  //
+  // Just the id. The event's name comes from the events store, which is the one
+  // place that knows it - a copy denormalised onto every run would only give
+  // itself somewhere to go stale.
+  eventId?: string | null;
 }
 
 /* Dates -------------------------------------------------------------------- */
@@ -301,6 +329,10 @@ export interface RunFormValues {
   date: string;
   effort: Effort;
   note: string;
+  // The chosen event (RUN-76 AC1), or '' for "No event". A string rather than
+  // `string | null` because this is a <select>'s value and '' is what an empty
+  // option really holds; toRunDraft turns it back into the null the API wants.
+  eventId: string;
 }
 
 export type RunFormField = 'routeName' | 'distance' | 'duration' | 'date';
@@ -315,6 +347,9 @@ export function emptyRunForm(): RunFormValues {
     date: todayIso(),
     effort: DEFAULT_EFFORT,
     note: '',
+    // No event by default: tagging is a deliberate act, and most runs are not
+    // for an event (RUN-76 AC7).
+    eventId: '',
   };
 }
 
@@ -368,6 +403,9 @@ export function runToForm(run: Run): RunFormValues {
     // isRun never checks the note, so a hand-edited or older stored run can
     // arrive without one; the form still needs a string.
     note: run.note ?? '',
+    // '' is the picker's "No event" (RUN-76), which is also what an untagged
+    // run and a run stored before the field both mean.
+    eventId: run.eventId ?? '',
   };
 }
 
@@ -388,6 +426,10 @@ export function toRunDraft(values: RunFormValues, route: RunRoute | null = null)
     // whole would carry `source` along, and the API's whitelist pipe rejects
     // unknown properties - so every save of a routed run would be a 400.
     route: route ? { polyline: route.polyline, waypoints: route.waypoints } : null,
+    // Always sent explicitly, null included: null is how the API is told "no
+    // event", and on an edit it is what makes clearing the picker survive the
+    // save instead of silently keeping the old tag (RUN-76 AC6).
+    eventId: values.eventId === '' ? null : values.eventId,
   };
 }
 
@@ -475,11 +517,22 @@ export function isRun(value: unknown): value is Run {
     typeof run.distanceKm === 'number' &&
     typeof run.durationSeconds === 'number' &&
     typeof run.date === 'string' &&
+    // Required here even though the Run type marks it optional: this guard
+    // runs on SERVER bodies only, and the server has sent createdAt on every
+    // run since RUN-78. The optionality upstream is for locally imported v1
+    // runs, which never come through here. Treating a body without it as
+    // malformed is what keeps the client's ordering from silently drifting
+    // apart from the server's.
+    typeof run.createdAt === 'string' &&
     EFFORT_LEVELS.includes(run.effort) &&
     typeof run.note === 'string' &&
     // Absent and null are both "no route"; anything else must be a complete
     // one, because a polyline with no waypoints is a route the picker cannot
     // restore rather than a partial one (RUN-54).
-    (run.route === undefined || run.route === null || isRunRoute(run.route))
+    (run.route === undefined || run.route === null || isRunRoute(run.route)) &&
+    // Same three cases for the event tag (RUN-76).
+    (run.eventId === undefined ||
+      run.eventId === null ||
+      typeof run.eventId === 'string')
   );
 }

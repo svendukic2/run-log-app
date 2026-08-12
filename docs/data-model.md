@@ -23,7 +23,7 @@ onboarding-era entities). What remains in localStorage is device-scoped by natur
 | Goal | `frontend/src/lib/goal.ts` | PostgreSQL via `/api/goal` (RUN-50) | RUN-10 |
 | Week targets | `frontend/src/lib/goal.ts` | PostgreSQL via `/api/week-targets` (RUN-50) | RUN-17/33 |
 | Privacy settings | `frontend/src/lib/privacy.ts` | PostgreSQL via `/api/privacy` (RUN-64) | RUN-64 |
-| Session (JWT + email) | `frontend/src/lib/session.ts` | `runlog.session` (localStorage) | RUN-48, reshaped by RUN-58 |
+| Session (JWT + email) | `frontend/src/lib/session.ts` | `runlog.session` (localStorage) | RUN-48, reshaped by RUN-58, self-renewing since RUN-74 |
 | Onboarding wizard draft | `frontend/src/lib/onboarding.ts` | `runlog.onboardingDraft` (localStorage) | RUN-50 |
 | Plan stamp | `frontend/src/lib/plan.ts` | `runlog.plan` (localStorage) | RUN-32 |
 
@@ -50,9 +50,17 @@ target, privacy) and every v2 screen reuses it rather than inventing another:
   the account email - never a password. Every guarded screen sits behind
   `RequireSession` (signed out lands on `/signin`); the setup steps run AFTER signup,
   which also seeds the wizard draft with the names/email it collected. `apiFetch()`
-  attaches the token and times out hung requests (8s); a 401 signs the user out cleanly
-  and lands on Sign in - there is no refresh endpoint to retry against (that follow-up
-  is RUN-74). A signed-out visitor reads as empty data without any network. With
+  attaches the token and times out hung requests (8s).
+- **Silent renewal (RUN-74).** The access token lives 15 minutes and renews itself: a
+  401 buys `apiFetch` exactly one `POST /api/auth/refresh` and one replay of the
+  request. Requests that 401 in the same tick share a single in-flight renewal rather
+  than firing one each. If the renewal comes back **401** - the only thing that means
+  the session is over - the behaviour is the pre-RUN-74 one and RUN-58 AC6 still holds:
+  the session is cleared, Sign in is loaded, and the thrown `ApiError` is terminal so
+  nothing offers a retry that cannot work. Any other renewal failure (5xx, timeout,
+  offline) leaves the session alone and reads as a retryable connection error. A
+  signed-out
+  visitor reads as empty data without any network. With
   blocked storage (private browsing) the session cannot survive the post-auth page
   load, so the Sign in / Sign up screens refuse to navigate and show an inline error
   instead of a silent bounce-back loop.
@@ -100,7 +108,10 @@ diverge.
   Never integers, so nothing breaks when storage moves.
 - **Dates are calendar days, not timestamps**: `yyyy-mm-dd` strings in TypeScript, `DATE`
   columns in Postgres. A run belongs to a calendar day wherever the device is
-  (`runs.ts#toIsoDate`). The only timestamps are audit fields (`updatedAt`).
+  (`runs.ts#toIsoDate`). The only timestamps are audit fields (`createdAt`,
+  `updatedAt`), and since RUN-78 **every table carries `updatedAt`**. The one place an
+  audit timestamp is also part of the API contract is `Run.createdAt`, because the
+  ordering needs it (see Run below).
 - **Weeks start on Monday** and are identified by the ISO date of their Monday
   (`runs.ts#startOfWeek`). "Which week?" is always a string comparison.
 - **Durations are integer seconds.** `42:15` and `1:18:44` are input/display shapes only
@@ -108,8 +119,18 @@ diverge.
 - **Pace is never stored.** Always derived as `durationSeconds / distanceKm` (ADD-4).
 - **Enums are capitalized string unions** matching the UI copy: effort is
   `'Easy' | 'Medium' | 'Hard'` (`EFFORT_LEVELS`), running level is
-  `'Beginner' | 'Intermediate' | 'Advanced'`. Plain strings in the DB (portable across
-  Postgres and SQLite), validated at the edge.
+  `'Beginner' | 'Intermediate' | 'Advanced'`. Since RUN-78 they are **real Postgres
+  enums** (`Effort`, `RunningLevel`), whose labels are the API values verbatim - there
+  is no translation layer, so adding a level is a migration rather than an edit to one
+  array. They were TEXT before, which is why both services carried a read-side guard
+  answering 500 on a value outside the vocabulary; the database enforces it now and
+  those guards are gone.
+- **Distances are exact, not approximate.** `Run.distanceKm` is `NUMERIC(5, 2)` since
+  RUN-78, not a float: a distance is a number a human typed, so 12.3 has to still be
+  12.3 after a week of them is summed. Prisma types that column as `Decimal`, which is
+  converted to a plain number at the backend boundary and nowhere else - see
+  `backend/src/common/decimal.ts`, which lists every site. **No `Decimal` is ever
+  serialized**: the API's `distanceKm` is a plain JSON number and always was.
 - **Optional text is `''`, optional dates are `null`** (see `Run.note` and
   `Goal.endDate`).
 
@@ -131,11 +152,48 @@ data attaches to accounts. Community tasks (follow, notifications, events) hang 
 | profilePublic | boolean, default false | Opt-in: other runners may open this account's public profile (RUN-64; the page itself is RUN-63) |
 | showOnLeaderboard | boolean, default false | Opt-in to every leaderboard, global and per event. Pulled forward from RUN-64 by RUN-69, which cannot honour its own AC3 without it |
 | showRoutes | boolean, default false | Opt-in: route maps are shown to whoever can see the profile (RUN-64; the maps themselves are RUN-55, which also trims what a visitor is sent) |
+| tokenVersion | int, default 0 | Session revocation (RUN-74). Bumped by logout; a token whose `ver` claim no longer matches cannot be refreshed |
 | createdAt | timestamp | Audit field (the `updatedAt` convention above extends to `createdAt` here) |
 
-The API endpoints are `POST /api/auth/signup` and `POST /api/auth/login`, both
-returning `{ token, user }` with the JWT subject = user id. Passwords are capped at
+The API endpoints are `POST /api/auth/signup`, `POST /api/auth/login` and
+`POST /api/auth/refresh`, all three returning `{ token, user }` with the JWT subject =
+user id, plus `POST /api/auth/logout` which returns 204. Passwords are capped at
 72 UTF-8 **bytes** (not characters) because bcrypt silently truncates beyond that.
+
+**Token lifecycle (RUN-74).** The decision, its reasoning and the threats it knowingly
+leaves open are written out in `backend/src/auth/token-lifecycle.ts`; that file is the
+source of truth and this is the summary. A **sliding access token plus a `tokenVersion`
+column** was chosen over a refresh-token pair: one additive column buys both renewal and
+revocation, where the pair would cost a table, a rotation protocol and a cleanup job for
+per-session revocation nobody has asked for. So:
+
+- An access token lives **15 minutes** (7 days before RUN-74, when it could not be
+  renewed). This is the only thing the global `JwtAuthGuard` checks, and the guard still
+  performs **no database read** - the hot path is unchanged.
+- `POST /api/auth/refresh` accepts a token that may already be expired and mints a fresh
+  one. It is the only place that reads `tokenVersion`, so revocation costs one query per
+  renewal rather than one per request.
+- Two windows bound the sliding. Refresh is refused if the presented token was issued
+  more than **14 days** ago (the idle timeout), or if the **session** began more than
+  **30 days** ago. The session start rides in the `sst` claim and is copied, never reset,
+  by every renewal, so no amount of refreshing outruns the 30 day ceiling.
+- `POST /api/auth/logout` increments `tokenVersion`, which ends every session for that
+  account **on every device** - revocation is per account, not per session. It answers
+  204 for any token, valid or not, including none at all, because surrendering a
+  credential must not be refusable; a database failure is still a 500.
+- On the client, a failed renewal only signs the user out when the server actually
+  **said 401**. A 5xx, a timeout or an offline laptop surfaces as an ordinary retryable
+  connection error with the session left intact, because a backend restart must not log
+  out everyone who happened to renew during it.
+- **What this does not cover**, stated so nobody assumes otherwise: an already-issued
+  access token keeps working until its own expiry, because the guard does not consult
+  `tokenVersion`. Logout therefore ends a session immediately but an outstanding token
+  only within 15 minutes. There is no per-token blocklist and no per-session revocation.
+- **Existing deployed sessions.** Pre-RUN-74 tokens carry no `ver` or `sst`. A **missing
+  `ver` reads as 0**, which is exactly the default the migration gives every existing
+  row, so those tokens renew instead of being rejected; a missing `sst` falls back to the
+  token's own `iat`. This pairing is the only reason the deploy did not log every real
+  user out, and it is why the column default must stay 0.
 
 **Privacy settings (RUN-64).** The three toggles are `GET`/`PUT /api/privacy`: one
 resource per account, no id in the contract, body exactly
@@ -369,6 +427,39 @@ start or end day counts), computed by one `GROUP BY` at read time and never
 stored, the same rule the event's own derived state follows. Ties share a rank
 and the next distinct distance skips the places they consumed (1, 1, 3).
 
+**What counts changed in RUN-76: tagged runs, not dated ones.** `totalKm` and
+`runCount` are now the sum and count of that runner's runs **tagged to this
+event** (`Run.eventId`), not of every run whose date happens to fall inside the
+window. The window has not stopped mattering - it is enforced when the tag is
+written - so a tagged run always sits inside it and filtering on both would be
+the same query twice. This is a **behaviour change, not a refactor**: joining an
+event no longer silently enrols all of your running, an untagged run counts for
+nothing, and existing runs start untagged (the migration deliberately backfills
+nothing, because "inside the window" was never a statement of intent).
+
+**The event's run feed (RUN-76 AC2).** `GET /api/events/:id/runs` answers
+`{ items, total }` with `{ id, date, distanceKm, durationSeconds, runner: { id,
+firstName, lastName } }` per tagged run, newest first, unpaginated for the same
+reason the list above is. Two things it deliberately does not carry: the note and
+the route. The route especially is gated by a privacy setting this endpoint does
+not read (`showRoutes`, RUN-55), so adding it would mean answering that question
+first.
+
+One privacy rule of its own, and it is not optional: a run appears only if its
+runner has `showOnLeaderboard` true, **or** it is the caller's own. Without that,
+this feed would undo the opt-out the leaderboard beside it honours - summing an
+opted-out runner's rows here rebuilds exactly the `totalKm` and `runCount` that
+are withheld from them.
+
+**The picker's options (RUN-76 AC1).** `GET /api/events/taggable?date=yyyy-mm-dd`
+answers `{ items, total }` with `{ id, name, startDate, endDate }` for every
+event the caller has joined whose inclusive window contains that date - exactly
+the set the run write accepts. The date is required, with no default of today: a
+caller who omitted it would otherwise be handed today's answer for a run dated
+last week, i.e. a list of options the write path then rejects. The two must agree,
+and if they ever disagree this endpoint is the half that is wrong, because the
+other one is the enforcement.
+
 **The `unverified` marker (RUN-72).** True when at least one of that runner's
 runs inside the window is past `RUN_OUTLIER_THRESHOLDS` (see API validation
 below): faster than 3:30 /km or longer than 60 km. It is computed per **run**,
@@ -453,7 +544,7 @@ user id, not the address.
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| runningLevel | 'Beginner' \| 'Intermediate' \| 'Advanced' | Set once in onboarding (LVL-2); not editable after (by design, flagged) |
+| runningLevel | 'Beginner' \| 'Intermediate' \| 'Advanced' | Set once in onboarding (LVL-2); not editable after (by design, flagged). The `RunningLevel` Postgres enum since RUN-78 |
 | defaultWeeklyGoalKm | number | Settings "Default weekly goal" (SET-3); seeds future weeks only (SET-6) |
 
 Both fields live on the same `ProfileRecord` in `onboarding.ts` - one record, not
@@ -525,12 +616,26 @@ Exactly as implemented in `runs.ts` (RUN-23):
 | --- | --- | --- |
 | id | string | Generated on save |
 | routeName | string | Required (ADD-7, A12) |
-| distanceKm | number | > 0, one decimal shown (ADD-5) |
+| distanceKm | number | > 0, one decimal shown (ADD-5). `NUMERIC(5, 2)` since RUN-78: stored exactly, a third decimal rounded away on write, capped well under the type by RUN-72's 150 km limit |
 | durationSeconds | number | > 0; parsed from mm:ss or h:mm:ss (ADD-6) |
-| date | yyyy-mm-dd | Defaults to today (ADD-7) |
+| date | yyyy-mm-dd | Defaults to today (ADD-7). When the run HAPPENED |
+| createdAt | ISO instant | When the run was LOGGED (RUN-78). Server-assigned, read-only, not part of any write |
 | effort | Effort | Defaults to 'Medium' (ADD-8) |
 | note | string | Only optional field; `''` when absent |
 | route | RunRoute \| null | The optional drawn route (RUN-54); `null` on every run saved without one |
+| eventId | string \| null | The event this run was logged for (RUN-76); `null` on every untagged run, which is most of them |
+
+**The order runs come back in, and why both sides carry it (RUN-78).** Every runs list -
+the owner's own and a public profile's - is sorted `date` desc, then `createdAt` desc,
+then `id` desc (`runsNewestFirstOrder` in `backend/src/runs/run-response.ts`). The
+client mirrors it exactly in `compareRunsNewestFirst` (`frontend/src/lib/runs.ts`),
+because the cache re-sorts itself after every mutation while a full page load takes the
+server's order: if the two disagreed, a run added to a day that already had one would
+sit in one position now and a different one after a refresh. `createdAt` is what makes
+that order meaningful instead of merely deterministic - the `id` was a cuid, stable but
+arbitrary. Runs written before the migration all share its timestamp and still fall
+through to the id, which is the best available: their real insertion order was never
+recorded. **Change one of these two sorts and you must change the other.**
 
 Start time, elevation and route type from Run detail (DET-7) are **deliberately absent**:
 they are display-only fields no form captures (assumption A10). If the designer answers
@@ -556,8 +661,10 @@ Six things about it are decisions, not accidents:
   submit or receive a polyline with no waypoints, so there is no cross-field validation
   rule and no half-written route to store. A `CHECK` constraint
   (`Run_route_columns_all_or_none`) guards the same invariant from the database side,
-  and reading a row that violates it anyway is a loud 500 that names the row, like a
-  stored effort outside the vocabulary.
+  and reading a row that violates it anyway is a loud 500 that names the row. It is now
+  the only such guard left on the read path: the one for a stored effort outside the
+  vocabulary went with RUN-78, which made the column an enum the database itself
+  refuses to break.
 - **`routeSource` is server-assigned.** The polyline can only have come from
   `POST /api/routes/plan`, so the server already knows who drew it; a client-supplied
   provenance field would be a claim, not a fact. Sending one is rejected by the app-wide
@@ -588,6 +695,33 @@ Six things about it are decisions, not accidents:
   of a write (`RunRouteDraft` is `polyline` + `waypoints` only, and the whitelist pipe
   400s a save that sends either).
 
+**The event tag (RUN-76).** `Run.eventId` is a nullable FK to `Event` with
+**`ON DELETE SET NULL`**: deleting an event unties its runs and must never delete
+them, because the run is the runner's own data and outlives the event it was
+logged for. One event per run, a single column rather than a join table - the
+ticket's decision, and the tradeoff it accepts is that two events overlapping in
+time can no longer both count the same run.
+
+Four things about it:
+
+- **Two server rules make a tag legal**, and both live in `runs.service`
+  (`assertTaggable`) rather than in a DTO, because neither is knowable from the
+  payload: the event must be one the **caller has joined**, and the run's date
+  must fall inside its **inclusive** window. The form offers only legal options
+  (`GET /api/events/taggable`), but the form is not the enforcement.
+- **"No such event" and "an event you have not joined" are one message**, from one
+  query. A run POST must not be a way to probe which event ids exist - the same
+  reasoning as the 404 on somebody else's run.
+- **The rules hold on the MERGED row for a PATCH**, like the pace limits: moving
+  only the date re-checks the stored tag against the new date, and moving only the
+  tag checks it against the stored date. A date move that would take a tagged run
+  out of its event is a 400 rather than a silent untag - the untag has to be asked
+  for.
+- **`null` is legal for this field**, like `route` and for the same reason: the run
+  form submits its complete shape on every save, so "No event" has to be sayable,
+  and on a PATCH null is how a run is untagged (AC6). Omitting the key leaves the
+  tag alone.
+
 ### CoachPlan (one per generation)
 
 Planned shape for RUN-32/RUN-35; not implemented yet:
@@ -598,7 +732,8 @@ Planned shape for RUN-32/RUN-35; not implemented yet:
 | weekStart | yyyy-mm-dd | Monday of the week the plan targets |
 | suggestedTargetKm | number | "22 km SUGGESTED TARGET" (AIC-4) |
 | deltaVsLastWeekPct | number | "+10% VS LAST WEEK" |
-| sessions | string | "3-4" |
+| sessionsMin | number | Low end of the suggested session count |
+| sessionsMax | number | High end; equal to `sessionsMin` when the plan suggests an exact number |
 | keyWorkout | string | "1 tempo" |
 | narrative | string | The explanation paragraph |
 | updatedAt | timestamp | Drives "updated 2h ago" (AIC-3) |
@@ -606,6 +741,13 @@ Planned shape for RUN-32/RUN-35; not implemented yet:
 Regenerating creates a new row for the same week; the newest row per week is the current
 plan, older weeks' newest rows are "Previous plans" (AIC-7). `ranKm` and the Hit/Missed
 outcome are derived from runs and WeekTarget, never stored.
+
+`sessionsMin`/`sessionsMax` replaced a single display string `"3-4"` in RUN-78, matching
+the shape `frontend/src/lib/plan.ts` already computes. The table still has **no reader
+and no writer** in `backend/src` - the plan is computed on the client - so this changed
+no behaviour; it exists so that whatever builds RUN-32/RUN-35 starts from data rather
+than from a rendering. Formatting the range back into "3-4" is the UI's job, and a
+string is where "3 to 4" and "3 - 4" quietly become equally valid.
 
 ## Never stored (always derived from runs)
 
@@ -664,7 +806,10 @@ Prisma 7 wiring, for anyone touching it:
   the production build; the build step and the e2e-against-real-Postgres run
   in CI are what keep that divergence honest. Delete `jest.shared.js` the
   day Prisma's generated client loads cleanly under Jest's default CJS
-  environment.
+  environment. **Re-tested at Prisma 7.9.1 (RUN-79) and still needed**: without
+  the file, 13 of 29 unit suites fail, and dropping either half on its own
+  fails too. The file's own header records the two errors verbatim, so the
+  experiment does not have to be repeated blind.
 
 ## API validation (RUN-47)
 
@@ -680,7 +825,19 @@ Three server-side specifics worth knowing:
 - **Free-text bounds are API-side additions**: routeName is trimmed and capped at 120
   characters, note at 2000. The v1 forms enforce no lengths, so these exist to keep a
   stray script from storing megabytes in unbounded TEXT columns, not to police real
-  input.
+  input. Since RUN-79 the Add/Edit run modal mirrors both as `maxLength`, hand-copied
+  with a comment naming `create-run.dto.ts` as the source of truth (the `HelloResponse`
+  wart again): typing stops where the request would have been rejected, and the route
+  name says so once it lands on its bound, because 120 characters is reachable by
+  pasting and a silently truncated name looks like the app ate it.
+- **`GET /api/runs` is paginated (RUN-79)**, with the shared `?page`/`?pageSize`
+  contract and the shared `{ items, total, page, pageSize }` envelope. What this bounds
+  is one request's work, **not** what a screen sees: `frontend/src/lib/runs.ts` holds
+  the caller's whole history (weekly totals, records, goal progress and insights all
+  compute from that array), so its load walks pages of 100 until a short page ends the
+  walk. Anything that makes the endpoint answer with less than it was asked for would
+  end that walk early and make every one of those screens under-report with nothing
+  failing, which is worse than the unbounded endpoint this replaced.
 - **Sanity limits are enforced in the service, not the DTOs (RUN-72).**
   `src/common/runLimits.ts` holds both tiers as constants with the reasoning next to
   them. `RUN_LIMITS` is hard: distance at most **150 km**, duration at most **24 h**, and
@@ -710,9 +867,10 @@ Three server-side specifics worth knowing:
   predict for itself, which is why the messages are written for a person ("Distance must
   be at most 150 km per run.") rather than naming DTO fields. Other statuses keep the
   generic sentence: a 500's message is about the server, not about the run.
-- **Explicit `null` is always a 400**, on create and on PATCH, with exactly one
-  documented exception: `route` (RUN-54), where null is the way to say "no route" on
-  create and "remove the route" on PATCH. Omitting `effort` or `note` means "use the
+- **Explicit `null` is always a 400**, on create and on PATCH, with exactly two
+  documented exceptions: `route` (RUN-54), where null is the way to say "no route" on
+  create and "remove the route" on PATCH, and `eventId` (RUN-76), which works the same
+  way for "No event" and "untag this run". Omitting `effort` or `note` means "use the
   defaults" (`Medium`, `''`); sending `null` for anything else is rejected in validation
   rather than reaching a NOT NULL column as a 500. The two mechanisms are named after
   what they do: `ValidateIfPresent` (null is a mistake) and `ValidateIfNotNull` (null is
@@ -734,8 +892,15 @@ empty table, which is a bad thing to discover mid-demo.
   global weekly leaderboard reads that week and nothing else.
 - **A follow web** centred on the primary account, so its Following and Followers tabs
   are populated in both directions.
-- **One active event** whose window contains today, with nine participants who already
-  have runs inside it, so the event leaderboard is populated rather than a list of zeros.
+- **One active event** whose window contains today, with nine participants and **exactly
+  one tagged run each** (RUN-76 AC5, AC6), so the event leaderboard and its run feed are
+  populated rather than a list of zeros. Tagging is what makes a run count for an event,
+  so an untagged demo would look broken - but tagging every in-window run would put on the
+  order of a hundred rows on one event page, which is a demo of nothing. The one tagged
+  run is the latest inside the window, and the event's `targetKm` is derived from what was
+  tagged, so the headline number and the board under it describe the same runs. The
+  seeder writes through Prisma rather than the API, so it re-checks both tag rules itself
+  (`tagEventRuns`); nothing else would stop it writing a tag the API would reject.
 - **A handful of `new-follower` notifications** for the primary account only. Deliberate:
   seeding every follow edge and every followed run would put several hundred rows in the
   bell, which is noise rather than a demo.

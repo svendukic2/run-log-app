@@ -191,6 +191,28 @@ describe('CreateRunDto', () => {
       expect(errors[0].property).toBe('route');
     });
   });
+
+  // The event tag (RUN-76). Like `route`, null is legal - it is how the form
+  // says "No event" - and like `route`, everything that makes a tag LEGAL is
+  // checked in the service, because none of it is in the payload.
+  describe('eventId', () => {
+    it('accepts omitted, null, and an id alike', async () => {
+      expect(await createErrors({})).toHaveLength(0);
+      expect(await createErrors({ eventId: null })).toHaveLength(0);
+      expect(await createErrors({ eventId: 'clx1234567890' })).toHaveLength(0);
+    });
+
+    it.each([
+      ['an empty string', ''],
+      ['a number', 42],
+      ['an object', { id: 'event-1' }],
+      ['a value over the documented bound', 'x'.repeat(65)],
+    ])('rejects %s', async (_case, eventId) => {
+      const errors = await createErrors({ eventId });
+      expect(errors).toHaveLength(1);
+      expect(errors[0].property).toBe('eventId');
+    });
+  });
 });
 
 describe('UpdateRunDto', () => {
