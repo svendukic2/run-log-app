@@ -26,8 +26,22 @@ async function fillValidRun(
   if (overrides.date) setDate(overrides.date);
 }
 
-const save = (user: ReturnType<typeof userEvent.setup>) =>
-  user.click(screen.getByRole('button', { name: /save run/i }));
+type User = ReturnType<typeof userEvent.setup>;
+
+// Since RUN-54 the modal is two steps and the SAVE lives on the second one:
+// the details step's primary button is "Next", which validates and advances.
+const next = (user: User) => user.click(screen.getByRole('button', { name: /^next$/i }));
+
+const save = (user: User) =>
+  user.click(screen.getByRole('button', { name: /^save (run|changes)$/i }));
+
+// What every pre-RUN-54 test meant by "save": walk the whole flow. An invalid
+// form never leaves the details step, so the second click is skipped exactly
+// when validation stopped the first one.
+async function submitRun(user: User) {
+  await next(user);
+  if (!screen.queryByRole('button', { name: /^next$/i })) await save(user);
+}
 
 describe('Add run modal (RUN-23)', () => {
   beforeEach(() => {
@@ -66,7 +80,7 @@ describe('Add run modal (RUN-23)', () => {
     await user.click(screen.getByRole('radio', { name: 'Hard' }));
     await user.type(screen.getByLabelText('Note (optional)'), 'Windy');
     setDate('2026-07-14');
-    await save(user);
+    await submitRun(user);
 
     // The save round-trips to the API since RUN-48, so the close arrives once
     // the write lands.
@@ -80,6 +94,9 @@ describe('Add run modal (RUN-23)', () => {
         date: '2026-07-14',
         effort: 'Hard',
         note: 'Windy',
+        // Nobody opened the map, so the run stores no route and is
+        // indistinguishable from one saved before RUN-54 (AC3).
+        route: null,
       },
     ]);
     expect(onClose).toHaveBeenCalled();
@@ -118,7 +135,7 @@ describe('Add run modal (RUN-23)', () => {
     await user.clear(screen.getByLabelText(label));
     if (value) await user.type(screen.getByLabelText(label), value);
 
-    await save(user);
+    await submitRun(user);
 
     const field = screen.getByLabelText(label);
     expect(screen.getByRole('alert')).toBeInTheDocument();
@@ -134,7 +151,7 @@ describe('Add run modal (RUN-23)', () => {
     const { user } = renderModal();
     await fillValidRun(user, { duration: '42' });
 
-    await save(user);
+    await submitRun(user);
 
     expect(screen.getByText('Enter a duration as mm:ss or h:mm:ss')).toBeInTheDocument();
     expect(getRuns()).toEqual([]);
@@ -147,7 +164,7 @@ describe('Add run modal (RUN-23)', () => {
     const { user } = renderModal();
 
     await fillValidRun(user, { duration });
-    await save(user);
+    await submitRun(user);
 
     await waitFor(() => expect(getRuns()).toHaveLength(1));
     const [run] = getRuns();
@@ -160,7 +177,7 @@ describe('Add run modal (RUN-23)', () => {
     const { user } = renderModal();
 
     await fillValidRun(user, { date: '2026-07-02' });
-    await save(user);
+    await submitRun(user);
 
     await waitFor(() => expect(getRuns()).toHaveLength(1));
     expect(getRuns()[0].date).toBe('2026-07-02');
@@ -171,7 +188,7 @@ describe('Add run modal (RUN-23)', () => {
     await fillValidRun(user);
     failRunsApi('POST');
 
-    await save(user);
+    await submitRun(user);
 
     // The failure is announced, nothing was written, and everything typed is
     // still there: closing would silently discard a run the user believes is
@@ -185,7 +202,9 @@ describe('Add run modal (RUN-23)', () => {
     expect(getRuns()).toEqual([]);
     expect(onClose).not.toHaveBeenCalled();
 
-    // The API comes back: the same click now saves and closes as normal.
+    // The API comes back: the same click now saves and closes as normal. The
+    // failed save left us on the route step, so this is the save button
+    // directly rather than the whole flow again.
     restoreRunsApi();
     await save(user);
 
@@ -207,8 +226,8 @@ describe('Add run modal (RUN-23)', () => {
     const pairedRow = screen.getByLabelText('Distance (km)').closest('div')?.parentElement;
     expect(pairedRow).toHaveClass('flex-col', 'sm:flex-row');
 
-    // Both actions span the width of a phone, Save run nearest the thumb.
-    for (const name of [/^cancel$/i, /save run/i]) {
+    // Both actions span the width of a phone, the primary nearest the thumb.
+    for (const name of [/^cancel$/i, /^next$/i]) {
       expect(screen.getByRole('button', { name })).toHaveClass('w-full', 'sm:w-auto');
     }
 
@@ -242,9 +261,6 @@ describe('Edit run modal (RUN-28)', () => {
     return run;
   }
 
-  const saveChanges = (user: ReturnType<typeof userEvent.setup>) =>
-    user.click(screen.getByRole('button', { name: /save changes/i }));
-
   it('is titled "Edit run" with every field prefilled from the run (AC1, EDT-1)', () => {
     renderModal(seedRun());
 
@@ -257,8 +273,9 @@ describe('Edit run modal (RUN-28)', () => {
     // The prefilled note is the run's stored note: the mock's differing copy
     // against Run detail is a flagged design conflict, not two notes (AC5, A20).
     expect(screen.getByLabelText('Note (optional)')).toHaveValue('Felt smooth, negative splits.');
-    // The buttons are the edit pair, not Add run's.
-    expect(screen.getByRole('button', { name: /save changes/i })).toBeInTheDocument();
+    // The details step ends in Next either way since RUN-54; the edit-specific
+    // label lives on the save button, which is on the route step.
+    expect(screen.getByRole('button', { name: /^next$/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /save run/i })).toBeNull();
   });
 
@@ -273,7 +290,7 @@ describe('Edit run modal (RUN-28)', () => {
     await user.clear(distance);
     await user.type(distance, '10');
     await user.click(screen.getByRole('radio', { name: 'Hard' }));
-    await saveChanges(user);
+    await submitRun(user);
 
     // The save round-trips to the API since RUN-48, so the close arrives once
     // the write lands.
@@ -288,6 +305,7 @@ describe('Edit run modal (RUN-28)', () => {
         date: '2026-07-07',
         effort: 'Hard',
         note: 'Felt smooth, negative splits.',
+        route: null,
       },
     ]);
     expect(onClose).toHaveBeenCalled();
@@ -319,7 +337,7 @@ describe('Edit run modal (RUN-28)', () => {
     await user.clear(screen.getByLabelText(label));
     if (value) await user.type(screen.getByLabelText(label), value);
 
-    await saveChanges(user);
+    await submitRun(user);
 
     const field = screen.getByLabelText(label);
     expect(screen.getByRole('alert')).toBeInTheDocument();
@@ -335,7 +353,7 @@ describe('Edit run modal (RUN-28)', () => {
     const { user, onClose } = renderModal(run);
     setDate('2999-01-01');
 
-    await saveChanges(user);
+    await submitRun(user);
 
     expect(screen.getByText('Date cannot be in the future')).toBeInTheDocument();
     expect(getRuns()).toEqual([run]);
@@ -348,7 +366,7 @@ describe('Edit run modal (RUN-28)', () => {
     const dialog = screen.getByRole('dialog', { name: 'Edit run' });
     expect(dialog).toHaveClass('w-full', 'max-w-[560px]', 'max-h-[92dvh]');
     expect(dialog.parentElement).toHaveClass('items-end', 'sm:items-center');
-    for (const name of [/^cancel$/i, /save changes/i]) {
+    for (const name of [/^cancel$/i, /^next$/i]) {
       expect(screen.getByRole('button', { name })).toHaveClass('w-full', 'sm:w-auto');
     }
   });

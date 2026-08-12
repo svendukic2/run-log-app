@@ -55,7 +55,11 @@ describe('Dashboard empty state (RUN-18)', () => {
     await user.type(screen.getByLabelText('Route name'), 'Morning loop');
     await user.type(screen.getByLabelText('Distance (km)'), '8.2');
     await user.type(screen.getByLabelText('Duration'), '42:15');
-    await user.click(screen.getByRole('button', { name: /save run/i }));
+    // Two steps since RUN-54: the details, then the optional route step where
+    // Save lives. Nothing is placed on the map here, which is the point - the
+    // fast path is still a valid form and a save (AC3).
+    await user.click(screen.getByRole('button', { name: /^next$/i }));
+    await user.click(screen.getByRole('button', { name: /^save run$/i }));
 
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.queryByRole('region', { name: 'Log your first run' })).toBeNull();

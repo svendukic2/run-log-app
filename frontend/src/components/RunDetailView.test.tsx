@@ -155,7 +155,9 @@ describe('Run detail (RUN-27)', () => {
     const routeName = screen.getByLabelText('Route name');
     await user.clear(routeName);
     await user.type(routeName, 'Corrected loop');
-    await user.click(screen.getByRole('button', { name: /save changes/i }));
+    // The modal is two steps since RUN-54; Save changes is on the second.
+    await user.click(screen.getByRole('button', { name: /^next$/i }));
+    await user.click(screen.getByRole('button', { name: /^save changes$/i }));
 
     // The save round-trips to the API; the modal closes once it lands and
     // the detail re-read the store.

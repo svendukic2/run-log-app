@@ -18,7 +18,7 @@
 // cache from existing there.
 import { createContext, useContext, useEffect, useSyncExternalStore } from 'react';
 import { ApiError, apiFetch, hasStoredSession } from './session';
-import { EFFORT_LEVELS, isRun, type Run } from './runMath';
+import { EFFORT_LEVELS, isRun, type Run, type RunDraft } from './runMath';
 
 export * from './runMath';
 
@@ -272,7 +272,7 @@ function mergeAfterMutation(runs: Run[]): void {
 // through useRuns refreshes at once (ADD-3). Async since RUN-48: callers
 // await and surface ApiError.message inline (the modal keeps itself open on
 // failure). Nothing is cached on failure.
-export async function addRun(draft: Omit<Run, 'id'>): Promise<Run> {
+export async function addRun(draft: RunDraft): Promise<Run> {
   const response = await apiFetch('/api/runs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -290,7 +290,7 @@ export async function addRun(draft: Omit<Run, 'id'>): Promise<Run> {
 // reading through useRuns - list, detail, dashboard, records - refreshes at
 // once (RUN-28 AC2). Returns null when the id matches nothing anymore
 // (deleted elsewhere); the cache drops the ghost row in that case.
-export async function updateRun(id: string, draft: Omit<Run, 'id'>): Promise<Run | null> {
+export async function updateRun(id: string, draft: RunDraft): Promise<Run | null> {
   const response = await apiFetch(`/api/runs/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },

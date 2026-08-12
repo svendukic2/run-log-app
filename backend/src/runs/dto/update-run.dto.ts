@@ -1,19 +1,23 @@
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsIn,
   IsInt,
   IsNotEmpty,
   IsNumber,
+  IsObject,
   IsPositive,
   IsString,
   Matches,
   MaxLength,
+  ValidateNested,
 } from 'class-validator';
 import {
   EFFORT_LEVELS,
   IsRealNotFutureDate,
   NOTE_MAX_LENGTH,
   ROUTE_NAME_MAX_LENGTH,
+  RunRouteDto,
+  ValidateIfNotNull,
   ValidateIfPresent,
   type Effort,
 } from './create-run.dto';
@@ -68,4 +72,15 @@ export class UpdateRunDto {
     message: `note must be at most ${NOTE_MAX_LENGTH} characters`,
   })
   note?: string;
+
+  // Three distinct meanings, all reachable (RUN-54): omitted leaves the
+  // stored route alone, null REMOVES it, and an object replaces it whole.
+  // The removal case is why null is legal here while it is a 400 for every
+  // field above - clearing the map has to survive a save, and a PATCH that
+  // can only ever add a route would leave the picker's Clear button lying.
+  @ValidateIfNotNull()
+  @IsObject({ message: 'route must be a { polyline, waypoints } object' })
+  @ValidateNested()
+  @Type(() => RunRouteDto)
+  route?: RunRouteDto | null;
 }

@@ -17,6 +17,17 @@ export function ValidateIfPresent() {
   return ValidateIf((_object, value) => value !== undefined);
 }
 
+// For the rare property where null is a MEANING rather than a mistake:
+// omitted and null both skip the decorated validators. Reach for this only
+// when the client genuinely has to be able to state an absence - the run's
+// route (RUN-54) is the one case today, because the run form always submits
+// its complete shape and "I cleared the map" has to be expressible as
+// something. Every other field keeps ValidateIfPresent above, where an
+// explicit null is a 400 by design (docs/data-model.md, API validation).
+export function ValidateIfNotNull() {
+  return ValidateIf((_object, value) => value !== undefined && value !== null);
+}
+
 // A real calendar day with no past/future bound: goal periods legitimately
 // start in the past and end in the future. Rejects impossible days like
 // 2026-02-31, which new Date() would silently roll over into March.

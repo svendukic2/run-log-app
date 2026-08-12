@@ -7,7 +7,14 @@ import { toDbDate, toIsoDate } from '../common/dates';
 import { NotificationsService } from '../notifications/notifications.service';
 import { isPrismaError, prismaConstraint } from '../prisma/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
-import { CreateRunDto, DEFAULT_EFFORT } from './dto/create-run.dto';
+import { Prisma } from '../generated/prisma/client';
+import type { Run as RunRow } from '../generated/prisma/client';
+import { ROUTE_SOURCE_OPENROUTESERVICE } from '../routes/route-sources';
+import {
+  CreateRunDto,
+  DEFAULT_EFFORT,
+  type RunRouteDto,
+} from './dto/create-run.dto';
 import {
   runsNewestFirstOrder,
   toRunResponse,
@@ -16,8 +23,11 @@ import {
 import { UpdateRunDto } from './dto/update-run.dto';
 
 // The response shape and its mapper live in run-response.ts since RUN-63,
-// shared with the public profile read. Re-exported here so every existing
-// importer (the controller, the specs) keeps its import path.
+// shared with the public profile read - which is also why RUN-54's route
+// mapping went there rather than here: two hand-written mappers is how the
+// owner's runs and a public profile's runs would start disagreeing about what
+// a run looks like, and the route is exactly the field where disagreeing
+// means leaking. Re-exported so every existing importer keeps its path.
 export type { RunResponse };
 
 // The two FK constraints a run-create transaction can violate (P2003) since
@@ -27,6 +37,39 @@ export type { RunResponse };
 // WHICH one broke - the same technique follow.service uses.
 const RUN_OWNER_FKEY = 'Run_userId_fkey';
 const NOTIFICATION_RECIPIENT_FKEY = 'Notification_userId_fkey';
+
+// The three columns for a write. Its read-side counterpart (toRoute) lives in
+// run-response.ts with the rest of the mapping; this one stays here because
+// only the owner's own endpoints ever write a route. Prisma needs DbNull (not
+// null) to put SQL NULL into a nullable Json column, which is the only reason
+// clearing a route is not simply three nulls.
+function routeColumns(route: RunRouteDto | null): {
+  routePolyline: string | null;
+  routeWaypoints: Prisma.InputJsonValue | typeof Prisma.DbNull;
+  routeSource: string | null;
+} {
+  if (!route) {
+    return {
+      routePolyline: null,
+      routeWaypoints: Prisma.DbNull,
+      routeSource: null,
+    };
+  }
+  return {
+    routePolyline: route.polyline,
+    // Narrowed to the two fields the contract has: the DTO's whitelist pipe
+    // already stripped unknown keys, and rebuilding keeps it that way if
+    // CoordinateDto ever grows one.
+    routeWaypoints: route.waypoints.map((point) => ({
+      lat: point.lat,
+      lng: point.lng,
+    })),
+    // Server-assigned, never client-supplied: the polyline can only have
+    // come from POST /api/routes/plan, so this is a fact the server already
+    // knows and the client has no business asserting.
+    routeSource: ROUTE_SOURCE_OPENROUTESERVICE,
+  };
+}
 
 // Every method takes the owning userId first (RUN-57) and folds it into the
 // WHERE clause itself - ownership is enforced by the query, never by
@@ -42,6 +85,13 @@ export class RunsService {
     private readonly notifications: NotificationsService,
   ) {}
 
+  // Every response from this service is the OWNER's own run, so the route
+  // always comes with it: privacy gates who may see someone ELSE's routes
+  // (users.service, canViewRoutes), never your own.
+  private toResponse(row: RunRow): RunResponse {
+    return toRunResponse(row, { withRoute: true });
+  }
+
   // Newest first, the order every screen shows runs in (the ordering and
   // its reasoning live in run-response.ts, shared with the public profile
   // read). Unbounded on purpose for now: the frontend consumes the whole
@@ -51,14 +101,14 @@ export class RunsService {
       where: { userId },
       orderBy: [...runsNewestFirstOrder],
     });
-    return rows.map(toRunResponse);
+    return rows.map((row) => this.toResponse(row));
   }
 
   async findOne(userId: string, id: string): Promise<RunResponse> {
     // findFirst, not findUnique: the where must carry the owner too.
     const row = await this.prisma.run.findFirst({ where: { id, userId } });
     if (!row) throw new NotFoundException(`Run ${id} not found`);
-    return toRunResponse(row);
+    return this.toResponse(row);
   }
 
   create(userId: string, dto: CreateRunDto): Promise<RunResponse> {
@@ -96,6 +146,10 @@ export class RunsService {
               // explicit nulls were already rejected by the DTO.
               effort: dto.effort ?? DEFAULT_EFFORT,
               note: dto.note ?? '',
+              // Omitted route === null route === no route (AC3): the columns
+              // stay NULL and this run is indistinguishable from every run
+              // saved before RUN-54.
+              ...routeColumns(dto.route ?? null),
             },
           });
           await this.notifications.fanOutRunLogged(tx, userId, {
@@ -117,7 +171,7 @@ export class RunsService {
           timeout: 15_000,
         },
       );
-      return toRunResponse(row);
+      return this.toResponse(row);
     } catch (error) {
       if (isPrismaError(error, 'P2003')) {
         const constraint = prismaConstraint(error);
@@ -165,6 +219,10 @@ export class RunsService {
       ...(dto.date !== undefined && { date: toDbDate(dto.date) }),
       ...(dto.effort !== undefined && { effort: dto.effort }),
       ...(dto.note !== undefined && { note: dto.note }),
+      // PATCH semantics for the route, all three cases: absent leaves the
+      // stored one alone (so an edit that never opened the map cannot lose
+      // it), null clears all three columns, and an object replaces them.
+      ...(dto.route !== undefined && routeColumns(dto.route)),
     };
 
     // An empty PATCH is a deliberate no-op: return the row as-is (404 if
@@ -181,7 +239,7 @@ export class RunsService {
         where: { id, userId },
         data,
       });
-      return toRunResponse(row);
+      return this.toResponse(row);
     } catch (error) {
       if (isPrismaError(error, 'P2025')) {
         throw new NotFoundException(`Run ${id} not found`);

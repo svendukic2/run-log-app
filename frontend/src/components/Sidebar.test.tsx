@@ -39,8 +39,16 @@ describe('Sidebar', () => {
     expect(screen.getByRole('link', { name: /dashboard/i })).toHaveAttribute('href', '/dashboard');
     expect(screen.getByRole('link', { name: /runs/i })).toHaveAttribute('href', '/runs');
     expect(screen.getByRole('link', { name: /ai coach/i })).toHaveAttribute('href', '/coach');
-    expect(screen.getByRole('link', { name: /events/i })).toHaveAttribute('href', '/events');
     expect(screen.getByRole('link', { name: /settings/i })).toHaveAttribute('href', '/settings');
+
+    // The COMMUNITY section, complete since RUN-62 (AC4): all three pages,
+    // in the Figma order.
+    expect(
+      screen
+        .getAllByRole('link')
+        .map((link) => link.getAttribute('href'))
+        .filter((href) => ['/leaderboard', '/events', '/people'].includes(href ?? '')),
+    ).toEqual(['/leaderboard', '/events', '/people']);
   });
 
   it('highlights exactly the current view and gives it the dot (AC2)', () => {
@@ -61,7 +69,11 @@ describe('Sidebar', () => {
     ['/dashboard', 'Dashboard'],
     ['/runs', 'Runs'],
     ['/coach', 'AI Coach'],
+    ['/leaderboard', 'Leaderboard'],
     ['/events', 'Events'],
+    ['/people', 'People'],
+    // A public profile keeps its section lit, the way /runs/42 does.
+    ['/people/user-1', 'People'],
     ['/settings', 'Settings'],
   ])('marks %s as active for the %s item (AC4)', (pathname, label) => {
     mockUsePathname.mockReturnValue(pathname);

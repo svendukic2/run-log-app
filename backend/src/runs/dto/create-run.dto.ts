@@ -1,23 +1,29 @@
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
+  IsArray,
   IsIn,
   IsInt,
   IsNotEmpty,
   IsNumber,
+  IsObject,
   IsPositive,
   IsString,
   Matches,
   MaxLength,
   registerDecorator,
+  ValidateNested,
   type ValidationOptions,
 } from 'class-validator';
 import { addDaysIso, isRealCalendarDay, utcTodayIso } from '../../common/dates';
-import { ValidateIfPresent } from '../../common/validation';
+import { ValidateIfNotNull, ValidateIfPresent } from '../../common/validation';
+import { CoordinateDto, MAX_WAYPOINTS } from '../../routes/dto/plan-route.dto';
 
 // Moved to src/common/validation.ts when the profile/goal DTOs (RUN-49)
 // needed the same present-or-valid semantics; re-exported so this module's
 // DTO surface stays in one import.
-export { ValidateIfPresent };
+export { ValidateIfNotNull, ValidateIfPresent };
 
 // Mirrors frontend/src/lib/runs.ts EFFORT_LEVELS; the API and the UI must
 // agree on the capitalized spellings (docs/data-model.md).
@@ -71,6 +77,56 @@ export function IsRealNotFutureDate(validationOptions?: ValidationOptions) {
   };
 }
 
+/* The optional route (RUN-54) -------------------------------------------- */
+
+// A stored route keeps the points the runner tapped INCLUDING both ends, so
+// Edit can restore the picker exactly and re-plan from it (AC5): index 0 is
+// Start, the last is Finish, and everything between is a numbered waypoint.
+// Hence the bounds: the plan endpoint's waypoint cap (MAX_WAYPOINTS, reused
+// so the two cannot drift) plus the two ends, and a floor of two, because
+// one point is not a route.
+export const MIN_ROUTE_POINTS = 2;
+export const MAX_ROUTE_POINTS = MAX_WAYPOINTS + 2;
+
+// An encoded polyline is a couple of bytes per point per axis, so even a
+// long walking route is a few KB. This bound is the same kind of thing as
+// NOTE_MAX_LENGTH: far above anything five tapped points can produce, far
+// below "a stray script filled a TEXT column".
+export const ROUTE_POLYLINE_MAX_LENGTH = 20_000;
+
+// The route as the client submits it: the line the provider drew plus the
+// points it was drawn from. `source` is deliberately NOT here - the server
+// stamps it (runs.service.ts) because it is a fact about who planned the
+// route, not a client preference, and the app-wide whitelist pipe rejects
+// any payload that tries to send one.
+export class RunRouteDto {
+  @IsString({ message: 'route.polyline must be a string' })
+  @IsNotEmpty({ message: 'route.polyline must not be empty' })
+  @MaxLength(ROUTE_POLYLINE_MAX_LENGTH, {
+    message: `route.polyline must be at most ${ROUTE_POLYLINE_MAX_LENGTH} characters`,
+  })
+  polyline!: string;
+
+  @IsArray({ message: 'route.waypoints must be an array' })
+  @ArrayMinSize(MIN_ROUTE_POINTS, {
+    message: `route.waypoints must contain at least ${MIN_ROUTE_POINTS} points (start and finish)`,
+  })
+  @ArrayMaxSize(MAX_ROUTE_POINTS, {
+    message: `route.waypoints must contain at most ${MAX_ROUTE_POINTS} points`,
+  })
+  // Both of these are load-bearing for the same reason they are on
+  // PlanRouteDto: without @IsObject an array element that is itself an array
+  // validates clean, and without @Type the nested checks have no class to
+  // run against.
+  @IsObject({
+    each: true,
+    message: 'each route.waypoints entry must be a { lat, lng } object',
+  })
+  @ValidateNested({ each: true })
+  @Type(() => CoordinateDto)
+  waypoints!: CoordinateDto[];
+}
+
 export class CreateRunDto {
   @Transform(({ value }): unknown =>
     typeof value === 'string' ? value.trim() : value,
@@ -110,4 +166,21 @@ export class CreateRunDto {
     message: `note must be at most ${NOTE_MAX_LENGTH} characters`,
   })
   note?: string;
+
+  // Omitted and null both mean "no route", and the run saves exactly as it
+  // did before RUN-54 (AC3). null is accepted here, unlike everywhere else
+  // in this DTO, because the run form submits its complete shape on every
+  // save: "the map is empty" has to be sayable, and saying it as null beats
+  // asking every caller to delete a key.
+  //
+  // Nesting the three route facts under ONE property is what makes the
+  // all-or-none invariant structural: there is no way to submit a polyline
+  // with no waypoints, so there is no cross-field rule to enforce and no
+  // half-written route to store (the database CHECK in the migration guards
+  // the same thing from the other side).
+  @ValidateIfNotNull()
+  @IsObject({ message: 'route must be a { polyline, waypoints } object' })
+  @ValidateNested()
+  @Type(() => RunRouteDto)
+  route?: RunRouteDto | null;
 }

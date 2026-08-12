@@ -189,8 +189,36 @@ has; ids are `cuid()`, so there is no id space to walk. Do not "fix" it by
 the two), and the owner overrides both on their own profile. Route maps
 themselves are RUN-72, so `showRoutes` gates only the run detail's Route card so
 far; it is honoured in the payload now so that route data was never exposed in
-the meantime. The endpoint lives in `backend/src/users/`, which RUN-62 extends
-with `GET /api/users?search=`.
+the meantime. The endpoint lives in `backend/src/users/`, alongside the search
+below.
+
+**Searching for runners (RUN-62).** `GET /api/users?search=` answers the People
+page: `{ items: [{ id, firstName, lastName, following }], total, page, pageSize,
+counts: { followers, following } }`. It shares the `?page`/`?pageSize` contract
+with the follow lists (1-based, default 20, max 100) and is **capped, not
+unbounded** - the first page is what the UI shows, and `total` is what lets it
+say "showing the first 20 of 43" instead of silently truncating.
+
+Four rules make this endpoint what it is:
+
+- **The caller is never a row.** You cannot follow yourself, so your own account
+  would be the one result with no action on it.
+- **Every whitespace-separated term must appear in one half of the name**, case
+  insensitively, so "ana tes" finds Ana Tester and so does "tes ana"; neither
+  term is pinned to a column. Terms are capped at four and the whole query at 60
+  characters, because each term is another OR pair in the WHERE.
+- **An absent or blank `search` lists nobody.** It is a valid request - the page
+  reads it for the counts before anything is typed - but it never becomes a
+  `LIKE '%%'` over every account. Nothing in the User table is touched at all.
+- **A row carries names and the follow flag, nothing else.** Private accounts DO
+  appear: their profile page still serves a header and a working follow button
+  (RUN-63 AC2), so hiding them from search would only make them unfollowable.
+  That is exactly why no run count, distance or any other unshared number may be
+  added to this shape later.
+
+`counts` is the caller's own, served with every answer including the empty-query
+one. The frontend store (`frontend/src/lib/userSearch.ts`) keeps it across query
+changes for that reason: it belongs to the account, not to the query.
 
 **Ownership (RUN-57).** Every other entity in this document carries a required
 `userId` foreign key (cascade on user delete), with one structural exception:
@@ -481,10 +509,54 @@ Exactly as implemented in `runs.ts` (RUN-23):
 | date | yyyy-mm-dd | Defaults to today (ADD-7) |
 | effort | Effort | Defaults to 'Medium' (ADD-8) |
 | note | string | Only optional field; `''` when absent |
+| route | RunRoute \| null | The optional drawn route (RUN-54); `null` on every run saved without one |
 
 Start time, elevation and route type from Run detail (DET-7) are **deliberately absent**:
 they are display-only fields no form captures (assumption A10). If the designer answers
 how they are captured, they join as nullable fields in both places.
+
+**The route (RUN-54).** Three nullable columns on `Run` -  `routePolyline`,
+`routeWaypoints`, `routeSource` - served as **one nullable object**:
+
+```ts
+interface RunRoute {
+  polyline: string; // encoded polyline, precision 5 (RUN-53)
+  waypoints: Array<{ lat: number; lng: number }>; // 2-5: [0] Start, last Finish
+  source: string; // who drew it: 'openrouteservice' today
+}
+```
+
+Five things about it are decisions, not accidents:
+
+- **Columns separate, API shape nested.** The columns are what the roadmap and the
+  ticket specify (and what lets `routeSource` be filtered later); the single `route`
+  object is what makes the all-or-none invariant *structural* - there is no way to
+  submit or receive a polyline with no waypoints, so there is no cross-field validation
+  rule and no half-written route to store. A `CHECK` constraint
+  (`Run_route_columns_all_or_none`) guards the same invariant from the database side,
+  and reading a row that violates it anyway is a loud 500 that names the row, like a
+  stored effort outside the vocabulary.
+- **`routeSource` is server-assigned.** The polyline can only have come from
+  `POST /api/routes/plan`, so the server already knows who drew it; a client-supplied
+  provenance field would be a claim, not a fact. Sending one is rejected by the app-wide
+  whitelist pipe. The stored value is the provider id (`'openrouteservice'`), not a bare
+  `'routed'`: it answers *reconstruction or GPS truth* - the question RUN-55 needs for
+  its dashed line - **and** which provider, which a bare flag throws away.
+- **The waypoints are the runner's taps, not the polyline's points.** The polyline has
+  hundreds of coordinates and cannot be turned back into the 2-5 points a picker can
+  restore, move or remove - so those are stored alongside it (AC5). Index 0 is Start,
+  the last is Finish, and up to `MAX_WAYPOINTS` (3, reused from the plan endpoint's cap
+  so the two cannot drift) sit between them.
+- **`null` is legal for this field only.** Omitting `route` on create means no route;
+  sending `null` means the same thing, and on PATCH it means *remove the stored route*.
+  Everywhere else in the runs DTOs an explicit `null` is a 400 (see API validation
+  below) - the exception exists because the run form submits its complete shape on every
+  save, so "I cleared the map" has to be expressible. A PATCH that omits `route`
+  entirely leaves the stored one untouched, so an edit that never opened the Route step
+  cannot lose it.
+- **The entered distance stays the source of truth.** The routed distance is never
+  written to `distanceKm`; a mismatch over 20% is a hint in the form (RUN-54 AC2), never
+  a correction and never a block on saving.
 
 ### CoachPlan (one per generation)
 
@@ -579,9 +651,13 @@ Three server-side specifics worth knowing:
   characters, note at 2000. The v1 forms enforce no lengths, so these exist to keep a
   stray script from storing megabytes in unbounded TEXT columns, not to police real
   input.
-- **Explicit `null` is always a 400**, on create and on PATCH. Omitting `effort` or
-  `note` means "use the defaults" (`Medium`, `''`); sending `null` for anything is
-  rejected in validation rather than reaching a NOT NULL column as a 500.
+- **Explicit `null` is always a 400**, on create and on PATCH, with exactly one
+  documented exception: `route` (RUN-54), where null is the way to say "no route" on
+  create and "remove the route" on PATCH. Omitting `effort` or `note` means "use the
+  defaults" (`Medium`, `''`); sending `null` for anything else is rejected in validation
+  rather than reaching a NOT NULL column as a 500. The two mechanisms are named after
+  what they do: `ValidateIfPresent` (null is a mistake) and `ValidateIfNotNull` (null is
+  a meaning), both in `src/common/validation.ts`.
 
 ## Test database
 

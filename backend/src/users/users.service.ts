@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { resolvePagination } from '../common/pagination-query.dto';
 import { canViewProfile, canViewRoutes } from '../common/privacy';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -6,6 +7,7 @@ import {
   toRunResponse,
   type RunResponse,
 } from '../runs/run-response';
+import { searchTerms, type UserSearchQueryDto } from './user-search-query.dto';
 
 // One runner's public profile, as RUN-63's /people/:id page reads it.
 //
@@ -35,12 +37,59 @@ export interface PublicProfileResponse {
   counts: { followers: number; following: number };
   // Whether the body below was served. False means gated, never "empty".
   visible: boolean;
-  // Whether route maps may be rendered for these runs (RUN-72 draws them;
-  // no route data exists to send yet, which is why this is a permission and
-  // not a payload).
+  // Whether route maps may be rendered for these runs. Since RUN-54 there is
+  // real route data behind this, so it is BOTH a permission and a promise
+  // about the payload: when it is false, every run below arrives with
+  // `route: null` regardless of what is stored.
   showRoutes: boolean;
   runs: RunResponse[] | null;
 }
+
+// One row of GET /api/users?search= (RUN-62): who they are, and whether the
+// caller already follows them so the row's button renders in the right
+// state from the first paint.
+//
+// Name and id only, deliberately. A search row is served for PRIVATE
+// accounts too - their profile page still renders a header and a working
+// follow button (RUN-63 AC2), so hiding them from search would only make
+// them unfollowable - which is exactly why nothing here may grow into run
+// counts, distances or anything else a private account has not shared.
+export interface FoundUser {
+  id: string;
+  firstName: string;
+  lastName: string;
+  following: boolean;
+}
+
+// The search envelope. `counts` is the caller's OWN follow counts, carried
+// on every answer including the empty-query one, because the People page
+// shows them beside the search box whether or not anything was typed.
+export interface UserSearchResponse {
+  items: FoundUser[];
+  total: number;
+  page: number;
+  pageSize: number;
+  counts: { followers: number; following: number };
+}
+
+// What a search row is allowed to project, written down once next to the
+// profile's select and for the same reason: this runs against the User row,
+// which also holds passwordHash and email.
+const USER_SEARCH_SELECT = {
+  id: true,
+  firstName: true,
+  lastName: true,
+} as const;
+
+// Alphabetical, with the id as the tiebreak that makes the order total:
+// two runners with the same name must not swap places between page 1 and
+// page 2. Newest-first (the follow lists' order) would be meaningless here
+// - nobody scans search results by signup date.
+const USER_SEARCH_ORDER = [
+  { firstName: 'asc' },
+  { lastName: 'asc' },
+  { id: 'asc' },
+] as const;
 
 // The columns the profile read projects. Named like PRIVACY_SELECT next
 // door and for the same reason: this select runs against the User row,
@@ -112,6 +161,11 @@ export class UsersService {
         : Promise.resolve(null),
     ]);
 
+    // Computed once and used twice on purpose: the flag the page reads and
+    // the gate the payload is built with have to be the same answer, or the
+    // profile would advertise routes it did not send (or worse, the reverse).
+    const withRoute = canViewRoutes(user, viewerId, id);
+
     return {
       id,
       firstName: user.firstName,
@@ -122,8 +176,109 @@ export class UsersService {
       following: edge !== null,
       counts: { followers, following },
       visible,
-      showRoutes: canViewRoutes(user, viewerId, id),
-      runs: runs === null ? null : runs.map(toRunResponse),
+      showRoutes: withRoute,
+      // Routes are private by default (RUN-64), so they are dropped from the
+      // payload rather than hidden by the client: data the viewer may not see
+      // must not be in the response for a devtools tab to un-hide (RUN-54,
+      // extending the rule RUN-63 already applies to the whole body).
+      runs:
+        runs === null
+          ? null
+          : runs.map((row) => toRunResponse(row, { withRoute })),
     };
+  }
+
+  // Runners matching a name (RUN-62 AC1), never including the caller: you
+  // cannot follow yourself, so your own row would be the one result with no
+  // action on it.
+  //
+  // The counts are read on every call, matching query or not, because the
+  // People page shows them next to the box before anything is typed - which
+  // is also the whole answer to the no-query state, so that case costs two
+  // counts and touches the User table not at all.
+  async searchUsers(
+    viewerId: string,
+    query: UserSearchQueryDto,
+  ): Promise<UserSearchResponse> {
+    const { page, pageSize, skip } = resolvePagination(query);
+    const terms = searchTerms(query.search);
+
+    // Independent of each other, so one round trip rather than three in a
+    // row. The matches query chains its own dependent reads internally.
+    const [followers, following, matches] = await Promise.all([
+      this.prisma.follow.count({ where: { followeeId: viewerId } }),
+      this.prisma.follow.count({ where: { followerId: viewerId } }),
+      this.findMatches(viewerId, terms, skip, pageSize),
+    ]);
+
+    return {
+      items: matches.items,
+      total: matches.total,
+      page,
+      pageSize,
+      counts: { followers, following },
+    };
+  }
+
+  // One page of name matches plus the size of the whole match set, so the
+  // page can say "showing 20 of 43" rather than pretending the cap is the
+  // answer. An empty query short-circuits: no terms means no LIKE at all,
+  // not a LIKE '%%' over every account in the database.
+  private async findMatches(
+    viewerId: string,
+    terms: string[],
+    skip: number,
+    take: number,
+  ): Promise<{ items: FoundUser[]; total: number }> {
+    if (terms.length === 0) return { items: [], total: 0 };
+
+    // Every term must match SOMEWHERE in the name, either half. That is what
+    // makes "ana tes" find Ana Tester while "ana zzz" finds nobody, and it
+    // works typed in either order because neither term is pinned to a
+    // column. Case-insensitive per term (AC1).
+    const where = {
+      id: { not: viewerId },
+      AND: terms.map((term) => ({
+        OR: [
+          { firstName: { contains: term, mode: 'insensitive' as const } },
+          { lastName: { contains: term, mode: 'insensitive' as const } },
+        ],
+      })),
+    };
+
+    const [rows, total] = await Promise.all([
+      this.prisma.user.findMany({
+        where,
+        select: USER_SEARCH_SELECT,
+        orderBy: [...USER_SEARCH_ORDER],
+        skip,
+        take,
+      }),
+      this.prisma.user.count({ where }),
+    ]);
+
+    // One query for the whole page's follow state, not one per row.
+    const followed = await this.followedSet(
+      viewerId,
+      rows.map((row) => row.id),
+    );
+
+    return {
+      items: rows.map((row) => ({ ...row, following: followed.has(row.id) })),
+      total,
+    };
+  }
+
+  // Which of these users the caller already follows.
+  private async followedSet(
+    viewerId: string,
+    ids: string[],
+  ): Promise<Set<string>> {
+    if (ids.length === 0) return new Set();
+    const edges = await this.prisma.follow.findMany({
+      where: { followerId: viewerId, followeeId: { in: ids } },
+      select: { followeeId: true },
+    });
+    return new Set(edges.map((edge) => edge.followeeId));
   }
 }
