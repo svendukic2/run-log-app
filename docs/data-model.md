@@ -774,7 +774,11 @@ Two implementation notes for anyone extending it (`backend/src/seed/`):
   `seed-demo-data.ts` is the thin writer. That split is what makes the interesting half
   unit-testable with no database at all (`demo-data.spec.ts`), which matters because a
   fresh clone has none. `test/seed.e2e-spec.ts` covers the writing half against CI's real
-  Postgres.
+  Postgres. Demo runs are checked against RUN-72's own `runLimitViolation()` and
+  `isOutlierRun()` (`src/common/runLimits.ts`), not against numbers copied out of them, so
+  the seeder cannot drift past the guardrails that protect real data - and it has to clear
+  the **soft** thresholds too, or the whole demo leaderboard would wear the `unverified`
+  marker.
 - It runs from the **compiled output** (`nest build && node dist/seed/seed.js`), not
   ts-node: the Prisma 7 generated client uses ESM-style relative specifiers that
   ts-node's CommonJS resolution cannot follow, the same incompatibility `jest.shared.js`
