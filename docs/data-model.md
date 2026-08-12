@@ -695,6 +695,38 @@ Six things about it are decisions, not accidents:
   of a write (`RunRouteDraft` is `polyline` + `waypoints` only, and the whitelist pipe
   400s a save that sends either).
 
+**The route on the event map (RUN-77).** `GET /api/events/:id/runs` serves a
+**second, narrower** route shape alongside the run feed, and every difference from
+`RunRoute` above is a decision:
+
+```ts
+interface EventRunRoute {
+  polyline: string; // encoded, precision 5 - and NOT trimmed
+}
+```
+
+- **No trim, and that is a knowingly accepted hole.** RUN-55 cuts the first and last
+  ~300 m off any route served to a non-owner; this endpoint does not, because a
+  trimmed shared map is barely worth drawing in a student showcase app. The
+  consequence is real: a visitor who may not see your start on your run detail page
+  *can* see it on the event map, which makes the RUN-55 trim ineffective against
+  anyone who shares an event with you. If it ever needs closing, close it by trimming
+  **here**, never by loosening the trim elsewhere.
+- **`showRoutes` is still honoured.** The gate is `canViewRoutes`, the same helper the
+  public profile uses, so this endpoint can never draw a line that runner's own
+  profile would withhold - the trim is 300 m of geometry, whereas `showRoutes` is a
+  switch someone deliberately turned off, and ignoring it would make that Settings
+  toggle a lie. A withheld route is `null`, indistinguishable from a run that has none.
+- **No `waypoints`, no `source`, no `trimmed`.** The map draws lines, not pins:
+  sixteen Start/Finish markers over eight overlapping routes is clutter, so nothing on
+  that screen has a use for the tapped points - and those points are exactly the
+  addresses the trim exists to hide, so a field nobody draws is a field with nowhere
+  to leak from. `trimmed` would be `false` on every row, and nothing renders `source`.
+- **One colour per runner, assigned client-side** from `EVENT_ROUTE_COLORS`
+  (`frontend/src/components/routeMapStyle.ts`) and derived once in `eventRouteLines.ts`,
+  so the map and its legend cannot disagree. Eight colours; past eight runners it wraps,
+  which the ticket's scale assumption (about five routes) allows.
+
 **The event tag (RUN-76).** `Run.eventId` is a nullable FK to `Event` with
 **`ON DELETE SET NULL`**: deleting an event unties its runs and must never delete
 them, because the run is the runner's own data and outlives the event it was
@@ -901,6 +933,26 @@ empty table, which is a bad thing to discover mid-demo.
   tagged, so the headline number and the board under it describe the same runs. The
   seeder writes through Prisma rather than the API, so it re-checks both tag rules itself
   (`tagEventRuns`); nothing else would stop it writing a tag the API would reject.
+- **A Zagreb route on each of those tagged runs** (RUN-77 AC6), which is what the event
+  map draws. Eight real routes - Jarun, Bundek, Maksimir, Tuškanac, the Sava embankment,
+  Sljeme - live as **encoded polylines checked into `src/seed/demo-routes.ts`**, and there
+  are exactly as many of them as the demo event has participants on the board, so no two
+  drawn lines share a route. Four things about them:
+  - **The seeder never calls a routing provider.** It has to stay deterministic and work
+    offline on a clone with no API key, and RUN-53 deliberately kept `ROUTING_API_KEY`
+    optional. The routing happened once, at authoring time.
+  - **Regenerate with `node scripts/plan-demo-routes.mjs --write`**, which holds the
+    coordinates and refuses to write anything that breaks the limits a real client's write
+    would have been held to (precision 5, 2-5 waypoints, inside Zagreb, under 20 000
+    characters). Add a route there rather than hand-encoding a polyline.
+  - **The route's length becomes the run's `distanceKm`**, overwriting the generated one.
+    A 6.7 km Jarun loop drawn under an 18 km run is a run detail page contradicting
+    itself, and the Edit modal says so out loud past 20%. The runner's *pace* carries over,
+    which is what keeps the snapped run inside the guardrails. Only the tagged runs are
+    touched - nine rows out of roughly five hundred.
+  - **`routeSource` is `'demo-seed'`**, not `'openrouteservice'`: these were not planned by
+    this app's provider, and a seeded row claiming otherwise would make a later
+    source-based query answer the wrong question.
 - **A handful of `new-follower` notifications** for the primary account only. Deliberate:
   seeding every follow edge and every followed run would put several hundred rows in the
   bell, which is noise rather than a demo.

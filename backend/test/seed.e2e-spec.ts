@@ -16,6 +16,7 @@ import {
   DEMO_PRIMARY_EMAIL,
   DEMO_USER_COUNT,
 } from '../src/seed/demo-data';
+import { DEMO_ROUTES } from '../src/seed/demo-routes';
 import { seedDemoData } from '../src/seed/seed-demo-data';
 
 // The demo seeder against a real database (RUN-71). This file exists because
@@ -46,6 +47,11 @@ describe('Demo seeder (e2e)', () => {
   const countDemoRows = async () => ({
     users: await prisma.user.count({ where: demoUserFilter }),
     runs: await prisma.run.count({ where: { user: demoUserFilter } }),
+    // Counted separately so the idempotency comparison below covers the route
+    // columns too (RUN-77): a second seed must leave the same lines, not more.
+    routedRuns: await prisma.run.count({
+      where: { user: demoUserFilter, routePolyline: { not: null } },
+    }),
     follows: await prisma.follow.count({
       where: { follower: demoUserFilter },
     }),
@@ -77,6 +83,10 @@ describe('Demo seeder (e2e)', () => {
       const afterFirst = await countDemoRows();
       expect(afterFirst.users).toBe(DEMO_USER_COUNT);
       expect(afterFirst.runs).toBeGreaterThan(200);
+      // The summary the CLI prints agrees with what is in the table, and there
+      // is geometry for the event map to draw at all (RUN-77 AC6).
+      expect(afterFirst.routedRuns).toBe(first.routedRuns);
+      expect(afterFirst.routedRuns).toBeGreaterThan(4);
       expect(afterFirst.follows).toBeGreaterThan(10);
       expect(afterFirst.notifications).toBeGreaterThan(0);
       expect(afterFirst.events).toBe(1);
@@ -158,6 +168,35 @@ describe('Demo seeder (e2e)', () => {
         runs.items.length,
       );
       expect(runs.items.every((run) => run.distanceKm > 0)).toBe(true);
+
+      // RUN-77 AC6, over HTTP and through the same gate the browser reads: the
+      // event map has one line per participant on the board, and they are all
+      // DIFFERENT lines. Same colour reasoning as the generator's own spec - two
+      // runners on identical coordinates would draw one line hiding another
+      // under a legend claiming to tell them apart - but asserted here on what
+      // actually came out of the database and past canViewRoutes.
+      const polylines = runs.items.map((run) => run.route?.polyline);
+      expect(polylines.every((polyline) => typeof polyline === 'string')).toBe(
+        true,
+      );
+      expect(new Set(polylines).size).toBe(polylines.length);
+      // Whole routes, so a seeded polyline is exactly what demo-routes.ts holds
+      // (decision 1 skips RUN-55's trim here). The table's shortest entry is
+      // 410 characters, so anything much smaller means something trimmed it.
+      expect(
+        Math.min(...polylines.map((polyline) => polyline?.length ?? 0)),
+      ).toBeGreaterThan(300);
+      // And the distance on the row is the route's own length, which is what
+      // keeps the run detail page from contradicting the line it draws.
+      for (const run of runs.items) {
+        expect(
+          DEMO_ROUTES.some(
+            (route) =>
+              route.polyline === run.route?.polyline &&
+              route.distanceKm === run.distanceKm,
+          ),
+        ).toBe(true);
+      }
     },
     SEED_TEST_TIMEOUT_MS,
   );

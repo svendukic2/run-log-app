@@ -7,6 +7,10 @@ import {
 import { toDbDate, toIsoDate, utcTodayIso } from '../common/dates';
 import { kmNumber, toMeasuredRuns } from '../common/decimal';
 import { resolvePagination } from '../common/pagination-query.dto';
+// The route gate the event map honours (RUN-77), shared with the public profile
+// rather than re-derived here - see listRuns for why it is this helper and not
+// showRoutes on its own.
+import { canViewRoutes } from '../common/privacy';
 import { rankByDistance, roundKm } from '../common/ranking';
 import { outlierUserIds } from '../common/runLimits';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -89,20 +93,45 @@ export interface EventParticipantResponse {
   unverified: boolean | null;
 }
 
+// A tagged run's geometry, for the event map (RUN-77 AC1). Narrower than
+// RunRouteResponse and that is the point of declaring a second type rather than
+// reusing it:
+//
+//   - no `waypoints`. The map draws lines, not pins - ten Start/Finish markers
+//     over five overlapping routes is clutter, so nothing on this screen has a
+//     use for the tapped points. A field nobody draws is a field that only has
+//     somewhere to leak from.
+//   - no `trimmed`. It would be false on every row: RUN-77 decision 1 serves
+//     these routes whole (see listRuns), so a flag saying "not trimmed" would be
+//     a constant dressed up as information.
+//   - no `source`. Nothing renders it on any screen; the map's own caption
+//     already says these are routed estimates.
+export interface EventRunRouteResponse {
+  // Encoded polyline, precision 5, exactly as stored.
+  polyline: string;
+}
+
 // One run tagged to this event (RUN-76 AC2), as the event page's run feed
 // lists it: who ran it, when, and the two numbers. The runner is a live join
 // like the event's owner - an event's tagged runs cannot outlive their runner
 // (Run cascades with User), so there is nothing to snapshot.
 //
-// No route and no note: this is a feed of other people's runs, and the route
-// especially is gated by a privacy setting this endpoint does not read
-// (User.showRoutes, RUN-55). Adding either means answering that question
-// first, which is exactly why neither is here by accident.
+// Still no note: this is a feed of other people's runs and a note is the
+// personal half of one.
+//
+// The route arrived in RUN-77, and it arrived WITH the privacy question RUN-76
+// declined to answer rather than instead of it - see listRuns for the answer and
+// for the one place this map is deliberately more generous than run detail.
 export interface EventRunResponse {
   id: string;
   date: string;
   distanceKm: number;
   durationSeconds: number;
+  // null means EITHER "this run has no route" OR "this route is not yours to
+  // see", indistinguishably, for the same reason RunResponse.route does: a
+  // "there is a route here you may not see" signal is itself information the
+  // runner did not share.
+  route: EventRunRouteResponse | null;
   runner: {
     id: string;
     firstName: string;
@@ -414,15 +443,60 @@ export class EventsService {
   // envelope: the set is bounded by one event's tagged runs rather than by the
   // database, and `total` is here so a page window can be added later without
   // reshaping the response.
+  //
+  // THE ROUTE (RUN-77) is gated by a SECOND rule, canViewRoutes, and it is not
+  // the same rule as the one above. The feed's membership rule asks "may this
+  // runner's numbers be published"; this asks "may their geometry be", which is
+  // User.showRoutes - a switch a runner deliberately turned off, and ignoring it
+  // here would make that Settings toggle a lie (decision 3).
+  //
+  // Reusing canViewRoutes rather than reading showRoutes alone is a deliberate
+  // narrowing of what the ticket asked for. It ANDs in profilePublic, so this
+  // endpoint can never draw a route that the runner's own profile would withhold.
+  // The alternative - showRoutes alone - would open a second hole beside the one
+  // decision 1 opens knowingly, for the odd account that has routes on but its
+  // profile closed. One deliberate hole is a decision; two, one of them
+  // undecided, is a leak.
+  //
+  // And the hole decision 1 opens, written down here because this is where it
+  // happens: these routes are served WHOLE. RUN-55 cuts the first and last ~300 m
+  // off any route shown to a non-owner, because a line starting at somebody's
+  // front door is their address; this map skips that on purpose, so a visitor who
+  // may not see your start on your run detail page CAN see it here. It is
+  // accepted for a student showcase app where a trimmed shared map is barely worth
+  // drawing. If it ever needs closing, close it by trimming HERE
+  // (runs/route-trim.ts is the function), never by loosening the trim elsewhere.
+  //
+  // WHICH IS WHY THE GEOMETRY ALSO NEEDS THE CALLER TO BE A PARTICIPANT, and this
+  // is the one place in the module where the caller's own membership gates
+  // anything (review finding). The rest of this endpoint is readable by any
+  // signed-in user, deliberately - an event is joinable, so what its members put
+  // in it is publishable to the app. But every event id is enumerable through
+  // GET /api/events, so without this clause "the trim is ineffective against
+  // anyone who shares an event with you" would actually read "against anyone with
+  // an account": sign up, list the events, and collect the untrimmed start point
+  // of every runner who ever tagged a run. That is three times the blast radius
+  // decision 2 accepted, and nobody decided it.
+  //
+  // The ROW stays ungated - a non-participant still sees who ran what, which is
+  // what makes an event worth looking at before joining. Only the line is
+  // withheld.
   async listRuns(
     userId: string,
     eventId: string,
   ): Promise<EventRunListResponse> {
     const event = await this.prisma.event.findUnique({
       where: { id: eventId },
-      select: { id: true },
+      // The caller's own participant rows, where-filtered exactly like
+      // eventInclude does it: a boolean answered without loading the roster, and
+      // without a second round trip.
+      select: {
+        id: true,
+        participants: { where: { userId }, select: { id: true } },
+      },
     });
     if (!event) throw new NotFoundException(`Event ${eventId} not found`);
+    const callerParticipates = event.participants.length > 0;
 
     const rows = await this.prisma.run.findMany({
       where: {
@@ -444,7 +518,25 @@ export class EventsService {
         date: true,
         distanceKm: true,
         durationSeconds: true,
-        user: { select: { id: true, firstName: true, lastName: true } },
+        // routePolyline ALONE, not the other two route columns: this response
+        // carries no waypoints and no source, so reading them would be fetching
+        // fields only to drop them - which is how a later `...row` spread starts
+        // leaking. The all-or-none CHECK on those three columns is what makes one
+        // of them a safe thing to read on its own; run-response.ts, which does
+        // serve all three, is where the disagreement between them is caught.
+        routePolyline: true,
+        user: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            // The two settings canViewRoutes reads. Selected here rather than
+            // fetched per row, and never echoed to the caller: what a client
+            // gets is a route or a null, never another user's privacy settings.
+            profilePublic: true,
+            showRoutes: true,
+          },
+        },
       },
     });
 
@@ -457,7 +549,27 @@ export class EventsService {
       // mapper. Listed in common/decimal.ts with the rest.
       distanceKm: kmNumber(row.distanceKm),
       durationSeconds: row.durationSeconds,
-      runner: row.user,
+      route:
+        row.routePolyline !== null &&
+        // Two gates, and they answer two different questions. This one is about
+        // the CALLER (are you in this event at all); canViewRoutes is about the
+        // RUNNER (did they share their geometry). The own-run clause is
+        // belt-and-braces: a runner who left the event is filtered out of this
+        // feed entirely by the membership clause above, so a row of your own here
+        // already implies you are a participant - but the day that filter changes,
+        // this should not quietly start hiding your own line from you.
+        (callerParticipates || row.user.id === userId) &&
+        canViewRoutes(row.user, userId, row.user.id)
+          ? { polyline: row.routePolyline }
+          : null,
+      // Rebuilt field by field rather than passed through: `row.user` also
+      // carries profilePublic and showRoutes now, and spreading it would put two
+      // of every participant's privacy settings in the response body.
+      runner: {
+        id: row.user.id,
+        firstName: row.user.firstName,
+        lastName: row.user.lastName,
+      },
     }));
     return { items, total: items.length };
   }
