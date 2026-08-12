@@ -35,6 +35,8 @@ function row(overrides: Partial<Record<string, unknown>> = {}) {
     routePolyline: null,
     routeWaypoints: null,
     routeSource: null,
+    // Untagged, like every run stored before RUN-76 and like most runs after it.
+    eventId: null,
     userId: USER_ID,
     ...overrides,
   };
@@ -76,6 +78,7 @@ describe('RunsService', () => {
   const prisma: {
     run: Record<string, jest.Mock>;
     user: Record<string, jest.Mock>;
+    event: Record<string, jest.Mock>;
     $transaction: jest.Mock;
   } = {
     run: {
@@ -88,6 +91,11 @@ describe('RunsService', () => {
     },
     user: {
       findUnique: jest.fn(),
+    },
+    // The event lookup behind the tag rules (RUN-76): one findFirst that
+    // answers "does this event exist AND has the caller joined it".
+    event: {
+      findFirst: jest.fn(),
     },
     // The interactive-transaction mock hands the callback the same mock
     // client, so tests assert on prisma.run.create as before; a thrown
@@ -173,6 +181,9 @@ describe('RunsService', () => {
           // (RUN-54 AC3), which is what the list looked like before it
           // existed.
           route: null,
+          // Same for the event tag (RUN-76 AC7): the key is always there, null
+          // means this run belongs to no event.
+          eventId: null,
         },
       ],
       total: 1,
@@ -523,6 +534,198 @@ describe('RunsService', () => {
     await expect(service.findOne(USER_ID, 'run-1')).rejects.toThrow(
       /Run run-1 has an unreadable route/,
     );
+  });
+
+  /* The event tag (RUN-76) ------------------------------------------------ */
+
+  // Every test here goes straight at the service, which is the point: AC3 asks
+  // for the rules to be enforced where a client cannot reach around them, so
+  // the form is not involved in proving any of it.
+  describe('event tagging', () => {
+    // An event the caller has joined, containing 2026-08-03.
+    const JOINED_EVENT = {
+      name: 'Summer 100k',
+      startDate: new Date('2026-08-01T00:00:00.000Z'),
+      endDate: new Date('2026-08-31T00:00:00.000Z'),
+    };
+
+    function validRun() {
+      return {
+        routeName: 'Event run',
+        distanceKm: 8,
+        durationSeconds: 2400,
+        date: '2026-08-03',
+      };
+    }
+
+    it('stores the tag when the caller joined the event and the date is inside it (AC1)', async () => {
+      prisma.event.findFirst.mockResolvedValue(JOINED_EVENT);
+      prisma.run.create.mockImplementation(
+        ({ data }: { data: Record<string, unknown> }) =>
+          Promise.resolve(row({ ...data, id: 'run-7' })),
+      );
+
+      const created = await service.create(USER_ID, {
+        ...validRun(),
+        eventId: 'event-1',
+      });
+
+      expect(created.eventId).toBe('event-1');
+      // Membership is the WHERE clause, not a filter applied afterwards: one
+      // query answers "exists" and "joined" together, which is also what makes
+      // the two indistinguishable to the caller.
+      expect(prisma.event.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            id: 'event-1',
+            participants: { some: { userId: USER_ID } },
+          },
+        }),
+      );
+    });
+
+    it('rejects an event the caller has not joined, and stores nothing (AC3)', async () => {
+      // An unknown id and an unjoined event are the same empty result, which is
+      // why one message covers both: a run POST must not be a way to find out
+      // which event ids exist.
+      prisma.event.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.create(USER_ID, { ...validRun(), eventId: 'event-theirs' }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.run.create).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['before the window', '2026-07-31'],
+      ['after the window', '2026-09-01'],
+    ])(
+      'rejects a run dated %s, and stores nothing (AC3)',
+      async (_case, date) => {
+        prisma.event.findFirst.mockResolvedValue(JOINED_EVENT);
+
+        await expect(
+          service.create(USER_ID, { ...validRun(), date, eventId: 'event-1' }),
+        ).rejects.toThrow(/must fall inside Summer 100k/);
+        expect(prisma.run.create).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      ['the first day', '2026-08-01'],
+      ['the last day', '2026-08-31'],
+    ])(
+      'accepts a run dated on %s: the window is inclusive',
+      async (_case, date) => {
+        prisma.event.findFirst.mockResolvedValue(JOINED_EVENT);
+        prisma.run.create.mockImplementation(
+          ({ data }: { data: Record<string, unknown> }) =>
+            Promise.resolve(row({ ...data })),
+        );
+
+        await expect(
+          service.create(USER_ID, { ...validRun(), date, eventId: 'event-1' }),
+        ).resolves.toMatchObject({ eventId: 'event-1' });
+      },
+    );
+
+    it('untags on an explicit null and leaves the tag alone when absent (AC6)', async () => {
+      prisma.run.findFirst.mockResolvedValue(
+        row({ eventId: 'event-1', date: new Date('2026-08-03T00:00:00.000Z') }),
+      );
+      prisma.run.update.mockImplementation(
+        ({ data }: { data: Record<string, unknown> }) =>
+          Promise.resolve(row({ eventId: 'event-1', ...data })),
+      );
+
+      const untagged = await service.update(USER_ID, 'run-1', {
+        eventId: null,
+      });
+      expect(untagged.eventId).toBeNull();
+      // No event lookup at all: there is no event left to be outside of.
+      expect(prisma.event.findFirst).not.toHaveBeenCalled();
+
+      // A PATCH that says nothing about the event keeps it, exactly like the
+      // route - an edit that never touched the picker cannot lose the tag.
+      const kept = await service.update(USER_ID, 'run-1', {
+        routeName: 'Renamed',
+      });
+      expect(prisma.run.update).toHaveBeenLastCalledWith({
+        where: { id: 'run-1', userId: USER_ID },
+        data: { routeName: 'Renamed' },
+      });
+      expect(kept.eventId).toBe('event-1');
+    });
+
+    // The merged-pair rule, and the case a naive implementation gets wrong:
+    // the PATCH says nothing about the event, so the tag has to be re-checked
+    // against the NEW date rather than left alone.
+    it('rejects a date move that would take a tagged run out of its event (AC3)', async () => {
+      prisma.run.findFirst.mockResolvedValue(
+        row({ eventId: 'event-1', date: new Date('2026-08-03T00:00:00.000Z') }),
+      );
+      prisma.event.findFirst.mockResolvedValue(JOINED_EVENT);
+
+      await expect(
+        service.update(USER_ID, 'run-1', { date: '2026-09-05' }),
+      ).rejects.toThrow(/must fall inside Summer 100k/);
+      expect(prisma.run.update).not.toHaveBeenCalled();
+    });
+
+    // The mirror image: the PATCH says nothing about the date, so the new tag
+    // is checked against the STORED one.
+    it('checks a new tag against the stored date (AC3)', async () => {
+      prisma.run.findFirst.mockResolvedValue(
+        row({ date: new Date('2026-07-14T00:00:00.000Z') }),
+      );
+      prisma.event.findFirst.mockResolvedValue(JOINED_EVENT);
+
+      await expect(
+        service.update(USER_ID, 'run-1', { eventId: 'event-1' }),
+      ).rejects.toThrow(/must fall inside Summer 100k/);
+      expect(prisma.run.update).not.toHaveBeenCalled();
+    });
+
+    // The review finding: the FK is the backstop for an event deleted between
+    // the tag check and the insert, and it used to escape as a 500. Nothing was
+    // stored either way; what changes is that the caller is told why.
+    it('answers 400 when the event vanishes between the check and the write', async () => {
+      prisma.event.findFirst.mockResolvedValue(JOINED_EVENT);
+      prisma.run.create.mockRejectedValue(
+        prismaError('P2003', 'Run_eventId_fkey'),
+      );
+
+      await expect(
+        service.create(USER_ID, { ...validRun(), eventId: 'event-1' }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('answers 400 for the same race on a PATCH', async () => {
+      prisma.run.findFirst.mockResolvedValue(
+        row({ date: new Date('2026-08-03T00:00:00.000Z') }),
+      );
+      prisma.event.findFirst.mockResolvedValue(JOINED_EVENT);
+      prisma.run.update.mockRejectedValue(
+        prismaError('P2003', 'Run_eventId_fkey'),
+      );
+
+      await expect(
+        service.update(USER_ID, 'run-1', { eventId: 'event-1' }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('never looks an event up for an untagged run (AC7)', async () => {
+      prisma.run.create.mockImplementation(
+        ({ data }: { data: Record<string, unknown> }) =>
+          Promise.resolve(row({ ...data })),
+      );
+
+      const created = await service.create(USER_ID, validRun());
+
+      expect(created.eventId).toBeNull();
+      expect(prisma.event.findFirst).not.toHaveBeenCalled();
+    });
   });
 
   it('deletes scoped to the owner and 404s when nothing matched', async () => {

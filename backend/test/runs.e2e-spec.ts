@@ -100,6 +100,10 @@ describe('Runs API (e2e)', () => {
       // Present and null on every run: this one was saved without opening the
       // Route step (RUN-54 AC3).
       route: null,
+      // Untagged, like every run this suite logs: tagging one to an event
+      // needs an event and a membership, so it lives in events.e2e-spec.ts
+      // (RUN-76 AC3) next to the fixture that can build both.
+      eventId: null,
     });
   });
 

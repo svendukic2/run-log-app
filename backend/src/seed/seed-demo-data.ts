@@ -110,6 +110,26 @@ export async function seedDemoData(
         idByEmail.set(user.email, row.id);
       }
 
+      // Before the runs since RUN-76, and that order is now load-bearing: a
+      // tagged run carries this event's id, so the event has to exist first.
+      const { event } = dataset;
+      const eventRow = await tx.event.create({
+        data: {
+          name: event.name,
+          description: event.description,
+          startDate: toDbDate(event.startDate),
+          endDate: toDbDate(event.endDate),
+          targetKm: event.targetKm,
+          ownerId: requireId(idByEmail, event.ownerEmail),
+          participants: {
+            create: event.participantEmails.map((email) => ({
+              userId: requireId(idByEmail, email),
+            })),
+          },
+        },
+        select: { id: true },
+      });
+
       // Not nested under the user creates above: ~500 rows as one
       // createMany is one INSERT, where the nested form is one per run.
       const runs = await tx.run.createMany({
@@ -122,6 +142,10 @@ export async function seedDemoData(
             effort: run.effort,
             note: run.note,
             userId: requireId(idByEmail, user.email),
+            // AC5: the event's own runs, which is what its leaderboard counts
+            // and its feed lists since tagging became explicit (RUN-76). The
+            // generator decided WHICH runs; this only carries the id.
+            eventId: run.inEvent ? eventRow.id : null,
           })),
         ),
       });
@@ -155,24 +179,6 @@ export async function seedDemoData(
             createdAt: new Date(now - (index + 1) * 3_600_000),
           };
         }),
-      });
-
-      const { event } = dataset;
-      await tx.event.create({
-        data: {
-          name: event.name,
-          description: event.description,
-          startDate: toDbDate(event.startDate),
-          endDate: toDbDate(event.endDate),
-          targetKm: event.targetKm,
-          ownerId: requireId(idByEmail, event.ownerEmail),
-          participants: {
-            create: event.participantEmails.map((email) => ({
-              userId: requireId(idByEmail, email),
-            })),
-          },
-        },
-        select: { id: true },
       });
 
       return {

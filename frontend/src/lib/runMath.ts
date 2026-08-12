@@ -181,6 +181,14 @@ export interface Run {
   // null mean the same thing and every run that predates the field - the v1
   // localStorage import among them - arrives without it.
   route?: RunRoute | null;
+  // The event this run was logged for (RUN-76), or null for the ordinary
+  // untagged run. Optional for the same reason as `route`: absent and null mean
+  // the same thing, and runs stored before the field existed carry neither.
+  //
+  // Just the id. The event's name comes from the events store, which is the one
+  // place that knows it - a copy denormalised onto every run would only give
+  // itself somewhere to go stale.
+  eventId?: string | null;
 }
 
 /* Dates -------------------------------------------------------------------- */
@@ -321,6 +329,10 @@ export interface RunFormValues {
   date: string;
   effort: Effort;
   note: string;
+  // The chosen event (RUN-76 AC1), or '' for "No event". A string rather than
+  // `string | null` because this is a <select>'s value and '' is what an empty
+  // option really holds; toRunDraft turns it back into the null the API wants.
+  eventId: string;
 }
 
 export type RunFormField = 'routeName' | 'distance' | 'duration' | 'date';
@@ -335,6 +347,9 @@ export function emptyRunForm(): RunFormValues {
     date: todayIso(),
     effort: DEFAULT_EFFORT,
     note: '',
+    // No event by default: tagging is a deliberate act, and most runs are not
+    // for an event (RUN-76 AC7).
+    eventId: '',
   };
 }
 
@@ -388,6 +403,9 @@ export function runToForm(run: Run): RunFormValues {
     // isRun never checks the note, so a hand-edited or older stored run can
     // arrive without one; the form still needs a string.
     note: run.note ?? '',
+    // '' is the picker's "No event" (RUN-76), which is also what an untagged
+    // run and a run stored before the field both mean.
+    eventId: run.eventId ?? '',
   };
 }
 
@@ -408,6 +426,10 @@ export function toRunDraft(values: RunFormValues, route: RunRoute | null = null)
     // whole would carry `source` along, and the API's whitelist pipe rejects
     // unknown properties - so every save of a routed run would be a 400.
     route: route ? { polyline: route.polyline, waypoints: route.waypoints } : null,
+    // Always sent explicitly, null included: null is how the API is told "no
+    // event", and on an edit it is what makes clearing the picker survive the
+    // save instead of silently keeping the old tag (RUN-76 AC6).
+    eventId: values.eventId === '' ? null : values.eventId,
   };
 }
 
@@ -507,6 +529,10 @@ export function isRun(value: unknown): value is Run {
     // Absent and null are both "no route"; anything else must be a complete
     // one, because a polyline with no waypoints is a route the picker cannot
     // restore rather than a partial one (RUN-54).
-    (run.route === undefined || run.route === null || isRunRoute(run.route))
+    (run.route === undefined || run.route === null || isRunRoute(run.route)) &&
+    // Same three cases for the event tag (RUN-76).
+    (run.eventId === undefined ||
+      run.eventId === null ||
+      typeof run.eventId === 'string')
   );
 }

@@ -14,17 +14,19 @@ import { Prisma } from '../generated/prisma/client';
 // modules (runLimits, ranking) know nothing about Decimal, which is what
 // keeps them testable without a database and free of a second numeric type.
 //
-// There are exactly five places a distance leaves Prisma, and all five call
-// through here:
+// Every place a distance leaves Prisma calls through here:
 //   - runs/run-response.ts        the mapper, for every runs response
 //   - runs/runs.service.ts        the notification payload and the merged
 //                                 limit check on PATCH
 //   - leaderboard/leaderboard.service.ts  the weekly _sum and outlier read
-//   - events/events.service.ts            the same two for an event window
+//   - events/events.service.ts            the same two for an event window,
+//                                 plus the event run feed's mapper (RUN-76,
+//                                 which landed in parallel and is exactly the
+//                                 "a new one appeared" case this list is for)
 //   - users/users.service.ts      serves runs through the mapper above, so it
 //                                 needs nothing of its own
 //
-// If a sixth appears, add it to that list rather than converting inline: the
+// When the next one appears, add it here rather than converting inline: the
 // bug this guards against is a comparison that silently reads false, which no
 // test notices until a leaderboard is wrong.
 

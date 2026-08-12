@@ -57,6 +57,13 @@ export interface RunListResponse {
 // WHICH one broke - the same technique follow.service uses.
 const RUN_OWNER_FKEY = 'Run_userId_fkey';
 const NOTIFICATION_RECIPIENT_FKEY = 'Notification_userId_fkey';
+// The third one, since RUN-76: the event a run is being tagged to. It is the FK
+// that catches an event deleted between assertTaggable and the write, and it is
+// mapped rather than left to escape as a 500 (review finding) - from the
+// caller's side that is the same situation as an id that was never valid, and
+// they get the same message.
+const RUN_EVENT_FKEY = 'Run_eventId_fkey';
+const UNTAGGABLE_EVENT_MESSAGE = 'eventId must be an event you have joined';
 
 // The three columns for a write. Its read-side counterpart (toRoute) lives in
 // run-response.ts with the rest of the mapping; this one stays here because
@@ -177,6 +184,48 @@ export class RunsService {
     if (violation) throw new BadRequestException(violation);
   }
 
+  // The two rules that make an event tag legal (RUN-76 AC3), both enforced
+  // HERE and not in the DTO, because neither is knowable from the payload: the
+  // event has to exist and be one the caller joined, and the run's date has to
+  // fall inside the event's window. The form applies the same rules by only
+  // offering legal options, but the form is not the enforcement - a client can
+  // post anything.
+  //
+  // One query answers both halves of the first rule, and it answers them with
+  // ONE message on purpose: "no such event" and "an event you have not joined"
+  // are deliberately indistinguishable, so a run POST cannot be used to probe
+  // which event ids exist. Same reasoning as the 404 on someone else's run.
+  //
+  // Not inside the write's transaction, and honestly: a caller who leaves the
+  // event between this check and the insert ends up with a run tagged to an
+  // event they are no longer in, so their kilometres keep counting on a board
+  // they left. That is one owner racing themselves across two tabs, the same
+  // tradeoff assertWithinLimits already takes below, and the reason it is
+  // acceptable is that the run feed and the leaderboard both read through the
+  // participant list - the row is stale, not authoritative.
+  private async assertTaggable(
+    userId: string,
+    eventId: string,
+    dateIso: string,
+  ): Promise<void> {
+    const event = await this.prisma.event.findFirst({
+      where: { id: eventId, participants: { some: { userId } } },
+      select: { name: true, startDate: true, endDate: true },
+    });
+    if (!event) {
+      throw new BadRequestException(UNTAGGABLE_EVENT_MESSAGE);
+    }
+    // Inclusive on both ends, the same closed interval the event's own state
+    // derivation uses: a run logged on the first or the last day counts.
+    const startDate = toIsoDate(event.startDate);
+    const endDate = toIsoDate(event.endDate);
+    if (dateIso < startDate || dateIso > endDate) {
+      throw new BadRequestException(
+        `date must fall inside ${event.name} (${startDate} to ${endDate}) to tag this run to it`,
+      );
+    }
+  }
+
   // async, not a bare Promise-returning method: the limit check below
   // throws before any await, and a synchronous throw out of a method every
   // caller treats as a promise is a trap - `create(...).catch(...)` would
@@ -185,6 +234,10 @@ export class RunsService {
     // Both fields are required on create, so the pair is complete here and
     // nothing needs reading first.
     this.assertWithinLimits(dto);
+    // Omitted and null are both "no event" (AC7), and neither costs a query.
+    if (dto.eventId) {
+      await this.assertTaggable(userId, dto.eventId, dto.date);
+    }
     return this.createRun(userId, dto, /* retryOnFanOutRace */ true);
   }
 
@@ -223,6 +276,9 @@ export class RunsService {
               // stay NULL and this run is indistinguishable from every run
               // saved before RUN-54.
               ...routeColumns(dto.route ?? null),
+              // Validated above; the FK is the second line of defence against
+              // an event deleted between that check and this insert (P2003).
+              eventId: dto.eventId ?? null,
             },
           });
           await this.notifications.fanOutRunLogged(tx, userId, {
@@ -256,6 +312,12 @@ export class RunsService {
         // signing in again, so answer like any other dead session.
         if (constraint === RUN_OWNER_FKEY) {
           throw new UnauthorizedException('Invalid or expired token');
+        }
+        // The event was deleted between the tag check and this insert. Nothing
+        // was stored (the transaction rolled back), and the honest answer is the
+        // one an unknown event id gets: the tag is not usable.
+        if (constraint === RUN_EVENT_FKEY) {
+          throw new BadRequestException(UNTAGGABLE_EVENT_MESSAGE);
         }
         // A follower vanished between the fan-out's read and its insert:
         // the runner's session is fine, so a 401 here would wrongly log
@@ -299,6 +361,9 @@ export class RunsService {
       // stored one alone (so an edit that never opened the map cannot lose
       // it), null clears all three columns, and an object replaces them.
       ...(dto.route !== undefined && routeColumns(dto.route)),
+      // The same three cases for the event tag (RUN-76): absent keeps it, null
+      // untags (AC6), an id retags.
+      ...(dto.eventId !== undefined && { eventId: dto.eventId }),
     };
 
     // An empty PATCH is a deliberate no-op: return the row as-is (404 if
@@ -306,10 +371,15 @@ export class RunsService {
     // request that asks for nothing.
     if (Object.keys(data).length === 0) return this.findOne(userId, id);
 
-    // The limits hold on the MERGED pair (RUN-72), the same way the event
-    // date order does: a PATCH moving only the duration must not slide the
-    // pace past the limit against the stored distance. One extra read, and
-    // only when one of the two fields is actually being written.
+    // Two rules hold on the MERGED row rather than on the patch alone, so both
+    // read the stored one first - once, in a single select, because two
+    // pre-reads for one PATCH would be two round trips for the same row:
+    //
+    //   the limits (RUN-72): a PATCH moving only the duration must not slide
+    //   the pace past the limit against the stored distance;
+    //   the event tag (RUN-76 AC3): a PATCH moving only the date must not slide
+    //   a tagged run out of its event's window, and one moving only the tag has
+    //   to be checked against the stored date.
     //
     // Note that this read and the write below are NOT one statement, so two
     // concurrent PATCHes of the same run - one moving the distance, one the
@@ -318,20 +388,41 @@ export class RunsService {
     // two tabs, and these are honest-mistake guards rather than an
     // invariant the database enforces, so the read stays cheap and separate
     // instead of taking a row lock.
-    if (dto.distanceKm !== undefined || dto.durationSeconds !== undefined) {
+    const touchesLimits =
+      dto.distanceKm !== undefined || dto.durationSeconds !== undefined;
+    const touchesTag = dto.eventId !== undefined || dto.date !== undefined;
+    if (touchesLimits || touchesTag) {
       const existing = await this.prisma.run.findFirst({
         where: { id, userId },
-        select: { distanceKm: true, durationSeconds: true },
+        select: {
+          distanceKm: true,
+          durationSeconds: true,
+          date: true,
+          eventId: true,
+        },
       });
       if (!existing) throw new NotFoundException(`Run ${id} not found`);
-      this.assertWithinLimits({
-        // The Decimal boundary (RUN-78). This one is the dangerous kind: the
-        // limit rules are plain arithmetic, and `decimal > 150` is false for
-        // every Decimal, so leaving the conversion out would disable the
-        // distance cap on PATCH without failing a single type check.
-        distanceKm: dto.distanceKm ?? kmNumber(existing.distanceKm),
-        durationSeconds: dto.durationSeconds ?? existing.durationSeconds,
-      });
+      if (touchesLimits) {
+        this.assertWithinLimits({
+          // The Decimal boundary (RUN-78). This one is the dangerous kind:
+          // the limit rules are plain arithmetic, and `decimal > 150` is
+          // false for every Decimal, so leaving the conversion out would
+          // disable the distance cap on PATCH without failing a type check.
+          distanceKm: dto.distanceKm ?? kmNumber(existing.distanceKm),
+          durationSeconds: dto.durationSeconds ?? existing.durationSeconds,
+        });
+      }
+      // A run being untagged needs no check - there is no event left to be
+      // outside of - and neither does one whose tag and date both stay put.
+      const mergedEventId =
+        dto.eventId !== undefined ? dto.eventId : existing.eventId;
+      if (touchesTag && mergedEventId !== null) {
+        await this.assertTaggable(
+          userId,
+          mergedEventId,
+          dto.date ?? toIsoDate(existing.date),
+        );
+      }
     }
 
     // One atomic query: WhereUniqueInput carries the owner alongside the
@@ -347,6 +438,13 @@ export class RunsService {
     } catch (error) {
       if (isPrismaError(error, 'P2025')) {
         throw new NotFoundException(`Run ${id} not found`);
+      }
+      // Same race as on create, on the only other write that sets the tag.
+      if (
+        isPrismaError(error, 'P2003') &&
+        prismaConstraint(error) === RUN_EVENT_FKEY
+      ) {
+        throw new BadRequestException(UNTAGGABLE_EVENT_MESSAGE);
       }
       throw error;
     }

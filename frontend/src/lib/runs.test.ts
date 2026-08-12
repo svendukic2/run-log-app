@@ -79,6 +79,8 @@ function makeForm(overrides: Partial<RunFormValues> = {}): RunFormValues {
     date: '2026-07-14',
     effort: 'Medium',
     note: '',
+    // '' is the picker's "No event" (RUN-76), which is what most runs are.
+    eventId: '',
     ...overrides,
   };
 }
@@ -343,6 +345,9 @@ describe('toRunDraft', () => {
       // Always explicit, null included: null is how the API is told there is
       // no route, and on an edit it is what clears a stored one (RUN-54).
       route: null,
+      // Same for the event tag (RUN-76): '' in the form is null on the wire,
+      // and sending it is what makes clearing the picker survive a save.
+      eventId: null,
     });
   });
 
@@ -389,6 +394,9 @@ describe('runToForm (RUN-28 AC1)', () => {
     expect({ ...toRunDraft(runToForm(run), run.route ?? null), id: run.id }).toEqual({
       ...run,
       route: run.route ?? null,
+      // The draft always states the tag, so an untagged run round-trips as an
+      // explicit null rather than an absent key (RUN-76).
+      eventId: run.eventId ?? null,
     });
   });
 });
@@ -409,6 +417,8 @@ describe('emptyRunForm (AC1)', () => {
       date: '2026-07-14',
       effort: 'Medium',
       note: '',
+      // No event: tagging is a deliberate act (RUN-76 AC7).
+      eventId: '',
     });
   });
 });

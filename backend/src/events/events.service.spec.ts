@@ -109,6 +109,8 @@ describe('EventsService', () => {
     run: {
       groupBy: jest.fn(),
       findMany: jest.fn(),
+      // The untag sweep a window move performs (RUN-76).
+      updateMany: jest.fn(),
     },
     user: {
       findUnique: jest.fn(),
@@ -305,10 +307,9 @@ describe('EventsService', () => {
     }
 
     it('ranks the opted-in participants and withholds the opted-out runner’s numbers (AC2, AC3)', async () => {
-      prisma.event.findUnique.mockResolvedValue({
-        startDate: toDbDate(YESTERDAY),
-        endDate: toDbDate(TOMORROW),
-      });
+      // Since RUN-76 this read exists only for the 404 on an unknown id: the
+      // aggregation below needs no window.
+      prisma.event.findUnique.mockResolvedValue({ id: 'event-1' });
       prisma.eventParticipant.findMany.mockResolvedValue([
         participant(USER_ID, true, 1),
         participant('user-hidden', false, 2),
@@ -367,32 +368,32 @@ describe('EventsService', () => {
       expect(items[2]).toMatchObject({ rank: 1, unverified: true });
       expect(prisma.run.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: {
-            userId: { in: [USER_ID, 'user-ana'] },
-            date: { gte: toDbDate(YESTERDAY), lte: toDbDate(TOMORROW) },
-          },
+          where: { userId: { in: [USER_ID, 'user-ana'] }, eventId: 'event-1' },
         }),
       );
 
-      // The aggregation is one GROUP BY over these participants, bounded by
-      // the event's own inclusive window (AC6's contract; the e2e suite
-      // proves the boundary days against a real database).
+      // RUN-76 AC4: the aggregation is one GROUP BY over these participants'
+      // runs TAGGED to this event - not over every run whose date happens to
+      // fall inside the window, which is what it used to be. The window is not
+      // gone, it moved to the write path (runs.service assertTaggable), so an
+      // eventId here already implies a date inside it.
       expect(prisma.run.groupBy).toHaveBeenCalledWith(
         expect.objectContaining({
           by: ['userId'],
           where: {
             userId: { in: [USER_ID, 'user-hidden', 'user-ana'] },
-            date: { gte: toDbDate(YESTERDAY), lte: toDbDate(TOMORROW) },
+            eventId: 'event-1',
           },
         }),
       );
+      // And nothing in either read filters on a date any more.
+      expect(JSON.stringify(prisma.run.groupBy.mock.calls)).not.toContain(
+        'date',
+      );
     });
 
-    it('gives a participant with no runs in the window a place with zero km', async () => {
-      prisma.event.findUnique.mockResolvedValue({
-        startDate: toDbDate(TODAY),
-        endDate: toDbDate(TOMORROW),
-      });
+    it('gives a participant with no tagged runs a place with zero km', async () => {
+      prisma.event.findUnique.mockResolvedValue({ id: 'event-1' });
       prisma.eventParticipant.findMany.mockResolvedValue([
         participant(USER_ID, true),
       ]);
@@ -410,6 +411,126 @@ describe('EventsService', () => {
         NotFoundException,
       );
       expect(prisma.run.groupBy).not.toHaveBeenCalled();
+    });
+  });
+
+  // RUN-76 AC2: the event's own run feed.
+  describe('listRuns (RUN-76)', () => {
+    function runRow(id: string, userId: string, firstName: string) {
+      return {
+        id,
+        date: toDbDate(TODAY),
+        distanceKm: 8.2,
+        durationSeconds: 2535,
+        user: { id: userId, firstName, lastName: 'Tester' },
+      };
+    }
+
+    it('lists the runs tagged to this event, newest first, with their runner', async () => {
+      prisma.event.findUnique.mockResolvedValue({ id: 'event-1' });
+      prisma.run.findMany.mockResolvedValue([
+        runRow('run-2', 'user-ana', 'Ana'),
+        runRow('run-1', USER_ID, 'Me'),
+      ]);
+
+      const { items, total } = await service.listRuns(USER_ID, 'event-1');
+
+      expect(total).toBe(2);
+      expect(items[0]).toEqual({
+        id: 'run-2',
+        date: TODAY,
+        distanceKm: 8.2,
+        durationSeconds: 2535,
+        runner: { id: 'user-ana', firstName: 'Ana', lastName: 'Tester' },
+      });
+      // The filter IS the acceptance criterion: tagged to this event, and
+      // nothing else. An untagged run cannot match this where clause, which is
+      // what "lists no untagged runs" means at the query level.
+      const [call] = prisma.run.findMany.mock.calls as Array<
+        [{ where: Record<string, unknown> }]
+      >;
+      expect(call[0].where).toMatchObject({ eventId: 'event-1' });
+      // No note and no route in the projection: this is a feed of other
+      // people's runs and the route is gated by a setting this read does not
+      // look at (RUN-55).
+      expect(JSON.stringify(call[0])).not.toContain('routePolyline');
+    });
+
+    // The rule the ticket does not mention and the leaderboard beside this
+    // list already applies: an opted-out runner's numbers are withheld, and a
+    // feed of their rows would rebuild exactly the total that withholding
+    // hides. Your own runs are always yours to see.
+    it('reads only runs of current participants who are on leaderboards, plus the caller’s own', async () => {
+      prisma.event.findUnique.mockResolvedValue({ id: 'event-1' });
+      prisma.run.findMany.mockResolvedValue([]);
+
+      await service.listRuns(USER_ID, 'event-1');
+
+      const [call] = prisma.run.findMany.mock.calls as Array<
+        [{ where: Record<string, unknown> }]
+      >;
+      // The membership clause is the review finding: leaving an event does not
+      // untag the runs you tagged to it, so without it this feed would keep
+      // listing a runner the leaderboard beside it had already dropped.
+      expect(call[0].where).toEqual({
+        eventId: 'event-1',
+        user: { eventParticipations: { some: { eventId: 'event-1' } } },
+        OR: [{ user: { showOnLeaderboard: true } }, { userId: USER_ID }],
+      });
+    });
+
+    it('404s an unknown event without reading any runs', async () => {
+      prisma.event.findUnique.mockResolvedValue(null);
+
+      await expect(service.listRuns(USER_ID, 'nope')).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(prisma.run.findMany).not.toHaveBeenCalled();
+    });
+  });
+
+  // RUN-76 AC1: the picker's options, which must be exactly the set the write
+  // path accepts.
+  describe('listTaggableEvents (RUN-76)', () => {
+    it('asks for the caller’s own events containing that day, inclusive', async () => {
+      prisma.event.findMany.mockResolvedValue([
+        {
+          id: 'event-1',
+          name: 'Summer 100k',
+          startDate: toDbDate(YESTERDAY),
+          endDate: toDbDate(TOMORROW),
+        },
+      ]);
+
+      const { items, total } = await service.listTaggableEvents(USER_ID, TODAY);
+
+      expect(total).toBe(1);
+      expect(items[0]).toEqual({
+        id: 'event-1',
+        name: 'Summer 100k',
+        startDate: YESTERDAY,
+        endDate: TOMORROW,
+      });
+      // Joined by the caller AND covering the date: the same two conditions
+      // runs.service enforces on the write, which is why they are asserted
+      // rather than left to the happy path.
+      expect(prisma.event.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            participants: { some: { userId: USER_ID } },
+            startDate: { lte: toDbDate(TODAY) },
+            endDate: { gte: toDbDate(TODAY) },
+          },
+        }),
+      );
+    });
+
+    it('answers an empty list rather than an error when nothing covers the day', async () => {
+      prisma.event.findMany.mockResolvedValue([]);
+
+      await expect(service.listTaggableEvents(USER_ID, TODAY)).resolves.toEqual(
+        { items: [], total: 0 },
+      );
     });
   });
 
@@ -601,6 +722,41 @@ describe('EventsService', () => {
       );
       expect(result.name).toBe('Autumn 50k');
       expect(result.targetKm).toBeNull();
+    });
+
+    // The review finding: since RUN-76 the leaderboard aggregates by eventId
+    // alone, trusting that a tagged run sits inside the window. Moving the window
+    // is the one other write that can break that, so it untags what fell out.
+    it('untags the runs a moved window no longer covers (RUN-76)', async () => {
+      const moved = eventRow({
+        ownerId: USER_ID,
+        startDate: toDbDate(TOMORROW),
+        endDate: toDbDate(addDaysIso(TOMORROW, 2)),
+      });
+      prisma.event.findFirst.mockResolvedValue(eventRow({ ownerId: USER_ID }));
+      prisma.event.update.mockResolvedValue(moved);
+
+      await service.update(USER_ID, 'event-1', { startDate: TOMORROW });
+
+      expect(prisma.run.updateMany).toHaveBeenCalledWith({
+        where: {
+          eventId: 'event-1',
+          OR: [
+            { date: { lt: moved.startDate } },
+            { date: { gt: moved.endDate } },
+          ],
+        },
+        data: { eventId: null },
+      });
+    });
+
+    it('leaves tags alone when the window did not move', async () => {
+      prisma.event.findFirst.mockResolvedValue(eventRow({ ownerId: USER_ID }));
+      prisma.event.update.mockResolvedValue(eventRow({ ownerId: USER_ID }));
+
+      await service.update(USER_ID, 'event-1', { name: 'Autumn 50k' });
+
+      expect(prisma.run.updateMany).not.toHaveBeenCalled();
     });
 
     it('answers an empty PATCH as a plain read without writing', async () => {
