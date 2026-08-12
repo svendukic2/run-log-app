@@ -237,8 +237,11 @@ already holds data. The pattern that works is to add the column WITH a default a
 `DROP DEFAULT`, so existing rows are backfilled and the column still matches what Prisma
 expects to find. Enum casts need the same care in the other direction: normalize stray
 values BEFORE `ALTER TABLE ... TYPE ... USING`, because one bad row aborts the whole
-deploy. CI's `prisma migrate deploy` against Postgres 18 is the only thing that actually
-runs these, so a green CI is the proof, not a formality.
+deploy. Know what CI proves and what it does not: `prisma migrate deploy` runs against a
+**fresh, empty** Postgres 18 container, so it proves the SQL parses and the end shape
+matches Prisma, and it never executes a single backfill or normalization because there
+are no rows to touch. The half of a migration this repo cares most about is the half CI
+cannot reach, so read that half yourself.
 
 **No `Decimal` ever leaves the backend (RUN-78).** `Run.distanceKm` is `NUMERIC(5, 2)`,
 which Prisma types as a decimal.js object. It is converted to a plain number the moment

@@ -78,13 +78,15 @@ function publish(next: RunsSnapshot): void {
 // same-day run jump to a different position on the next full load.
 //
 // createdAt joined this in RUN-78 and is what makes two runs logged on the
-// same day come back in the order they were entered. The '' fallback is for
-// the one shape that legitimately has none: a v1 run imported from
-// localStorage, sitting in the cache between its POST and the reload. It
-// sorts such a run last within its day, and the reload replaces it with the
-// server's copy moments later. Server bodies always carry the field (isRun
-// rejects one that does not), so this fallback never decides the order of a
-// list that came off the API.
+// same day come back in the order they were entered.
+//
+// The '' fallback is unreachable in practice and exists only because the Run
+// type has to stay wide enough for readLegacyRuns' cast (review fix: an
+// earlier comment here claimed imported v1 runs pass through the cache, which
+// is wrong - importLegacyRuns only POSTs, and the fetch that follows replaces
+// the snapshot wholesale). Every list this sorts came off the API, and isRun
+// rejects a server body with no createdAt, so the fallback never decides an
+// order.
 function compareRunsNewestFirst(a: Run, b: Run): number {
   return (
     b.date.localeCompare(a.date) ||

@@ -72,11 +72,17 @@ function gateRoute(run: Run, isOwner: boolean, granted: boolean): Run {
 // one without it. Filled in here rather than in every seeded fixture, for the
 // same reason the route gate lives here: what the API sends is the mock's job,
 // not the test's. A seeded value wins, so a test can still pin an order.
-function withCreatedAt(run: Run, index: number): Run {
+//
+// The index counts DOWN, and that is not arbitrary (review fix): these runs
+// are served in the API's own order, newest first, so index 0 is the newest
+// and has to get the LATEST timestamp. Stamping them ascending would hand the
+// newest run the oldest createdAt - a mock disagreeing with the server about
+// the one field that exists to define the order.
+function withCreatedAt(run: Run, index: number, total: number): Run {
   if (run.createdAt) return run;
   return {
     ...run,
-    createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+    createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, total - index)).toISOString(),
   };
 }
 
@@ -96,7 +102,7 @@ function toResponse(user: SeededUser): PublicProfile {
     showRoutes: routesGranted,
     runs: visible
       ? user.runs.map((run, index) =>
-          withCreatedAt(gateRoute(run, user.me, routesGranted), index),
+          withCreatedAt(gateRoute(run, user.me, routesGranted), index, user.runs.length),
         )
       : null,
   };

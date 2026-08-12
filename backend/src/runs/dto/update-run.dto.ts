@@ -9,11 +9,13 @@ import {
   IsString,
   Matches,
   MaxLength,
+  Min,
   ValidateNested,
 } from 'class-validator';
 import {
   EFFORT_LEVELS,
   IsRealNotFutureDate,
+  MIN_DISTANCE_KM,
   NOTE_MAX_LENGTH,
   ROUTE_NAME_MAX_LENGTH,
   RunRouteDto,
@@ -41,9 +43,14 @@ export class UpdateRunDto {
   })
   routeName?: string;
 
+  // Same floor as create: below 0.01 the NUMERIC(5, 2) column rounds to zero
+  // (RUN-78). See the comment on CreateRunDto.distanceKm.
   @ValidateIfPresent()
   @IsNumber({}, { message: 'distanceKm must be a number' })
   @IsPositive({ message: 'distanceKm must be greater than 0' })
+  @Min(MIN_DISTANCE_KM, {
+    message: `distanceKm must be at least ${MIN_DISTANCE_KM}`,
+  })
   distanceKm?: number;
 
   @ValidateIfPresent()

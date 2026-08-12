@@ -10,11 +10,28 @@
 -- Postgres rounds a third decimal away on write, which is exactly the
 -- "stored exactly at two decimals" this item asks for.
 --
+-- A row above 999.99 km overflows the new type and aborts the cast, the
+-- transaction and the deploy with it, so it is dealt with BEFORE the cast for
+-- exactly the reason the enum migration normalizes a stray effort first.
+--
+-- Such a row can exist. The 150 km cap arrived with RUN-72, the live database
+-- with RUN-60, and in between neither the form (its only distance rule was
+-- "greater than 0") nor the DTO had an upper bound - so a metres-for-kilometres
+-- typo, 8200 for 8.2, is exactly the mistake RUN-72 was written to catch and
+-- exactly what could be sitting there. Betting the release on its absence is
+-- the bet this ticket exists to stop making.
+--
+-- The clamp is deliberately minimal: it touches ONLY rows that cannot fit,
+-- leaving every value the column can hold exactly as it was. The landing value
+-- is the column ceiling rather than the 150 km cap, because 999.99 km reads as
+-- obviously broken where 150 km reads as a plausible ultra, and a row that
+-- looks broken is one its owner will fix. Nothing is lost that was not already
+-- invalid: a run that long is one the API has refused to write or accept since
+-- RUN-72, and the row stays fully editable afterwards.
+UPDATE "Run" SET "distanceKm" = 999.99 WHERE "distanceKm" > 999.99;
+
 -- The USING clause casts through numeric and rounds, so a float that was
 -- stored as 8.199999999999999 lands on 8.20 rather than being rejected for
--- scale. A row above 999.99 km would overflow and fail the migration; no such
--- row can exist through the API (the 150 km cap) and none exists in the demo
--- data, so that is left to fail loudly rather than be silently clamped -
--- clamping would invent a distance nobody ran.
+-- scale.
 ALTER TABLE "Run"
   ALTER COLUMN "distanceKm" TYPE DECIMAL(5, 2) USING ROUND("distanceKm"::numeric, 2);

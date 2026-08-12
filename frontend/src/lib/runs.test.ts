@@ -9,6 +9,7 @@ import {
   rejectRunsNamed,
   restoreRunsApi,
   seedLegacyRuns,
+  seedRuns,
 } from '@/test/runsApiMock';
 import {
   __resetRunsStoreForTests,
@@ -438,25 +439,42 @@ describe('store (API-backed since RUN-48)', () => {
     expect(getRuns().map((run) => run.routeName)).toEqual(['Newer', 'Older']);
   });
 
-  it('orders same-day runs the way a reload would, newest logged first (RUN-78)', async () => {
-    // The divergence this guards against is specific: the cache re-sorts
-    // itself locally after every mutation, while a full page load takes the
-    // server's order. Before createdAt the two tiebroke on the id, so adding
-    // a run to a day that already had one could put it in one position now
-    // and a different one after a refresh. Adding three same-day runs and
-    // then reloading is what proves the two sorts agree.
-    await addRun(toRunDraft(makeForm({ routeName: 'First', date: '2026-07-10' })));
-    await addRun(toRunDraft(makeForm({ routeName: 'Second', date: '2026-07-10' })));
-    await addRun(toRunDraft(makeForm({ routeName: 'Third', date: '2026-07-10' })));
+  it('orders same-day runs by when they were logged, not by id (RUN-78)', async () => {
+    // The ids deliberately run OPPOSITE to the timestamps, and that is the
+    // whole design of this test (review fix). Ordering by id descending - what
+    // the client did before createdAt - would answer ['Early', 'Late'], so
+    // only a sort that actually reads createdAt can produce the expectation
+    // below. Without the contradiction the test passes against both the old
+    // and the new comparator and proves nothing.
+    const sameDay = { date: '2026-07-10', distanceKm: 8.2, durationSeconds: 2535 };
+    seedRuns([
+      {
+        ...sameDay,
+        id: 'run-zzz',
+        routeName: 'Early',
+        createdAt: '2026-07-10T06:00:00.000Z',
+        effort: 'Medium',
+        note: '',
+      },
+      {
+        ...sameDay,
+        id: 'run-aaa',
+        routeName: 'Late',
+        createdAt: '2026-07-10T18:00:00.000Z',
+        effort: 'Medium',
+        note: '',
+      },
+    ]);
 
-    const afterMutations = getRuns().map((run) => run.routeName);
-    expect(afterMutations).toEqual(['Third', 'Second', 'First']);
+    expect(getRuns().map((run) => run.routeName)).toEqual(['Late', 'Early']);
 
-    // The same list as the server hands it over, with no local sort involved.
+    // And the server's own order agrees, which is the half that matters: the
+    // cache re-sorts itself after every mutation while a full page load takes
+    // whatever the API sent, so a divergence would move a run on refresh.
     __resetRunsStoreForTests(null);
     reloadRuns();
-    await waitFor(() => expect(getRuns()).toHaveLength(3));
-    expect(getRuns().map((run) => run.routeName)).toEqual(afterMutations);
+    await waitFor(() => expect(getRuns()).toHaveLength(2));
+    expect(getRuns().map((run) => run.routeName)).toEqual(['Late', 'Early']);
   });
 
   it('rejects with the failure and caches nothing when the save fails', async () => {
