@@ -117,9 +117,12 @@ export default function DeleteRunDialog({ run, onClose, onDeleted }: DeleteRunDi
         aria-describedby={DESCRIPTION_ID}
         className="relative z-10 flex max-h-[92dvh] w-full flex-col gap-[18px] overflow-y-auto overscroll-contain rounded-t-[20px] bg-white px-5 py-6 shadow-[0_24px_60px_0_rgba(0,0,0,0.22)] sm:max-h-[calc(100dvh-48px)] sm:max-w-[400px] sm:rounded-[20px] sm:p-[28px]"
       >
+        {/* shrink-0: this is the only child of the capped column with room to
+            give, so without it a dialog taller than the cap flattens the
+            circle into an oval instead of scrolling (RUN-75 review fix). */}
         <span
           aria-hidden="true"
-          className="flex size-[40px] items-center justify-center rounded-full bg-accent-soft text-accent"
+          className="flex size-[40px] shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent"
         >
           <TrashIcon />
         </span>

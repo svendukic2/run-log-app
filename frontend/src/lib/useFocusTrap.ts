@@ -30,6 +30,13 @@ function isRendered(element: HTMLElement): boolean {
 // by closing on focusout; the drawer and the three dialogs cannot close on
 // focusout (they are modal, not dismissable popups), so they wrap instead
 // (RUN-75, AC4 and AC5).
+// Every active trap listens on `document`, so with two of them open at once
+// each would drag focus back into its own container and neither would settle.
+// Only the most recently activated one acts. No screen opens two overlays
+// today, but a hook that reads as general-purpose should not be one nesting
+// away from a livelock.
+const traps: RefObject<HTMLElement | null>[] = [];
+
 export default function useFocusTrap(
   containerRef: RefObject<HTMLElement | null>,
   active: boolean,
@@ -37,8 +44,11 @@ export default function useFocusTrap(
   useEffect(() => {
     if (!active) return;
 
+    traps.push(containerRef);
+
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Tab') return;
+      if (traps[traps.length - 1] !== containerRef) return;
       const container = containerRef.current;
       if (!container) return;
 
@@ -69,6 +79,10 @@ export default function useFocusTrap(
     };
 
     document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      const at = traps.lastIndexOf(containerRef);
+      if (at !== -1) traps.splice(at, 1);
+    };
   }, [active, containerRef]);
 }

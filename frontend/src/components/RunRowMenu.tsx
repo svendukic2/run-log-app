@@ -68,13 +68,20 @@ interface RunRowMenuProps {
 // elsewhere or pressing Escape closes the menu without any action (AC4): the
 // transparent backdrop swallows the click, so a dismissal on the table can
 // never fall through to the row navigation underneath.
-// The table's 32px kebab is under the 44px minimum touch target, and 768px is
-// a touch width too (the sidebar is still a drawer there), so the default
-// grows its HIT area with a pseudo-element and leaves the drawn size alone
-// (RUN-75 AC3, the RUN-64 pattern). The card variant already passes size-11,
-// which needs no help and must not get any: it sits on top of a full-card
-// link that a wider hit area would steal taps from.
-const TABLE_SIZE = "size-8 before:absolute before:-inset-[6px] before:content-['']";
+// The table's 32px kebab is under the 44px minimum touch target, and the
+// table is on screen from `md` up, which includes tablet widths where the
+// sidebar is still a drawer. So the default grows its HIT area with a
+// pseudo-element and leaves the drawn size alone (RUN-75 AC3, the RUN-64
+// pattern).
+//
+// Gated on pointer-coarse, and here that gate is load-bearing rather than
+// tidiness: the whole table row navigates on click, so on a mouse an ungated
+// 6px band around the kebab would stop being row-click territory and open
+// the menu instead. A finger gets the 44px target, a mouse gets the row back.
+//
+// The card variant passes size-11 and needs no pseudo-element at all.
+const TABLE_SIZE =
+  "size-8 pointer-coarse:before:absolute pointer-coarse:before:-inset-[6px] pointer-coarse:before:content-['']";
 
 export default function RunRowMenu({ run, sizeClassName = TABLE_SIZE }: RunRowMenuProps) {
   const [placement, setPlacement] = useState<MenuPlacement | null>(null);

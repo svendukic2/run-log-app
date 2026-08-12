@@ -78,8 +78,10 @@ export default function PublicRunDetailView({ userId, runId }: { userId: string;
           {`${profile.firstName} ${profile.lastName}`}
         </Link>
 
-        {/* Same free-text guard as the owner's run detail (RUN-75, AC2). */}
-        <h1 className="min-w-0 font-display text-[28px] font-bold tracking-[-0.6px] break-words text-text-primary lg:text-[30px]">
+        {/* Same free-text guard as the owner's run detail (RUN-75, AC2). No
+            min-w-0 here: this heading is a column-axis child, where the
+            automatic minimum size is already 0. */}
+        <h1 className="font-display text-[28px] font-bold tracking-[-0.6px] break-words text-text-primary lg:text-[30px]">
           {run.routeName}
         </h1>
 

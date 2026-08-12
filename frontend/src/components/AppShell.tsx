@@ -40,6 +40,25 @@ export default function AppShell({ children }: Readonly<{ children: React.ReactN
     toggleRef.current?.focus();
   };
 
+  // The drawer only means anything below `lg`, where the sidebar is an
+  // overlay. Rotating a tablet from 768 to 1024 with it open used to leave
+  // stale open state on what is now a static column: harmless before RUN-75,
+  // but it now leaves a focus trap armed, and the button that would clear it
+  // is `lg:hidden`. Closing on the crossing also clears the body scroll lock
+  // the same stale state left behind.
+  useEffect(() => {
+    // jsdom has no matchMedia. The crossing cannot happen there either, since
+    // nothing in a test moves the viewport across a breakpoint.
+    if (typeof window.matchMedia !== 'function') return;
+
+    const desktop = window.matchMedia('(min-width: 64rem)');
+    const closeOnDesktop = () => {
+      if (desktop.matches) setNav((current) => ({ ...current, isOpen: false }));
+    };
+    desktop.addEventListener('change', closeOnDesktop);
+    return () => desktop.removeEventListener('change', closeOnDesktop);
+  }, []);
+
   useEffect(() => {
     if (!isNavOpen) return;
 
@@ -71,8 +90,9 @@ export default function AppShell({ children }: Readonly<{ children: React.ReactN
           aria-label="Open navigation"
           aria-controls={SIDEBAR_ID}
           aria-expanded={isNavOpen}
-          // 40x40 drawn, 44x44 tapped (RUN-75 AC3, the RUN-64 pattern).
-          className="relative ml-auto flex size-10 items-center justify-center rounded-[10px] text-on-dark-soft before:absolute before:-inset-[2px] before:content-[''] hover:bg-ink-raised hover:text-white"
+          // 40x40 drawn, 44x44 tapped (RUN-75 AC3, the RUN-64 pattern), on
+          // touch only: ungated it would enlarge :hover on a mouse as well.
+          className="relative ml-auto flex size-10 items-center justify-center rounded-[10px] text-on-dark-soft pointer-coarse:before:absolute pointer-coarse:before:-inset-[2px] pointer-coarse:before:content-[''] hover:bg-ink-raised hover:text-white"
         >
           <MenuIcon />
         </button>

@@ -143,8 +143,9 @@ export default function EventModal({ onClose }: EventModalProps) {
             onClick={onClose}
             disabled={saving}
             aria-label="Close"
-            // 34x34 drawn, 44x44 tapped (RUN-75 AC3, the RUN-64 pattern).
-            className="relative flex size-[34px] shrink-0 items-center justify-center rounded-[10px] text-secondary before:absolute before:-inset-[5px] before:content-[''] hover:bg-muted hover:text-ink disabled:cursor-default disabled:opacity-60"
+            // 34x34 drawn, 44x44 tapped (RUN-75 AC3, the RUN-64 pattern), on
+            // touch only: ungated it would enlarge :hover on a mouse as well.
+            className="relative flex size-[34px] shrink-0 items-center justify-center rounded-[10px] text-secondary pointer-coarse:before:absolute pointer-coarse:before:-inset-[5px] pointer-coarse:before:content-[''] hover:bg-muted hover:text-ink disabled:cursor-default disabled:opacity-60"
           >
             <CloseIcon />
           </button>

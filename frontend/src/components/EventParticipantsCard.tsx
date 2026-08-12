@@ -42,7 +42,7 @@ export default function EventParticipantsCard({
                 nothing else interactive. */}
             <Link
               href={personRoute(participant.id)}
-              className="min-w-0 flex-1 truncate text-[14px] font-medium text-text-primary after:absolute after:inset-0 after:content-[''] hover:text-accent-pressed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              className="min-w-0 flex-1 truncate text-[14px] font-medium text-text-primary pointer-coarse:after:absolute pointer-coarse:after:inset-0 pointer-coarse:after:content-[''] hover:text-accent-pressed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
             >
               {participant.firstName} {participant.lastName}
               {participant.me && (

@@ -89,9 +89,10 @@ function WeekSwitcher({
   // Drawn ~40px tall, under the 44px minimum, so a pseudo-element grows the
   // hit area vertically to 44px. Vertically only: the two buttons sit 8px
   // apart, and a sideways expansion would overlap its neighbour's taps
-  // (RUN-75 AC3, the RUN-64 pattern).
+  // (RUN-75 AC3, the RUN-64 pattern), on
+  // touch only: ungated it would enlarge :hover on a mouse as well.
   const button =
-    "relative rounded-[12px] border border-line px-[14px] py-[9px] text-[13px] font-semibold text-text-primary before:absolute before:inset-x-0 before:-inset-y-[2px] before:content-[''] hover:border-accent hover:text-accent-pressed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:border-line disabled:text-tertiary disabled:hover:text-tertiary";
+    "relative rounded-[12px] border border-line px-[14px] py-[9px] text-[13px] font-semibold text-text-primary pointer-coarse:before:absolute pointer-coarse:before:inset-x-0 pointer-coarse:before:-inset-y-[2px] pointer-coarse:before:content-[''] hover:border-accent hover:text-accent-pressed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:border-line disabled:text-tertiary disabled:hover:text-tertiary";
 
   return (
     <section

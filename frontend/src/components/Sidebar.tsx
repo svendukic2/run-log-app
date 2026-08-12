@@ -196,8 +196,9 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
           type="button"
           onClick={onClose}
           aria-label="Close navigation"
-          // 36x36 drawn, 44x44 tapped (RUN-75 AC3, the RUN-64 pattern).
-          className="relative ml-auto flex size-9 shrink-0 items-center justify-center rounded-[10px] text-on-dark-subtle before:absolute before:-inset-[4px] before:content-[''] hover:bg-ink-raised hover:text-white lg:hidden"
+          // 36x36 drawn, 44x44 tapped (RUN-75 AC3, the RUN-64 pattern), on
+          // touch only: ungated it would enlarge :hover on a mouse as well.
+          className="relative ml-auto flex size-9 shrink-0 items-center justify-center rounded-[10px] text-on-dark-subtle pointer-coarse:before:absolute pointer-coarse:before:-inset-[4px] pointer-coarse:before:content-[''] hover:bg-ink-raised hover:text-white lg:hidden"
         >
           <CloseIcon />
         </button>
