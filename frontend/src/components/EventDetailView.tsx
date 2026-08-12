@@ -87,7 +87,10 @@ export default function EventDetailView({ eventId }: { eventId: string }) {
       <header className="flex flex-col gap-[10px] sm:flex-row sm:items-start sm:justify-between sm:gap-6">
         <div className="flex min-w-0 flex-col gap-[10px]">
           <EventStateChips event={event} />
-          <h1 className="font-display text-[24px] font-bold tracking-[-0.6px] text-text-primary lg:text-[30px]">
+          {/* An event name is free text too, and the parent's min-w-0 only
+              shrinks the box - the token still needs permission to break
+              (RUN-75, AC2). */}
+          <h1 className="font-display text-[24px] font-bold tracking-[-0.6px] break-words text-text-primary lg:text-[30px]">
             {event.name}
           </h1>
           <p className="text-[13.5px] text-secondary">

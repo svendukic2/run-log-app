@@ -53,7 +53,12 @@ export default function JoinEventButton({ event, onChanged, className }: JoinEve
         type="button"
         onClick={toggleMembership}
         disabled={busy}
-        className={`relative z-10 shrink-0 rounded-full px-[18px] py-[8px] text-[13px] font-semibold disabled:cursor-default disabled:opacity-60 ${
+        // Drawn ~36px tall, which is under the 44px minimum, so a
+        // pseudo-element grows the hit area vertically only: horizontally the
+        // pill is already wide enough, and expanding sideways would reach into
+        // the card link beside it (RUN-75 AC3, the RUN-64 pattern), on
+        // touch only: ungated it would enlarge :hover on a mouse as well.
+        className={`relative z-10 shrink-0 rounded-full px-[18px] py-[8px] text-[13px] font-semibold pointer-coarse:before:absolute pointer-coarse:before:inset-x-0 pointer-coarse:before:-inset-y-[4px] pointer-coarse:before:content-[''] disabled:cursor-default disabled:opacity-60 ${
           event.joined
             ? 'border border-line-strong bg-white text-text-primary hover:bg-muted'
             : 'bg-accent text-white hover:bg-accent-pressed'

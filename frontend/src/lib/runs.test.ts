@@ -345,19 +345,24 @@ describe('toRunDraft', () => {
     });
   });
 
-  it('submits a drawn route WITHOUT its source (RUN-54)', () => {
+  it('submits a drawn route WITHOUT its source or trim flag (RUN-54, RUN-55)', () => {
     const waypoints = [
       { lat: 52.516275, lng: 13.377704 },
       { lat: 52.520008, lng: 13.404954 },
     ];
     const polyline = 'wap_IsyspAsFgc@cG{h@qFe{A';
 
-    // Provenance is the server's to stamp, and the API's whitelist pipe
-    // rejects any property its DTO does not declare - so passing the route
-    // through whole would 400 every save of a routed run.
-    expect(toRunDraft(makeForm(), { polyline, waypoints, source: 'openrouteservice' }).route).toEqual(
-      { polyline, waypoints },
-    );
+    // Provenance is the server's to stamp, and so is the trim flag; the API's
+    // whitelist pipe rejects any property its DTO does not declare - so passing
+    // the route through whole would 400 every save of a routed run.
+    expect(
+      toRunDraft(makeForm(), {
+        polyline,
+        waypoints,
+        source: 'openrouteservice',
+        trimmed: false,
+      }).route,
+    ).toEqual({ polyline, waypoints });
   });
 
   it('accepts a comma as the decimal separator', () => {

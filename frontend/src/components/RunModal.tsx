@@ -6,6 +6,7 @@ import RouteStep, { type RoutePlanFailure } from '@/components/RouteStep';
 import TextArea from '@/components/TextArea';
 import TextField from '@/components/TextField';
 import { mutationErrorMessage } from '@/lib/session';
+import useFocusTrap from '@/lib/useFocusTrap';
 import {
   addRun,
   emptyRunForm,
@@ -93,6 +94,11 @@ export default function RunModal({ run, onClose }: RunModalProps) {
   const [saveError, setSaveError] = useState<string | null>(null);
   const routeNameRef = useRef<HTMLInputElement>(null);
   const routeStepRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  // aria-modal="true" is a promise that Tab cannot leave the dialog; before
+  // RUN-75 it was only a claim, and Tab walked onto the page behind the scrim.
+  useFocusTrap(dialogRef, true);
 
   const setValue = <Field extends keyof RunFormValues>(field: Field, value: RunFormValues[Field]) =>
     setValues((current) => ({ ...current, [field]: value }));
@@ -203,6 +209,7 @@ export default function RunModal({ run, onClose }: RunModalProps) {
       />
 
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={RUN_MODAL_TITLE_ID}
@@ -227,7 +234,9 @@ export default function RunModal({ run, onClose }: RunModalProps) {
               onClick={onClose}
               disabled={saving}
               aria-label="Close"
-              className="flex size-[34px] shrink-0 items-center justify-center rounded-[10px] text-secondary hover:bg-muted hover:text-ink disabled:cursor-default disabled:opacity-60"
+              // 34x34 drawn, 44x44 tapped (RUN-75 AC3, the RUN-64 pattern), on
+              // touch only: ungated it would enlarge :hover on a mouse as well.
+              className="relative flex size-[34px] shrink-0 items-center justify-center rounded-[10px] text-secondary pointer-coarse:before:absolute pointer-coarse:before:-inset-[5px] pointer-coarse:before:content-[''] hover:bg-muted hover:text-ink disabled:cursor-default disabled:opacity-60"
             >
               <CloseIcon />
             </button>

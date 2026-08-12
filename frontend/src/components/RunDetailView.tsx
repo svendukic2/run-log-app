@@ -4,11 +4,12 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useRef, useState } from 'react';
 import DeleteRunDialog from '@/components/DeleteRunDialog';
+import RouteCard from '@/components/RouteCard';
 import RunModal from '@/components/RunModal';
 // The shared markup lives apart from this module since RUN-63, so the
 // read-only detail can reuse it without importing the two write dialogs
 // above (see runDetailParts.tsx).
-import { CARD, RouteSketch, StatCard } from '@/components/runDetailParts';
+import { CARD, StatCard } from '@/components/runDetailParts';
 import { ROUTES } from '@/lib/routes';
 import {
   EFFORT_CHIP,
@@ -84,7 +85,11 @@ export default function RunDetailView({ runId }: { runId: string }) {
         </Link>
 
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
-          <h1 className="font-display text-[28px] font-bold tracking-[-0.6px] text-text-primary lg:text-[30px]">
+          {/* min-w-0 + break-words: a route name is free text, so one long
+              unbroken token would otherwise set the width of the page rather
+              than wrap inside it (RUN-75, AC2). Inert whenever the name fits,
+              which is every desktop case. */}
+          <h1 className="min-w-0 font-display text-[28px] font-bold tracking-[-0.6px] break-words text-text-primary lg:text-[30px]">
             {run.routeName}
           </h1>
           {/* Edit opens the Edit run modal (RUN-28, DET-2); Delete opens the
@@ -141,24 +146,9 @@ export default function RunDetailView({ runId }: { runId: string }) {
       </div>
 
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
-        <section aria-labelledby="route-title" className={CARD}>
-          {/* The mock puts a "Road · out & back" caption beside the heading;
-              a route type is never captured for user-created runs, so only
-              the heading renders (A10). */}
-          <div className="border-b border-line px-[28px] py-[20px]">
-            <h2
-              id="route-title"
-              className="font-display text-[17px] font-bold tracking-[-0.2px] text-text-primary"
-            >
-              Route
-            </h2>
-          </div>
-          <div className="p-[6px]">
-            <div className="rounded-[14px] bg-muted px-6 py-10">
-              <RouteSketch />
-            </div>
-          </div>
-        </section>
+        {/* The real map for a routed run, the v1 sketch for every other one
+            (RUN-55 AC1/AC2). The owner's own route is never trimmed. */}
+        <RouteCard route={run.route} />
 
         <div className="flex flex-col gap-5">
           {/* A run without a note shows no Note card at all (A11); a
@@ -187,7 +177,11 @@ export default function RunDetailView({ runId }: { runId: string }) {
                   className="flex items-center justify-between gap-4 border-b border-line py-[14px] last:border-b-0"
                 >
                   <dt className="text-[14px] text-secondary">{row.label}</dt>
-                  <dd className="text-[14px] font-semibold text-text-primary">{row.value}</dd>
+                  {/* "Route name" repeats the free-text name here, so it needs
+                      the same guard the heading got (RUN-75, AC2). */}
+                  <dd className="min-w-0 text-[14px] font-semibold break-words text-text-primary">
+                    {row.value}
+                  </dd>
                 </div>
               ))}
             </dl>

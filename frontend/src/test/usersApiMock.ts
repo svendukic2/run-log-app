@@ -42,10 +42,36 @@ let myFollowerCount = 0;
 let holdNextSearch_ = false;
 let releaseHeld: (() => void) | null = null;
 
+// A stand-in for the middle of a stored polyline, as the server sends it to a
+// granted stranger (RUN-55 AC4).
+//
+// The real trim is geometry: decode the line, drop every point within 300 m of
+// either end, re-encode what is left (backend/src/runs/route-trim.ts, where it
+// is unit-tested). A frontend mock has no business re-implementing that, and a
+// second implementation would only be a second thing to get wrong. What a
+// frontend test does need to know is that a visitor's payload carries a
+// DIFFERENT, shorter polyline and no waypoints at all - so that is what this
+// produces, the same value whatever was stored. Exported so a test can assert
+// the map drew the trimmed line rather than the stored one.
+export const TRIMMED_POLYLINE = 'kip_I{}tpAcG{h@';
+
+// What one run looks like to this viewer. Applied here rather than left to the
+// seed for the same reason the gate above is: a test must not be able to prove
+// the trim by seeding an already-trimmed route.
+function gateRoute(run: Run, isOwner: boolean, granted: boolean): Run {
+  if (!run.route || !granted) return { ...run, route: null };
+  if (isOwner) return run;
+  return {
+    ...run,
+    route: { ...run.route, polyline: TRIMMED_POLYLINE, waypoints: [], trimmed: true },
+  };
+}
+
 // The server-side gate, mirrored: a private profile answers 200 with no
 // body below the header, and only the owner overrides it.
 function toResponse(user: SeededUser): PublicProfile {
   const visible = user.me || user.profilePublic;
+  const routesGranted = user.me || (visible && user.showRoutes);
   return {
     id: user.id,
     firstName: user.firstName,
@@ -54,8 +80,8 @@ function toResponse(user: SeededUser): PublicProfile {
     following: user.following,
     counts: { followers: user.followers, following: user.followingCount },
     visible,
-    showRoutes: user.me || (visible && user.showRoutes),
-    runs: visible ? user.runs : null,
+    showRoutes: routesGranted,
+    runs: visible ? user.runs.map((run) => gateRoute(run, user.me, routesGranted)) : null,
   };
 }
 

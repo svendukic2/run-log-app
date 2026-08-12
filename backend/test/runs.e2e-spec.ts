@@ -297,6 +297,9 @@ describe('Runs API (e2e)', () => {
       // Server-assigned: the client never sends a source, and the whitelist
       // pipe rejects it if it tries (see below).
       source: 'openrouteservice',
+      // Your own runs are never trimmed (RUN-55 AC3); the ~300 m privacy trim
+      // applies to what a public profile serves a stranger.
+      trimmed: false,
     });
 
     // The stored row reads back identically, points in the same order - the

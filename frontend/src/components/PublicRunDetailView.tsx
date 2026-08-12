@@ -7,7 +7,8 @@ import {
   ProfileLoading,
   ProfileNotFound,
 } from '@/components/publicProfileStates';
-import { CARD, RouteSketch, StatCard } from '@/components/runDetailParts';
+import RouteCard from '@/components/RouteCard';
+import { CARD, StatCard } from '@/components/runDetailParts';
 import { usePublicProfile } from '@/lib/publicProfile';
 import { personRoute } from '@/lib/routes';
 import { EFFORT_CHIP, formatDate, formatDistanceKm, formatDuration, formatPace } from '@/lib/runs';
@@ -22,8 +23,9 @@ import { EFFORT_CHIP, formatDate, formatDistanceKm, formatDuration, formatPace }
 // The run comes from the profile's own payload, not a second endpoint, so
 // it inherits that response's privacy gate for free: a private profile
 // carries no runs, so there is no run here to find. The Route card is gated
-// once more by showRoutes (route maps themselves are RUN-72; the decorative
-// sketch stands in for one until then).
+// once more by showRoutes, and a route that IS granted arrives with its first
+// and last ~300 m already cut off server-side (RUN-55 AC4) - this view draws
+// what it was sent and decides nothing.
 export default function PublicRunDetailView({ userId, runId }: { userId: string; runId: string }) {
   const { status, profile, error } = usePublicProfile(userId);
 
@@ -78,7 +80,10 @@ export default function PublicRunDetailView({ userId, runId }: { userId: string;
           {`${profile.firstName} ${profile.lastName}`}
         </Link>
 
-        <h1 className="font-display text-[28px] font-bold tracking-[-0.6px] text-text-primary lg:text-[30px]">
+        {/* Same free-text guard as the owner's run detail (RUN-75, AC2). No
+            min-w-0 here: this heading is a column-axis child, where the
+            automatic minimum size is already 0. */}
+        <h1 className="font-display text-[28px] font-bold tracking-[-0.6px] break-words text-text-primary lg:text-[30px]">
           {run.routeName}
         </h1>
 
@@ -112,26 +117,15 @@ export default function PublicRunDetailView({ userId, runId }: { userId: string;
       </div>
 
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
-        {/* showRoutes off means no Route card at all, not a blurred one:
-            the response carries no route data either way (RUN-72 adds the
-            real maps and the data behind them). */}
-        {profile.showRoutes && (
-          <section aria-labelledby="route-title" className={CARD}>
-            <div className="border-b border-line px-[28px] py-[20px]">
-              <h2
-                id="route-title"
-                className="font-display text-[17px] font-bold tracking-[-0.2px] text-text-primary"
-              >
-                Route
-              </h2>
-            </div>
-            <div className="p-[6px]">
-              <div className="rounded-[14px] bg-muted px-6 py-10">
-                <RouteSketch />
-              </div>
-            </div>
-          </section>
-        )}
+        {/* showRoutes off means no Route card at all, not a blurred one: the
+            response carries no route data either way (RUN-55 AC4, "no map
+            renders"), and the stats beside it are untouched.
+
+            On means the card renders - with the real map when this run has a
+            route, and with the v1 sketch when it does not. The card cannot tell
+            those apart from "the trim left nothing to serve", which is the
+            point: both arrive as `route: null`. */}
+        {profile.showRoutes && <RouteCard route={run.route} />}
 
         <div className="flex flex-col gap-5">
           {/* A run without a note shows no Note card at all (A11); a
@@ -158,7 +152,9 @@ export default function PublicRunDetailView({ userId, runId }: { userId: string;
                   className="flex items-center justify-between gap-4 border-b border-line py-[14px] last:border-b-0"
                 >
                   <dt className="text-[14px] text-secondary">{row.label}</dt>
-                  <dd className="text-[14px] font-semibold text-text-primary">{row.value}</dd>
+                  <dd className="min-w-0 text-[14px] font-semibold break-words text-text-primary">
+                    {row.value}
+                  </dd>
                 </div>
               ))}
             </dl>

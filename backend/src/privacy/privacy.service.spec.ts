@@ -4,6 +4,7 @@ import {
   canViewProfile,
   canViewRoutes,
   PRIVACY_DEFAULTS,
+  routeVisibility,
   type PrivacySettings,
 } from '../common/privacy';
 import { PrismaService } from '../prisma/prisma.service';
@@ -101,16 +102,37 @@ describe('canViewProfile / canViewRoutes', () => {
   const visitor = 'user-visitor';
 
   it.each([
-    // settings, viewer, sees body, sees routes
-    [{ profilePublic: false, showRoutes: false }, visitor, false, false],
-    [{ profilePublic: false, showRoutes: true }, visitor, false, false],
-    [{ profilePublic: true, showRoutes: false }, visitor, true, false],
-    [{ profilePublic: true, showRoutes: true }, visitor, true, true],
-    // AC3: the owner always sees everything, whatever the toggles say.
-    [{ profilePublic: false, showRoutes: false }, owner, true, true],
-  ])('%o seen by %s', (settings, viewer, body, routes) => {
+    // settings, viewer, sees body, sees routes, how much of a route (RUN-55)
+    [
+      { profilePublic: false, showRoutes: false },
+      visitor,
+      false,
+      false,
+      'hidden',
+    ],
+    [
+      { profilePublic: false, showRoutes: true },
+      visitor,
+      false,
+      false,
+      'hidden',
+    ],
+    [
+      { profilePublic: true, showRoutes: false },
+      visitor,
+      true,
+      false,
+      'hidden',
+    ],
+    // A granted stranger gets the route, but never its ends (AC4).
+    [{ profilePublic: true, showRoutes: true }, visitor, true, true, 'trimmed'],
+    // AC3: the owner always sees everything, whatever the toggles say, and
+    // their own route is never trimmed.
+    [{ profilePublic: false, showRoutes: false }, owner, true, true, 'full'],
+  ])('%o seen by %s', (settings, viewer, body, routes, visibility) => {
     expect(canViewProfile(settings, viewer, owner)).toBe(body);
     expect(canViewRoutes(settings, viewer, owner)).toBe(routes);
+    expect(routeVisibility(settings, viewer, owner)).toBe(visibility);
   });
 
   it('defaults to private on both counts', () => {

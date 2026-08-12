@@ -147,10 +147,14 @@ export function formatParticipantCount(count: number): string {
 // (EventParticipantResponse in the backend, hand-mirrored like every
 // response shape). `id` is the USER's id, which is what the row links to.
 //
-// The three nullables move together and mean one thing: this runner is off
+// The four nullables move together and mean one thing: this runner is off
 // leaderboards (RUN-64's showOnLeaderboard, honoured here per AC3). The
 // server withholds the numbers rather than flagging them, so a null rank is
 // the only signal the client gets - and the only one it needs.
+//
+// `unverified` (RUN-72) is one of those numbers, not a decoration on top of
+// them: it is derived from that runner's runs, so an unranked row does not
+// carry it either.
 export interface EventParticipant {
   id: string;
   firstName: string;
@@ -160,16 +164,18 @@ export interface EventParticipant {
   rank: number | null;
   totalKm: number | null;
   runCount: number | null;
+  unverified: boolean | null;
 }
 
 export function isEventParticipant(value: unknown): value is EventParticipant {
   const row = value as EventParticipant;
   const rankedTogether =
     row?.rank === null
-      ? row.totalKm === null && row.runCount === null
+      ? row.totalKm === null && row.runCount === null && row.unverified === null
       : typeof row?.rank === 'number' &&
         typeof row.totalKm === 'number' &&
-        typeof row.runCount === 'number';
+        typeof row.runCount === 'number' &&
+        typeof row.unverified === 'boolean';
   return (
     typeof row?.id === 'string' &&
     typeof row.firstName === 'string' &&
@@ -186,6 +192,7 @@ export type RankedParticipant = EventParticipant & {
   rank: number;
   totalKm: number;
   runCount: number;
+  unverified: boolean;
 };
 
 // AC2's board out of AC1's list: everyone the server ranked, in rank order.

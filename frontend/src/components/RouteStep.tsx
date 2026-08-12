@@ -128,6 +128,10 @@ export default function RouteStep({
           polyline: result.polyline,
           waypoints: next,
           source: result.source,
+          // A route the owner just drew, so nothing is cut off it (RUN-55): the
+          // trim is applied on the way OUT to somebody else's browser, and
+          // `trimmed` is not part of what a save sends (RunRouteDraft).
+          trimmed: false,
         });
       })
       .catch((error: unknown) => {
@@ -208,7 +212,11 @@ export default function RouteStep({
 
   return (
     <div className="flex flex-col gap-[14px]">
-      <div className="flex items-center justify-between gap-4">
+      {/* flex-wrap: the undo/clear pair is shrink-0, so at 320px inside the
+          modal it leaves the heading about 7px of slack - inside the margin of
+          error of any font that is not the one measured. Wrapping costs
+          nothing at any width where the row already fits (RUN-75, AC1). */}
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <p className="text-[15px] font-semibold text-text-primary">Route (optional)</p>
         {/* Not in the Figma frame, which shows the map alone: AC6 asks for
             undo and clear, and two text buttons are the smallest thing that

@@ -130,7 +130,7 @@ data attaches to accounts. Community tasks (follow, notifications, events) hang 
 | lastName | string | Non-empty, mirrors WEL-5 rules |
 | profilePublic | boolean, default false | Opt-in: other runners may open this account's public profile (RUN-64; the page itself is RUN-63) |
 | showOnLeaderboard | boolean, default false | Opt-in to every leaderboard, global and per event. Pulled forward from RUN-64 by RUN-69, which cannot honour its own AC3 without it |
-| showRoutes | boolean, default false | Opt-in: route maps are shown to whoever can see the profile (RUN-64; route maps themselves are RUN-72) |
+| showRoutes | boolean, default false | Opt-in: route maps are shown to whoever can see the profile (RUN-64; the maps themselves are RUN-55, which also trims what a visitor is sent) |
 | createdAt | timestamp | Audit field (the `updatedAt` convention above extends to `createdAt` here) |
 
 The API endpoints are `POST /api/auth/signup` and `POST /api/auth/login`, both
@@ -155,8 +155,9 @@ is on leaderboards yet" state until runners opt in, and RUN-71's seeder opts its
 demo users in explicitly. The gating rules live in `backend/src/common/privacy.ts`
 (`appearsOnLeaderboard`, shared by the event leaderboard and RUN-70's global one;
 `canViewProfile` and `canViewRoutes`, added by RUN-63 when the public profile
-became their reader). All three are pure functions over the settings, so the
-policy is testable without a database and no call site re-derives it.
+became their reader; `routeVisibility`, added by RUN-55, which answers *how much*
+of a route rather than whether). All four are pure functions over the settings, so
+the policy is testable without a database and no call site re-derives it.
 
 **Reading another account (RUN-63).** `GET /api/users/:id` answers one runner's
 public profile: `{ id, firstName, lastName, me, following, counts: { followers,
@@ -186,11 +187,18 @@ has; ids are `cuid()`, so there is no id space to walk. Do not "fix" it by
 404ing private accounts - AC2 needs their header.
 
 `showRoutes` is strictly narrower than `profilePublic` (the grant is the AND of
-the two), and the owner overrides both on their own profile. Route maps
-themselves are RUN-72, so `showRoutes` gates only the run detail's Route card so
-far; it is honoured in the payload now so that route data was never exposed in
-the meantime. The endpoint lives in `backend/src/users/`, alongside the search
-below.
+the two), and the owner overrides both on their own profile. Since RUN-55 the
+grant is **three-valued rather than boolean** (`routeVisibility`): the owner gets
+`'full'`, a granted visitor gets `'trimmed'` and everybody else `'hidden'`. A
+trimmed route is the stored polyline with its **first and last ~300 m cut off**
+server-side and its waypoints dropped, because a route that starts at the
+runner's front door is their address, and the tapped points are exactly the two
+ends the trim removes. The trim lives in `backend/src/runs/route-trim.ts`; it
+drops whole points rather than interpolating to an exact 300 m mark, so it always
+removes *at least* the trim distance. A route too short to trim (under ~600 m)
+is **not served at all** rather than served whole - a `route: null` a viewer
+cannot tell apart from "this run has no route". The endpoint lives in
+`backend/src/users/`, alongside the search below.
 
 **Searching for runners (RUN-62).** `GET /api/users?search=` answers the People
 page: `{ items: [{ id, firstName, lastName, following }], total, page, pageSize,
@@ -345,21 +353,32 @@ transaction; the owner joining their own event and repeat joins never notify.
 
 **The detail page's one read (RUN-69).** `GET /api/events/:id/participants`
 answers `{ items, total }` with one row per member: `{ id, firstName, lastName,
-joinedAt, me, rank, totalKm, runCount }`, in join order, where `id` is the
+joinedAt, me, rank, totalKm, runCount, unverified }`, in join order, where `id` is the
 **user's** id. The participant list and the leaderboard are the same set of
 people counted two ways, so they travel together rather than as two endpoints.
 This list is deliberately **not paginated**, unlike every other list in the API:
 a leaderboard is only correct as a whole, and the set is bounded by one event's
 membership rather than by the database.
 
-`rank`, `totalKm` and `runCount` are one decision, not three - all three are
-`null` exactly when that runner has `showOnLeaderboard` false. The numbers are
+`rank`, `totalKm`, `runCount` and `unverified` are one decision, not four - all
+four are `null` exactly when that runner has `showOnLeaderboard` false. The numbers are
 withheld rather than flagged, so an opted-out runner appears in the participant
 list and no client can reconstruct their standing. `totalKm` is the sum of that
 runner's run distances inside the event's **inclusive** window (a run on the
 start or end day counts), computed by one `GROUP BY` at read time and never
 stored, the same rule the event's own derived state follows. Ties share a rank
 and the next distinct distance skips the places they consumed (1, 1, 3).
+
+**The `unverified` marker (RUN-72).** True when at least one of that runner's
+runs inside the window is past `RUN_OUTLIER_THRESHOLDS` (see API validation
+below): faster than 3:30 /km or longer than 60 km. It is computed per **run**,
+never from the aggregated total, because a window adding up to 80 km is a good
+week while one 80 km run is the unusual thing - so it needs its own small read
+of `{ userId, distanceKm, durationSeconds }` alongside the `GROUP BY` (the pace
+rule compares two columns arithmetically, which no Prisma filter expresses
+without raw SQL). That read is narrowed to the runners who are **on** the board,
+so an opted-out runner's runs are never fetched at all. The flag changes nothing
+about the ranking; the UI draws a subtle "unverified" note on the row.
 
 ### The global weekly leaderboard (RUN-70, stores nothing)
 
@@ -374,8 +393,10 @@ the resolved `{ weekStart, weekEnd }` back, so a client never has to guess which
 week it is looking at. Omitting it means the current week.
 
 The envelope is `{ weekStart, weekEnd, items, me, total }`, where each row is
-`{ id, firstName, lastName, rank, totalKm, runCount, me }` and `id` is the
-**user's** id (the row links to their public profile). Nothing in a row is
+`{ id, firstName, lastName, rank, totalKm, runCount, me, unverified }` and `id`
+is the **user's** id (the row links to their public profile). `unverified` is the
+same per-run marker the event board carries, derived by the same helper and read
+through the same opt-in gate (RUN-72). Nothing in a row is
 nullable, unlike the event board's: a runner with `showOnLeaderboard` false is
 **absent** here rather than present with withheld numbers, because a global board
 has no membership list they would otherwise appear on. `me` repeats the caller's
@@ -521,12 +542,13 @@ how they are captured, they join as nullable fields in both places.
 ```ts
 interface RunRoute {
   polyline: string; // encoded polyline, precision 5 (RUN-53)
-  waypoints: Array<{ lat: number; lng: number }>; // 2-5: [0] Start, last Finish
+  waypoints: Array<{ lat: number; lng: number }>; // 2-5: [0] Start, last Finish; [] when trimmed
   source: string; // who drew it: 'openrouteservice' today
+  trimmed: boolean; // RUN-55: the ends were cut off before sending
 }
 ```
 
-Five things about it are decisions, not accidents:
+Six things about it are decisions, not accidents:
 
 - **Columns separate, API shape nested.** The columns are what the roadmap and the
   ticket specify (and what lets `routeSource` be filtered later); the single `route`
@@ -557,6 +579,14 @@ Five things about it are decisions, not accidents:
 - **The entered distance stays the source of truth.** The routed distance is never
   written to `distanceKm`; a mismatch over 20% is a hint in the form (RUN-54 AC2), never
   a correction and never a block on saving.
+- **`trimmed` is server-assigned, like `source`, and it changes what may be drawn**
+  (RUN-55 AC4). It is true only for somebody else's run on a public profile, where the
+  polyline arrives already shortened and `waypoints` is `[]`. The map must honour it:
+  the ends of a trimmed line are wherever the cut landed, so it draws no Start/Finish
+  pins and says the ends are hidden instead. The client is *told* rather than left to
+  infer it from `me`/`showRoutes`, so the two can never disagree; neither field is part
+  of a write (`RunRouteDraft` is `polyline` + `waypoints` only, and the whitelist pipe
+  400s a save that sends either).
 
 ### CoachPlan (one per generation)
 
@@ -651,6 +681,35 @@ Three server-side specifics worth knowing:
   characters, note at 2000. The v1 forms enforce no lengths, so these exist to keep a
   stray script from storing megabytes in unbounded TEXT columns, not to police real
   input.
+- **Sanity limits are enforced in the service, not the DTOs (RUN-72).**
+  `src/common/runLimits.ts` holds both tiers as constants with the reasoning next to
+  them. `RUN_LIMITS` is hard: distance at most **150 km**, duration at most **24 h**, and
+  a pace between **2:30** and **20:00 /km**. Past any of them the API answers **400** and
+  nothing is stored. The boundaries are **inclusive-legal**: exactly 150 km, exactly 24 h
+  and exactly 2:30 /km all pass. They live in the service because the pace rule reads
+  distance and duration *together*, so a PATCH carrying only one of them is checked
+  against the **merged** pair (the stored value fills the other side) exactly the way an
+  event's date order is. A DTO cannot see the stored row, and two half-rules would be two
+  places to forget.
+
+  These are **honest-mistake guards, not fraud proof**. Every number in this app is typed
+  by the person it flatters, so nothing here can prove a run happened; what the limits
+  catch is a distance entered in metres or a stray zero. Someone determined to invent a
+  plausible run still can, and that is accepted rather than papered over with a stricter
+  number that would start rejecting real ultras.
+
+  `RUN_OUTLIER_THRESHOLDS` is the soft tier: a run faster than **3:30 /km** or longer
+  than **60 km** is legal, stored and ranked like any other, and only picks up the subtle
+  `unverified` marker on leaderboards (see below). RUN-71's seeder is meant to import both
+  constants rather than repeat the literals, so demo data cannot drift past the rules that
+  guard real data.
+
+  The 400 body reaches the runner: `addRun`/`updateRun` in `frontend/src/lib/runs.ts`
+  surface a 400's `message` inline in the Add run form instead of a generic
+  "Saving the run failed (400)". These limits are the first rejection the form cannot
+  predict for itself, which is why the messages are written for a person ("Distance must
+  be at most 150 km per run.") rather than naming DTO fields. Other statuses keep the
+  generic sentence: a 500's message is about the server, not about the run.
 - **Explicit `null` is always a 400**, on create and on PATCH, with exactly one
   documented exception: `route` (RUN-54), where null is the way to say "no route" on
   create and "remove the route" on PATCH. Omitting `effort` or `note` means "use the
@@ -658,6 +717,89 @@ Three server-side specifics worth knowing:
   rather than reaching a NOT NULL column as a 500. The two mechanisms are named after
   what they do: `ValidateIfPresent` (null is a mistake) and `ValidateIfNotNull` (null is
   a meaning), both in `src/common/validation.ts`.
+
+## Demo data seeder (RUN-71)
+
+`cd backend && npm run seed` fills an empty database with a demo that makes the social
+features demonstrable. Without it every leaderboard, event and search screen renders an
+empty table, which is a bad thing to discover mid-demo.
+
+**What it creates**, all derived from the day it runs on:
+
+- **15 accounts** on the reserved `@runlog.demo` domain, each with a profile (so they
+  sign in straight onto the dashboard rather than into the setup wizard) and an
+  open-ended goal.
+- **6 to 10 weeks of run history each**, 3 to 5 runs a week, at paces and distances that
+  match the account's running level. The **current** week always has runs, because the
+  global weekly leaderboard reads that week and nothing else.
+- **A follow web** centred on the primary account, so its Following and Followers tabs
+  are populated in both directions.
+- **One active event** whose window contains today, with nine participants who already
+  have runs inside it, so the event leaderboard is populated rather than a list of zeros.
+- **A handful of `new-follower` notifications** for the primary account only. Deliberate:
+  seeding every follow edge and every followed run would put several hundred rows in the
+  bell, which is noise rather than a demo.
+
+**Signing in.** Every seeded account shares one password:
+
+| | |
+| --- | --- |
+| Primary account | `ana.demo@runlog.demo` |
+| Password (all 15 accounts) | `demo-only-password` |
+
+The other fourteen addresses are `firstname.lastname@runlog.demo` from faker-generated
+names; `npm run seed` prints the primary one and the password when it finishes. The
+password is hashed with `AuthService`'s own `BCRYPT_ROUNDS`, so these are ordinary
+accounts that log in through the real Sign in screen.
+
+**Privacy is opted in explicitly.** The three privacy columns default to `false`
+(`common/privacy.ts`), so a seeded account left at the defaults would appear on no
+leaderboard and have a private profile - which would defeat the point. The seeder is the
+intended exception to that default, not a reason to change it. **One** account is left at
+the defaults on purpose: it joins the event and logs runs like the rest, and the event
+board shows it with its rank and distance withheld, so the privacy gate is demonstrable
+rather than merely claimed.
+
+**Idempotency marker: the email domain.** Running the seeder twice does not duplicate
+anything. Every seeded account lives on `@runlog.demo` and nothing else does, so the
+seeder deletes exactly its own previous output first (cascades take the runs, follows,
+notifications and the event with it) and writes it again, all in one transaction. Real
+accounts are never touched. Upserting by email was rejected: it would leave the previous
+run's runs and follows behind and grow the demo on every invocation.
+
+The marker is an email address, and an email address is editable: `PUT /api/account`
+lets a signed-in user change theirs. Rename a demo account off `@runlog.demo` during a
+demo and the next seed no longer recognises it, so it survives as a stale extra runner on
+the leaderboard alongside a freshly created replacement. Deleting it by hand is the fix.
+A marker the app cannot edit away would mean a new column on `User`, which is a migration
+this ticket deliberately does not make for a development convenience.
+
+**Determinism.** faker is seeded with a fixed constant and every date is derived from
+today, so two runs on the same day produce the same **dataset**: the same names, the same
+distances, the same notes. The rows are not byte-identical - ids are fresh `cuid()`s and
+notification timestamps are relative to the moment of seeding - but nothing on screen
+differs. A demo that looks different every time is harder to talk about.
+
+**It never runs automatically.** Nothing in `render.yaml`'s build or start command
+reaches it; it is a standalone command a human invokes. It also refuses to run with
+`NODE_ENV=production` unless `npm run seed -- --force` is passed, because it deletes
+before it writes.
+
+Two implementation notes for anyone extending it (`backend/src/seed/`):
+
+- `demo-data.ts` generates the dataset as **plain data with no Prisma in it**, and
+  `seed-demo-data.ts` is the thin writer. That split is what makes the interesting half
+  unit-testable with no database at all (`demo-data.spec.ts`), which matters because a
+  fresh clone has none. `test/seed.e2e-spec.ts` covers the writing half against CI's real
+  Postgres. Demo runs are checked against RUN-72's own `runLimitViolation()` and
+  `isOutlierRun()` (`src/common/runLimits.ts`), not against numbers copied out of them, so
+  the seeder cannot drift past the guardrails that protect real data - and it has to clear
+  the **soft** thresholds too, or the whole demo leaderboard would wear the `unverified`
+  marker.
+- It runs from the **compiled output** (`nest build && node dist/seed/seed.js`), not
+  ts-node: the Prisma 7 generated client uses ESM-style relative specifiers that
+  ts-node's CommonJS resolution cannot follow, the same incompatibility `jest.shared.js`
+  works around for the test suites.
 
 ## Test database
 

@@ -36,16 +36,26 @@ export interface RouteWaypoint {
 // A run's drawn route, exactly the shape the API serves (docs/data-model.md).
 export interface RunRoute {
   // Encoded polyline, precision 5. Drawn here from the plan response and
-  // decoded for display by RUN-55.
+  // decoded for display by the map (RUN-55).
   polyline: string;
   // The tapped points, 2-5 of them: [0] is Start, the last is Finish, and up
   // to MAX_ROUTE_WAYPOINTS numbered points sit between. Kept because the
   // polyline's hundreds of coordinates cannot be turned back into the handful
   // of markers the picker needs to restore, move or remove (AC5).
+  //
+  // EMPTY on a trimmed route (see below): the first and last tapped points are
+  // the address the trim removed, so the server does not send them.
   waypoints: RouteWaypoint[];
   // Who drew it, which is also what marks it a reconstruction rather than GPS
   // truth. Server-assigned; the client never sends one.
   source: string;
+  // Whether the server cut the first and last ~300 m off before sending
+  // (RUN-55 AC4). True only for somebody else's run on a public profile.
+  //
+  // The map MUST honour this: a trimmed line's ends are not the run's start and
+  // finish, so it draws no Start/Finish markers and says the ends are trimmed.
+  // Server-assigned like `source`, and equally not something a client decides.
+  trimmed: boolean;
 }
 
 // What the API ACCEPTS for a route, which is not what it serves: `source` is
@@ -112,15 +122,26 @@ export function isRouteWaypoint(value: unknown): value is RouteWaypoint {
 
 export function isRunRoute(value: unknown): value is RunRoute {
   const route = value as RunRoute;
-  return (
-    typeof route?.polyline === 'string' &&
-    route.polyline.length > 0 &&
-    typeof route.source === 'string' &&
-    Array.isArray(route.waypoints) &&
-    route.waypoints.length >= MIN_ROUTE_POINTS &&
-    route.waypoints.length <= MAX_ROUTE_POINTS &&
-    route.waypoints.every(isRouteWaypoint)
-  );
+  if (
+    typeof route?.polyline !== 'string' ||
+    route.polyline.length === 0 ||
+    typeof route.source !== 'string' ||
+    typeof route.trimmed !== 'boolean' ||
+    !Array.isArray(route.waypoints) ||
+    !route.waypoints.every(isRouteWaypoint)
+  ) {
+    return false;
+  }
+  // The waypoint count depends on which of the two routes this is, and the
+  // asymmetry is the contract rather than laxity: a full route always carries
+  // the 2-5 points the picker restores from, and a trimmed one carries none,
+  // because its first and last would be the address the trim removed (RUN-55
+  // AC4). A trimmed route WITH waypoints is a server bug, and treating it as
+  // unreadable is how it stops at the boundary instead of reaching a map.
+  return route.trimmed
+    ? route.waypoints.length === 0
+    : route.waypoints.length >= MIN_ROUTE_POINTS &&
+        route.waypoints.length <= MAX_ROUTE_POINTS;
 }
 
 export interface Run {

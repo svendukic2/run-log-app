@@ -28,7 +28,14 @@ const MIDDLE = { lat: 52.518611, lng: 13.388889 };
 const FINISH = { lat: 52.520008, lng: 13.404954 };
 
 function storedRoute(): RunRoute {
-  return { polyline: POLYLINE, waypoints: [START, FINISH], source: 'openrouteservice' };
+  // trimmed is false on anything the owner can edit: the ~300 m trim (RUN-55)
+  // is applied on the way out to a stranger's browser, never to your own route.
+  return {
+    polyline: POLYLINE,
+    waypoints: [START, FINISH],
+    source: 'openrouteservice',
+    trimmed: false,
+  };
 }
 
 async function openRouteStep(run?: Run) {
@@ -143,8 +150,10 @@ describe('Route step (RUN-54)', () => {
     expect(getRuns()[0].route).toEqual({
       polyline: POLYLINE,
       waypoints: [START, FINISH],
-      // Never sent by the client: the server knows who drew the line.
+      // Never sent by the client: the server knows who drew the line, and
+      // whether it trimmed the ends before sending it back (RUN-55).
       source: 'openrouteservice',
+      trimmed: false,
     });
   });
 

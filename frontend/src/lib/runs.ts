@@ -272,6 +272,31 @@ function mergeAfterMutation(runs: Run[]): void {
 // through useRuns refreshes at once (ADD-3). Async since RUN-48: callers
 // await and surface ApiError.message inline (the modal keeps itself open on
 // failure). Nothing is cached on failure.
+// A 400 from the runs endpoints carries a sentence worth showing (RUN-72
+// review fix). The form predicts every rule it can, so a 400 used to be
+// unreachable through the UI and a generic "(400)" cost nothing; the sanity
+// limits are the first rejection the form cannot predict, and "Saving the
+// run failed (400)." would leave the runner with no idea which number to
+// change. Nest's body is { statusCode, message, error }, where message is a
+// string from a service exception and an array from the validation pipe.
+//
+// Only 400. A 500's message is about the server, not about the run, and
+// repeating it at the runner would be noise at best and a leak at worst.
+async function saveFailure(response: Response, fallback: string): Promise<ApiError> {
+  const generic = `${fallback} (${response.status}).`;
+  if (response.status !== 400) return new ApiError(generic, response.status);
+  try {
+    const body = (await response.json()) as { message?: unknown };
+    const message = Array.isArray(body.message) ? body.message[0] : body.message;
+    if (typeof message === 'string' && message.length > 0) {
+      return new ApiError(message, response.status);
+    }
+  } catch {
+    // Not JSON (a proxy error page): the status is all there is.
+  }
+  return new ApiError(generic, response.status);
+}
+
 export async function addRun(draft: RunDraft): Promise<Run> {
   const response = await apiFetch('/api/runs', {
     method: 'POST',
@@ -279,7 +304,7 @@ export async function addRun(draft: RunDraft): Promise<Run> {
     body: JSON.stringify(draft),
   });
   if (!response.ok) {
-    throw new ApiError(`Saving the run failed (${response.status}).`, response.status);
+    throw await saveFailure(response, 'Saving the run failed');
   }
   const run = parseRunBody(await response.json());
   mergeAfterMutation([run, ...snapshot.runs]);
@@ -301,7 +326,7 @@ export async function updateRun(id: string, draft: RunDraft): Promise<Run | null
     return null;
   }
   if (!response.ok) {
-    throw new ApiError(`Saving the changes failed (${response.status}).`, response.status);
+    throw await saveFailure(response, 'Saving the changes failed');
   }
   const updated = parseRunBody(await response.json());
   mergeAfterMutation(snapshot.runs.map((run) => (run.id === id ? updated : run)));

@@ -113,7 +113,12 @@ export default function RunningLevelPage() {
               {finishError}
             </p>
           )}
-          <div className="mt-[30px] flex w-full items-center justify-between">
+          {/* flex-wrap and a gap: at 320px the two buttons measure ~271px
+              against 272px of room and had nothing between them, so they
+              touched and the first font fallback overflowed the page. Both are
+              inert wherever the row already fits, which is every other width
+              (RUN-75, AC1). */}
+          <div className="mt-[30px] flex w-full flex-wrap items-center justify-between gap-3">
             <button
               type="button"
               onClick={() => router.push(ROUTES.setupGoal)}

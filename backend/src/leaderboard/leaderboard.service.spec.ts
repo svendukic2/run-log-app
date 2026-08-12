@@ -23,11 +23,14 @@ describe('LeaderboardService (RUN-70)', () => {
   let service: LeaderboardService;
   const prisma = {
     user: { findMany: jest.fn() },
-    run: { groupBy: jest.fn() },
+    run: { groupBy: jest.fn(), findMany: jest.fn() },
   };
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    // The outlier read (RUN-72) runs on every board; the test that cares
+    // about it overrides this.
+    prisma.run.findMany.mockResolvedValue([]);
     const moduleRef = await Test.createTestingModule({
       providers: [
         LeaderboardService,
@@ -123,6 +126,49 @@ describe('LeaderboardService (RUN-70)', () => {
 
     expect(board).toMatchObject({ items: [], me: null, total: 0 });
     expect(prisma.run.groupBy).not.toHaveBeenCalled();
+  });
+
+  // RUN-72 AC2: the marker is a fact about ONE run, so a week whose total
+  // is ordinary still carries it when a single run inside it was extreme,
+  // and a runner whose runs were all ordinary does not.
+  it('marks the row of a runner with a legal but extreme run (RUN-72 AC2)', async () => {
+    prisma.user.findMany.mockResolvedValue([
+      candidate(USER_ID),
+      candidate('user-ana'),
+    ]);
+    prisma.run.groupBy.mockResolvedValue([
+      aggregate(USER_ID, 20, 2),
+      aggregate('user-ana', 20, 2),
+    ]);
+    prisma.run.findMany.mockResolvedValue([
+      { userId: USER_ID, distanceKm: 10, durationSeconds: 3_000 },
+      { userId: USER_ID, distanceKm: 10, durationSeconds: 3_100 },
+      // 10 km at 3:20 /km: inside the hard limits, past the soft one.
+      { userId: 'user-ana', distanceKm: 10, durationSeconds: 2_000 },
+      { userId: 'user-ana', distanceKm: 10, durationSeconds: 3_000 },
+    ]);
+
+    const board = await service.weeklyBoard(USER_ID, { weekStart: WEDNESDAY });
+
+    expect(board.items.map((row) => [row.id, row.unverified])).toEqual(
+      expect.arrayContaining([
+        [USER_ID, false],
+        ['user-ana', true],
+      ]),
+    );
+    // Read through the same opt-in gate as the aggregation, so an
+    // opted-out runner's runs are never even fetched.
+    // Bounded to the rows this response carries and gated on the opt-in,
+    // so an opted-out runner's runs are never fetched.
+    expect(prisma.run.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          userId: { in: ['user-ana', USER_ID] },
+          user: { showOnLeaderboard: true },
+          date: { gte: toDbDate(MONDAY), lte: toDbDate(SUNDAY) },
+        },
+      }),
+    );
   });
 
   it('serves the top rows and still answers the caller far below them (AC2)', async () => {

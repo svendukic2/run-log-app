@@ -33,6 +33,10 @@ export interface LeaderboardEntry {
   totalKm: number;
   runCount: number;
   me: boolean;
+  // RUN-72: at least one run behind this total is legal but unusual (very
+  // fast or very long). The row draws a subtle marker for it; the server
+  // decides, because the client is never sent the individual runs.
+  unverified: boolean;
 }
 
 // One week of the board. `items` is the served top slice, `total` how many
@@ -57,7 +61,8 @@ export function isLeaderboardEntry(value: unknown): value is LeaderboardEntry {
     typeof row.rank === 'number' &&
     typeof row.totalKm === 'number' &&
     typeof row.runCount === 'number' &&
-    typeof row.me === 'boolean'
+    typeof row.me === 'boolean' &&
+    typeof row.unverified === 'boolean'
   );
 }
 

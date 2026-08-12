@@ -215,6 +215,8 @@ export function seedParticipants(
       rank: ranked ? index + 1 : null,
       totalKm: ranked ? 0 : null,
       runCount: ranked ? 0 : null,
+      // RUN-72's marker travels with the other withheld numbers.
+      unverified: ranked ? false : null,
       ...draft,
     } as EventParticipant;
   });

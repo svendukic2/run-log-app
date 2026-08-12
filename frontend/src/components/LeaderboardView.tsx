@@ -18,6 +18,7 @@ import {
   type WeeklyLeaderboard,
 } from '@/lib/leaderboard';
 import { personRoute, ROUTES } from '@/lib/routes';
+import UnverifiedMarker from './UnverifiedMarker';
 
 const CARD = 'rounded-[18px] border border-line bg-white';
 
@@ -85,15 +86,24 @@ function WeekSwitcher({
   onChange: (weekStart: string) => void;
 }) {
   const forward = hasNextWeek(weekStart);
+  // Drawn ~40px tall, under the 44px minimum, so a pseudo-element grows the
+  // hit area vertically to 44px. Vertically only: the two buttons sit 8px
+  // apart, and a sideways expansion would overlap its neighbour's taps
+  // (RUN-75 AC3, the RUN-64 pattern), on
+  // touch only: ungated it would enlarge :hover on a mouse as well.
   const button =
-    'rounded-[12px] border border-line px-[14px] py-[9px] text-[13px] font-semibold text-text-primary hover:border-accent hover:text-accent-pressed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:border-line disabled:text-tertiary disabled:hover:text-tertiary';
+    "relative rounded-[12px] border border-line px-[14px] py-[9px] text-[13px] font-semibold text-text-primary pointer-coarse:before:absolute pointer-coarse:before:inset-x-0 pointer-coarse:before:-inset-y-[2px] pointer-coarse:before:content-[''] hover:border-accent hover:text-accent-pressed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:border-line disabled:text-tertiary disabled:hover:text-tertiary";
 
   return (
     <section
       className={`${CARD} flex flex-col gap-[10px] px-[18px] py-[14px] sm:flex-row sm:items-center sm:justify-between`}
       aria-label="Week"
     >
-      <div className="flex items-center gap-2 sm:order-2">
+      {/* flex-wrap: at 320px the two labels together are wider than the card,
+          and without it each button wrapped its own label to two lines
+          instead. Never wraps from `sm` up, so the design is untouched
+          (RUN-75, AC1). */}
+      <div className="flex flex-wrap items-center gap-2 sm:order-2">
         <button type="button" className={button} onClick={() => onChange(shiftWeek(weekStart, -1))}>
           ← Previous week
         </button>
@@ -226,7 +236,12 @@ function LeaderboardRow({ row }: { row: LeaderboardEntry }) {
           {row.firstName} {row.lastName}
           {row.me && <span className="pl-2 text-[12px] font-medium text-accent-pressed">You</span>}
         </Link>
-        <span className="block text-[12.5px] text-tertiary">{formatRunCount(row.runCount)}</span>
+        <span className="block text-[12.5px] text-tertiary">
+          {formatRunCount(row.runCount)}
+          {/* RUN-72 AC2: the server flagged one of the runs behind this
+              total as legal but extreme. */}
+          {row.unverified && <UnverifiedMarker />}
+        </span>
       </span>
       <span className="shrink-0 text-[14px] font-semibold tabular-nums text-text-primary">
         {formatKm(row.totalKm)} km

@@ -31,6 +31,9 @@ interface MapState {
   markers: StubMarker[];
   polylines: Array<{ latlngs: Array<[number, number]>; options: Record<string, unknown> }>;
   tileLayers: Array<{ url: string; options: Record<string, unknown> }>;
+  // Zoom controls added explicitly (RUN-55 puts the display map's in the
+  // bottom-right corner, out from under its legend).
+  zoomControls: Array<Record<string, unknown>>;
   fitBoundsCalls: number;
   removed: boolean;
 }
@@ -45,6 +48,7 @@ function freshState(): MapState {
     markers: [],
     polylines: [],
     tileLayers: [],
+    zoomControls: [],
     fitBoundsCalls: 0,
     removed: false,
   };
@@ -154,6 +158,18 @@ const leaflet = {
   divIcon: (options: Record<string, unknown>) => options,
   latLngBounds: (latlngs: Array<[number, number]>) => latlngs,
   DomEvent: { stopPropagation: () => undefined },
+
+  control: {
+    zoom: (options: Record<string, unknown>) => ({
+      addTo: () => {
+        state.zoomControls.push(options);
+      },
+    }),
+  },
+
+  // Leaflet's own device sniffing. Always false here: jsdom is not a phone, and
+  // a test that wants the mobile branch should say so by setting this.
+  Browser: { mobile: false },
 };
 
 export default leaflet;

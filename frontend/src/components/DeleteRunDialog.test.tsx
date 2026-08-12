@@ -39,6 +39,16 @@ describe('Delete run dialog (RUN-30)', () => {
     );
   });
 
+  // RUN-75 AC4. jsdom has no layout engine, so it can never tell us the dialog
+  // actually overflowed; asserting the classes that make it scrollable is the
+  // honest half of that, and it is the half that regresses silently.
+  it('caps its own height and scrolls inside, so a tall dialog stays reachable', () => {
+    renderDialog();
+
+    const dialog = screen.getByRole('alertdialog', { name: 'Delete this run?' });
+    expect(dialog).toHaveClass('max-h-[92dvh]', 'overflow-y-auto');
+  });
+
   it('lands focus on Cancel, so Enter out of habit deletes nothing', () => {
     renderDialog();
 
