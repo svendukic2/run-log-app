@@ -308,11 +308,13 @@ export default function RunModal({ run, onClose }: RunModalProps) {
                 onChange={(value) => setValue('distance', value)}
                 error={errors.distance}
               />
+              {/* No inputMode here on purpose: the value is "mm:ss" and the
+                  mobile numeric keypad has no colon, which made the format
+                  impossible to type on a phone. The standard keyboard does. */}
               <TextField
                 id={FIELD_IDS.duration}
                 label="Duration"
                 placeholder="00:00"
-                inputMode="numeric"
                 value={values.duration}
                 onChange={(value) => setValue('duration', value)}
                 error={errors.duration}

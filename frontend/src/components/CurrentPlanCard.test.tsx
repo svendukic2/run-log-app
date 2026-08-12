@@ -155,14 +155,25 @@ describe('Current plan card (RUN-32)', () => {
     expect(screen.getByText('Aim for 22 km this week')).toBeInTheDocument();
   });
 
-  it('keeps "See the reasoning" visible but inert (RUN-33 AC3, A21)', () => {
+  it('expands the reasoning behind the plan and collapses it again (RUN-33 AC3)', async () => {
+    const user = userEvent.setup();
+    // The only run is in the current week, so the plan (and its reasoning)
+    // falls back to the weekly goal.
     seedRun();
 
     render(<CurrentPlanCard />);
 
-    const reasoning = screen.getByRole('button', { name: 'See the reasoning' });
-    expect(reasoning).toHaveAttribute('aria-disabled', 'true');
-    expect(reasoning).toHaveAccessibleDescription('Not available yet.');
+    const toggle = screen.getByRole('button', { name: 'See the reasoning' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await user.click(toggle);
+
+    const opened = screen.getByRole('button', { name: 'Hide the reasoning' });
+    expect(opened).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText(/rounded to \d+ km/)).toBeInTheDocument();
+
+    await user.click(opened);
+    expect(screen.queryByText(/rounded to \d+ km/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'See the reasoning' })).toBeInTheDocument();
   });
 
   describe('apply to weekly goal (RUN-33)', () => {
