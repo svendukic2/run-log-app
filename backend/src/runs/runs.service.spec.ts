@@ -1,4 +1,8 @@
-import { NotFoundException, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { Prisma } from '../generated/prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -95,6 +99,10 @@ describe('RunsService', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    // A PATCH touching distance or duration pre-reads the stored pair for
+    // the sanity limits (RUN-72), so every update test needs a row here;
+    // the ones about a particular stored run override it.
+    prisma.run.findFirst.mockResolvedValue(row());
     prisma.$transaction.mockImplementation(
       (callback: (tx: unknown) => Promise<unknown>) => callback(prisma),
     );
@@ -323,6 +331,30 @@ describe('RunsService', () => {
       data: { distanceKm: 9 },
     });
     expect(updated.distanceKm).toBe(9);
+  });
+
+  // RUN-72 AC1. The limits themselves are checked at every boundary in
+  // common/runLimits.spec.ts; these two prove the wiring, which is the part
+  // that could silently apply to create only.
+  it('refuses a run beyond the hard limits before writing anything (RUN-72 AC1)', async () => {
+    await expect(
+      service.create(USER_ID, {
+        routeName: 'Teleport',
+        distanceKm: 200,
+        durationSeconds: 3600,
+        date: '2026-07-14',
+      }),
+    ).rejects.toThrow(BadRequestException);
+    expect(prisma.run.create).not.toHaveBeenCalled();
+  });
+
+  it('applies the pace limit to the merged pair on PATCH, not to the field sent (RUN-72 AC1)', async () => {
+    // Stored: 8.2 km. The PATCH only shortens the time, which is legal on
+    // its own and impossible against the distance already stored.
+    await expect(
+      service.update(USER_ID, 'run-1', { durationSeconds: 600 }),
+    ).rejects.toThrow(BadRequestException);
+    expect(prisma.run.update).not.toHaveBeenCalled();
   });
 
   it('404s an update of a missing run and of another users run alike (AC3)', async () => {

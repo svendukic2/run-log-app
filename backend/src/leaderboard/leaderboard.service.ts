@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { addDaysIso, mondayOf, toDbDate, utcTodayIso } from '../common/dates';
 import { rankByDistance, roundKm } from '../common/ranking';
+import { outlierUserIds } from '../common/runLimits';
 import { PrismaService } from '../prisma/prisma.service';
 import { LeaderboardQueryDto } from './dto/leaderboard-query.dto';
 
@@ -17,6 +18,11 @@ export interface LeaderboardRow {
   totalKm: number;
   runCount: number;
   me: boolean;
+  // RUN-72: at least one of the runs behind this total is legal but
+  // extreme (see common/runLimits.ts). The page draws a subtle marker for
+  // it. False is the ordinary case, so an opted-out runner - who is not a
+  // row here at all - leaks nothing by their absence.
+  unverified: boolean;
 }
 
 // The window is echoed back because the request may omit it (current week)
@@ -97,6 +103,27 @@ export class LeaderboardService {
     });
     const byUser = new Map(totals.map((row) => [row.userId, row]));
 
+    // The outlier marker (RUN-72 AC2) is a fact about a single RUN, so it
+    // cannot come out of the aggregation above: a week totalling 80 km is a
+    // good week, one 80 km run is the unusual thing. Hence a second read of
+    // the same window, selecting three columns and no more.
+    //
+    // It is a read rather than a smarter WHERE because the pace rule
+    // compares two columns arithmetically (durationSeconds < 210 *
+    // distanceKm), which Prisma's filters cannot express without dropping
+    // to raw SQL - and a raw query here would buy one scan at the cost of
+    // the type checking every other query in this service has. The gate is
+    // the same relation filter, so a runner who is off leaderboards is
+    // never even read.
+    const weekRuns = await this.prisma.run.findMany({
+      where: {
+        user: { showOnLeaderboard: true },
+        date: { gte: toDbDate(weekStart), lte: toDbDate(weekEnd) },
+      },
+      select: { userId: true, distanceKm: true, durationSeconds: true },
+    });
+    const flagged = outlierUserIds(weekRuns);
+
     // Everyone opted in is ranked, including runners with no runs this
     // week: they tie at 0 km at the bottom, which is what makes a pinned
     // "you" row (AC2) truthful in a week the caller sat out instead of
@@ -122,6 +149,7 @@ export class LeaderboardService {
           totalKm: roundKm(aggregate?._sum.distanceKm ?? 0),
           runCount: aggregate?._count._all ?? 0,
           me: row.id === userId,
+          unverified: flagged.has(row.id),
         };
       })
       // Tied rows share a rank, so the id decides only which of them is

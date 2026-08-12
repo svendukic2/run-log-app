@@ -7,6 +7,7 @@ import {
 import { toDbDate, toIsoDate, utcTodayIso } from '../common/dates';
 import { resolvePagination } from '../common/pagination-query.dto';
 import { rankByDistance, roundKm } from '../common/ranking';
+import { outlierUserIds } from '../common/runLimits';
 import { NotificationsService } from '../notifications/notifications.service';
 import { isPrismaError, prismaConstraint } from '../prisma/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
@@ -60,12 +61,17 @@ export interface EventListResponse {
 // ways - splitting them into two endpoints would double the round trips to
 // answer one screen, and the ranks have to be global anyway.
 //
-// The three nullable fields are one decision, not three: `rank` is null
-// exactly when the runner is off leaderboards (AC3), and their distance and
-// run count go with it. Withholding the numbers rather than sending them
-// with a "do not display" flag is what makes the opt-out real - a client
-// cannot render what it never received - and it also keeps the API from
-// naming another user's privacy setting back at the caller.
+// The four nullable fields are one decision, not four: `rank` is null
+// exactly when the runner is off leaderboards (AC3), and their distance,
+// run count and outlier flag go with it. Withholding the numbers rather
+// than sending them with a "do not display" flag is what makes the opt-out
+// real - a client cannot render what it never received - and it also keeps
+// the API from naming another user's privacy setting back at the caller.
+//
+// `unverified` joined that family in RUN-72 rather than defaulting to
+// false for an unranked row: it is derived from that runner's runs, so it
+// is one of the numbers the opt-out withholds, not a decoration on top of
+// them.
 export interface EventParticipantResponse {
   id: string;
   firstName: string;
@@ -75,6 +81,7 @@ export interface EventParticipantResponse {
   rank: number | null;
   totalKm: number | null;
   runCount: number | null;
+  unverified: boolean | null;
 }
 
 // Deliberately not paginated, unlike every other list in this API: a
@@ -280,6 +287,29 @@ export class EventsService {
     });
     const byUser = new Map(totals.map((row) => [row.userId, row]));
 
+    // The outlier marker (RUN-72 AC2), read exactly the way the global
+    // board reads it: per RUN, because one 80 km run is unusual while a
+    // window totalling 80 km is not, and as its own small select because
+    // the pace rule compares two columns arithmetically and no Prisma
+    // filter can express that without raw SQL.
+    //
+    // Narrowed to the participants who are ON the board: an opted-out
+    // runner's runs are never read here, so there is nothing to withhold
+    // later by accident.
+    const rankedIds = participants
+      .filter((row) => row.user.showOnLeaderboard)
+      .map((row) => row.user.id);
+    const windowRuns = rankedIds.length
+      ? await this.prisma.run.findMany({
+          where: {
+            userId: { in: rankedIds },
+            date: { gte: event.startDate, lte: event.endDate },
+          },
+          select: { userId: true, distanceKm: true, durationSeconds: true },
+        })
+      : [];
+    const flagged = outlierUserIds(windowRuns);
+
     // Ranked across every participant, not within some page or the
     // opted-in subset's own arrival order: a rank means "your place among
     // everyone competing here".
@@ -306,6 +336,7 @@ export class EventsService {
         totalKm:
           rank === null ? null : roundKm(aggregate?._sum.distanceKm ?? 0),
         runCount: rank === null ? null : (aggregate?._count._all ?? 0),
+        unverified: rank === null ? null : flagged.has(row.user.id),
       };
     });
 
