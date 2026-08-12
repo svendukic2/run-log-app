@@ -105,6 +105,27 @@ describe('App shell on small screens (RUN-13, responsive)', () => {
     expect(document.body.style.overflow).toBe('');
   });
 
+  // AC5. jsdom has no layout engine, so this asserts the tab ORDER wraps, which
+  // is the whole of the behaviour; it says nothing about where anything sits.
+  it('traps Tab inside the open drawer instead of leaking onto the page behind it', async () => {
+    const user = userEvent.setup();
+    renderShell(<button type="button">Behind the drawer</button>);
+    await user.click(screen.getByRole('button', { name: 'Open navigation' }));
+
+    const close = screen.getByRole('button', { name: 'Close navigation' });
+    // Last stop in the drawer: the profile footer's Sign out, below every link.
+    const last = await screen.findByRole('button', { name: 'Sign out' });
+    expect(close).toHaveFocus();
+
+    // Backwards off the first item lands on the last one, not on the page.
+    await user.tab({ shift: true });
+    expect(last).toHaveFocus();
+
+    // ...and forwards off the last item comes back to the first.
+    await user.tab();
+    expect(close).toHaveFocus();
+  });
+
   it('returns focus to the toggle after the drawer is dismissed', async () => {
     const user = userEvent.setup();
     renderShell();

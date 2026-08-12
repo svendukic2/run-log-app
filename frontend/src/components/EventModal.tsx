@@ -13,6 +13,7 @@ import {
   type EventFormValues,
 } from '@/lib/events';
 import { mutationErrorMessage } from '@/lib/session';
+import useFocusTrap from '@/lib/useFocusTrap';
 
 function CloseIcon() {
   return (
@@ -53,6 +54,10 @@ export default function EventModal({ onClose }: EventModalProps) {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  // Tab stays inside the dialog, as aria-modal already claimed (RUN-75).
+  useFocusTrap(dialogRef, true);
 
   const setValue = <Field extends keyof EventFormValues>(
     field: Field,
@@ -120,6 +125,7 @@ export default function EventModal({ onClose }: EventModalProps) {
       />
 
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={EVENT_MODAL_TITLE_ID}

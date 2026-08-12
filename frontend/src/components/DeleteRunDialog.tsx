@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { deleteRun, type Run } from '@/lib/runs';
+import useFocusTrap from '@/lib/useFocusTrap';
 
 function TrashIcon() {
   return (
@@ -42,6 +43,10 @@ interface DeleteRunDialogProps {
 // actions one-handed on a phone (responsive addendum, agreed in-project).
 export default function DeleteRunDialog({ run, onClose, onDeleted }: DeleteRunDialogProps) {
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  // Tab stays inside the dialog, as aria-modal already claimed (RUN-75).
+  useFocusTrap(dialogRef, true);
   // The delete round-trips to the API since RUN-48: `deleting` guards the
   // destructive button against a double press, `deleteError` is the inline
   // failure line (dialog stays open, the run still exists).
@@ -99,12 +104,18 @@ export default function DeleteRunDialog({ run, onClose, onDeleted }: DeleteRunDi
         className="fixed inset-0 bg-ink/60"
       />
 
+      {/* max-h + overflow: the other two overlays cap themselves and scroll
+          inside, this one did not, so a long route name on a short phone in
+          landscape pushed the title off the top of the screen with no way to
+          reach it (RUN-75, AC4). The cap is never hit at desktop size, where
+          the dialog is a few hundred pixels tall. */}
       <div
+        ref={dialogRef}
         role="alertdialog"
         aria-modal="true"
         aria-labelledby={TITLE_ID}
         aria-describedby={DESCRIPTION_ID}
-        className="relative z-10 flex w-full flex-col gap-[18px] rounded-t-[20px] bg-white px-5 py-6 shadow-[0_24px_60px_0_rgba(0,0,0,0.22)] sm:max-w-[400px] sm:rounded-[20px] sm:p-[28px]"
+        className="relative z-10 flex max-h-[92dvh] w-full flex-col gap-[18px] overflow-y-auto overscroll-contain rounded-t-[20px] bg-white px-5 py-6 shadow-[0_24px_60px_0_rgba(0,0,0,0.22)] sm:max-h-[calc(100dvh-48px)] sm:max-w-[400px] sm:rounded-[20px] sm:p-[28px]"
       >
         <span
           aria-hidden="true"
