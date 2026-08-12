@@ -23,7 +23,7 @@ onboarding-era entities). What remains in localStorage is device-scoped by natur
 | Goal | `frontend/src/lib/goal.ts` | PostgreSQL via `/api/goal` (RUN-50) | RUN-10 |
 | Week targets | `frontend/src/lib/goal.ts` | PostgreSQL via `/api/week-targets` (RUN-50) | RUN-17/33 |
 | Privacy settings | `frontend/src/lib/privacy.ts` | PostgreSQL via `/api/privacy` (RUN-64) | RUN-64 |
-| Session (JWT + email) | `frontend/src/lib/session.ts` | `runlog.session` (localStorage) | RUN-48, reshaped by RUN-58 |
+| Session (JWT + email) | `frontend/src/lib/session.ts` | `runlog.session` (localStorage) | RUN-48, reshaped by RUN-58, self-renewing since RUN-74 |
 | Onboarding wizard draft | `frontend/src/lib/onboarding.ts` | `runlog.onboardingDraft` (localStorage) | RUN-50 |
 | Plan stamp | `frontend/src/lib/plan.ts` | `runlog.plan` (localStorage) | RUN-32 |
 
@@ -50,9 +50,14 @@ target, privacy) and every v2 screen reuses it rather than inventing another:
   the account email - never a password. Every guarded screen sits behind
   `RequireSession` (signed out lands on `/signin`); the setup steps run AFTER signup,
   which also seeds the wizard draft with the names/email it collected. `apiFetch()`
-  attaches the token and times out hung requests (8s); a 401 signs the user out cleanly
-  and lands on Sign in - there is no refresh endpoint to retry against (that follow-up
-  is RUN-74). A signed-out visitor reads as empty data without any network. With
+  attaches the token and times out hung requests (8s).
+- **Silent renewal (RUN-74).** The access token lives 15 minutes and renews itself: a
+  401 buys `apiFetch` exactly one `POST /api/auth/refresh` and one replay of the
+  request. Requests that 401 in the same tick share a single in-flight renewal rather
+  than firing one each. If the renewal fails, the behaviour is the pre-RUN-74 one and
+  RUN-58 AC6 still holds: the session is cleared, Sign in is loaded, and the thrown
+  `ApiError` is terminal so nothing offers a retry that cannot work. A signed-out
+  visitor reads as empty data without any network. With
   blocked storage (private browsing) the session cannot survive the post-auth page
   load, so the Sign in / Sign up screens refuse to navigate and show an inline error
   instead of a silent bounce-back loop.
@@ -131,11 +136,44 @@ data attaches to accounts. Community tasks (follow, notifications, events) hang 
 | profilePublic | boolean, default false | Opt-in: other runners may open this account's public profile (RUN-64; the page itself is RUN-63) |
 | showOnLeaderboard | boolean, default false | Opt-in to every leaderboard, global and per event. Pulled forward from RUN-64 by RUN-69, which cannot honour its own AC3 without it |
 | showRoutes | boolean, default false | Opt-in: route maps are shown to whoever can see the profile (RUN-64; route maps themselves are RUN-72) |
+| tokenVersion | int, default 0 | Session revocation (RUN-74). Bumped by logout; a token whose `ver` claim no longer matches cannot be refreshed |
 | createdAt | timestamp | Audit field (the `updatedAt` convention above extends to `createdAt` here) |
 
-The API endpoints are `POST /api/auth/signup` and `POST /api/auth/login`, both
-returning `{ token, user }` with the JWT subject = user id. Passwords are capped at
+The API endpoints are `POST /api/auth/signup`, `POST /api/auth/login` and
+`POST /api/auth/refresh`, all three returning `{ token, user }` with the JWT subject =
+user id, plus `POST /api/auth/logout` which returns 204. Passwords are capped at
 72 UTF-8 **bytes** (not characters) because bcrypt silently truncates beyond that.
+
+**Token lifecycle (RUN-74).** The decision, its reasoning and the threats it knowingly
+leaves open are written out in `backend/src/auth/token-lifecycle.ts`; that file is the
+source of truth and this is the summary. A **sliding access token plus a `tokenVersion`
+column** was chosen over a refresh-token pair: one additive column buys both renewal and
+revocation, where the pair would cost a table, a rotation protocol and a cleanup job for
+per-session revocation nobody has asked for. So:
+
+- An access token lives **15 minutes** (7 days before RUN-74, when it could not be
+  renewed). This is the only thing the global `JwtAuthGuard` checks, and the guard still
+  performs **no database read** - the hot path is unchanged.
+- `POST /api/auth/refresh` accepts a token that may already be expired and mints a fresh
+  one. It is the only place that reads `tokenVersion`, so revocation costs one query per
+  renewal rather than one per request.
+- Two windows bound the sliding. Refresh is refused if the presented token was issued
+  more than **14 days** ago (the idle timeout), or if the **session** began more than
+  **30 days** ago. The session start rides in the `sst` claim and is copied, never reset,
+  by every renewal, so no amount of refreshing outruns the 30 day ceiling.
+- `POST /api/auth/logout` increments `tokenVersion`, which ends every session for that
+  account **on every device** - revocation is per account, not per session. It answers
+  204 to anything, including a missing or unreadable token, because signing out must not
+  be able to fail.
+- **What this does not cover**, stated so nobody assumes otherwise: an already-issued
+  access token keeps working until its own expiry, because the guard does not consult
+  `tokenVersion`. Logout therefore ends a session immediately but an outstanding token
+  only within 15 minutes. There is no per-token blocklist and no per-session revocation.
+- **Existing deployed sessions.** Pre-RUN-74 tokens carry no `ver` or `sst`. A **missing
+  `ver` reads as 0**, which is exactly the default the migration gives every existing
+  row, so those tokens renew instead of being rejected; a missing `sst` falls back to the
+  token's own `iat`. This pairing is the only reason the deploy did not log every real
+  user out, and it is why the column default must stay 0.
 
 **Privacy settings (RUN-64).** The three toggles are `GET`/`PUT /api/privacy`: one
 resource per account, no id in the contract, body exactly

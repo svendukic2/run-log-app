@@ -103,8 +103,14 @@ way: **client-side calls to same-origin `/api/*`**, which `next.config.ts` rewri
 the backend server-side, so `BACKEND_URL` never reaches the browser bundle and CORS
 still never enters the picture. Those calls carry a Bearer token from the
 Sign in / Sign up screens (RUN-58, `frontend/src/lib/session.ts`): `runlog.session`
-stores token + email, a 401 signs the user out cleanly (no refresh endpoint yet,
-RUN-74), and every guarded screen sits behind `RequireSession`. CORS stays
+stores token + email, and every guarded screen sits behind `RequireSession`. Since
+RUN-74 the token lives 15 minutes and renews itself: a 401 buys exactly one
+`POST /api/auth/refresh` and one replay, concurrent 401s share the single in-flight
+renewal, and a renewal that fails degrades to the RUN-58 AC6 behaviour (clean
+sign-out, Sign in, terminal error). The lifecycle decision, its two bounding windows
+and the threats it deliberately leaves open are written out in
+`backend/src/auth/token-lifecycle.ts`; read that before changing anything about
+tokens. CORS stays
 enabled on the backend (`main.ts`, origin `FRONTEND_URL`) for any genuinely cross-origin
 fetch.
 
