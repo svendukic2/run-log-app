@@ -125,11 +125,12 @@ describe('Tagging a run to an event (RUN-76 AC1)', () => {
 
     // The announcement is what proves the tag was dropped by the DATE change:
     // waiting on the value alone would pass the moment the options were
-    // re-read, before the form state caught up.
+    // re-read, before the form state caught up. Matched by its text rather than
+    // its role - the modal has other live regions (RUN-79's field counters).
     await waitFor(() =>
-      expect(screen.getByRole('status')).toHaveTextContent(
-        /not covered by an event you have joined/i,
-      ),
+      expect(
+        screen.getByText(/not covered by an event you have joined/i),
+      ).toBeInTheDocument(),
     );
     expect(picker()).toHaveValue('');
     // And the field says there is nothing to choose, rather than offering an

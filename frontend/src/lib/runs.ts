@@ -94,18 +94,73 @@ function parseRunBody(body: unknown): Run {
   return body;
 }
 
+// GET /api/runs is paginated since RUN-79, and this store still needs the
+// WHOLE history: the dashboard's weekly totals, the records, the goal
+// progress and insights.ts all compute from the full array, so a store
+// holding the first page would not fail - it would quietly under-report.
+// The pagination therefore bounds one request's work, not what the screens
+// see: ask for the server's maximum (MAX_PAGE_SIZE in
+// backend/src/common/pagination-query.dto.ts, the source of truth) and walk
+// until a short page ends the walk.
+//
+// A runner with 300 runs makes 4 requests instead of 1. The ceiling turns a
+// server that somehow keeps answering full pages into a loud error rather
+// than an infinite loop, and it is far above any real history: 50 pages is
+// 5000 runs, well past a decade of daily running.
+const LOAD_PAGE_SIZE = 100;
+const MAX_LOAD_PAGES = 50;
+
+// Termination is on a SHORT page and on nothing else. `total` is emphatically
+// NOT a stopping condition (review fix): the backend counts it in a separate
+// query from the page, so between the two, 50 runs landing from another
+// device make a full page arrive alongside a total the walk has already
+// reached - and stopping there drops every run past it, which is the exact
+// silent under-report AC4 exists to prevent. A short page is a fact about the
+// page in hand rather than a claim about a moving table. The cost of not
+// trusting it is one extra request when the history is an exact multiple of
+// 100, which answers empty and ends the walk.
+//
+// `total` is still validated: a body without it is not this endpoint's shape,
+// and failing loudly beats reading a stranger's payload as a run list.
 async function fetchRuns(): Promise<Run[]> {
-  const response = await apiFetch('/api/runs');
-  if (!response.ok) {
-    throw new ApiError(`Loading runs failed (${response.status}).`, response.status);
+  const collected: Run[] = [];
+  for (let page = 1; page <= MAX_LOAD_PAGES; page += 1) {
+    const response = await apiFetch(`/api/runs?page=${page}&pageSize=${LOAD_PAGE_SIZE}`);
+    if (!response.ok) {
+      throw new ApiError(`Loading runs failed (${response.status}).`, response.status);
+    }
+    const body: unknown = await response.json();
+    const envelope = body as { items?: unknown; total?: unknown };
+    // A malformed body is treated as an error, not as an empty log: an empty
+    // dashboard lies, a retry card does not. Note this holds mid-walk too -
+    // the throw propagates to loadRuns, which publishes the error state, so
+    // a failure on page 2 can never leave a half-loaded cache reading as a
+    // complete history.
+    if (
+      !Array.isArray(envelope?.items) ||
+      !envelope.items.every(isRun) ||
+      typeof envelope.total !== 'number'
+    ) {
+      throw new ApiError('The server returned runs in an unexpected shape.');
+    }
+    collected.push(...envelope.items);
+    if (envelope.items.length < LOAD_PAGE_SIZE) {
+      // Offset pages are not one snapshot: a run added from another tab
+      // between two requests shifts the boundary and the run on it arrives
+      // twice, which would reach React as a duplicate key. Last one wins.
+      // A run DELETED mid-walk shifts the boundary the other way and the run
+      // that slides across it is skipped instead - dedupe cannot repair that,
+      // and it is accepted: the walk is the owner's own history, one deleted
+      // run is one row missing until the next load, and the alternative is
+      // cursor pagination for a list nobody else writes to.
+      return dedupeRunsById(collected);
+    }
   }
-  const body: unknown = await response.json();
-  // A malformed body is treated as an error, not as an empty log: an empty
-  // dashboard lies, a retry card does not.
-  if (!Array.isArray(body) || !body.every(isRun)) {
-    throw new ApiError('The server returned runs in an unexpected shape.');
-  }
-  return body;
+  throw new ApiError('Loading runs failed (too many pages).');
+}
+
+function dedupeRunsById(runs: Run[]): Run[] {
+  return [...new Map(runs.map((run) => [run.id, run])).values()];
 }
 
 /* One-time import of v1 localStorage data (RUN-48) ------------------------- */
@@ -195,8 +250,21 @@ function toRunsError(error: unknown): RunsError {
   return { message: 'Something went wrong loading your runs.', terminal: false };
 }
 
+// A load requested while another is in flight must not be dropped (the
+// events store hit this first and RUN-79 made it reachable here): the
+// in-flight walk publishes pages fetched BEFORE whatever prompted the new
+// request, so coalescing into it would silently lose that mutation. The Add
+// run button lives in PageHeader, outside AppDataBoundary, so a save during
+// the walk is an ordinary thing to do - and the walk is several sequential
+// requests wide now rather than one. The queued flag makes the settling load
+// run once more with fresh reads.
+let reloadQueued = false;
+
 async function loadRuns(): Promise<void> {
-  if (loadInFlight) return;
+  if (loadInFlight) {
+    reloadQueued = true;
+    return;
+  }
   loadInFlight = true;
   publish({ ...snapshot, status: 'loading', runs: [], error: null });
   try {
@@ -227,6 +295,10 @@ async function loadRuns(): Promise<void> {
     publish({ ...snapshot, status: 'error', runs: [], error: toRunsError(error) });
   } finally {
     loadInFlight = false;
+    if (reloadQueued) {
+      reloadQueued = false;
+      void loadRuns();
+    }
   }
 }
 
@@ -428,6 +500,7 @@ export function __resetRunsStoreForTests(runs: Run[] | null = null): void {
   }
   loadStarted = runs !== null;
   loadInFlight = false;
+  reloadQueued = false;
   snapshot =
     runs === null
       ? INITIAL_SNAPSHOT

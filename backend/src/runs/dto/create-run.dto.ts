@@ -38,8 +38,9 @@ export const DEFAULT_EFFORT: Effort = 'Medium';
 // API-side bounds for the two free-text fields (documented in
 // docs/data-model.md). The v1 forms enforce no lengths, so these exist to
 // keep a stray script from storing megabytes in an unbounded TEXT column,
-// not to police real input. RUN-73 mirrors these in the forms when the
-// frontend switches to the API.
+// not to police real input. RUN-79 mirrors both in the Add/Edit run form as
+// maxLength (frontend/src/components/RunModal.tsx names this file as the
+// source of truth), so the two must change together.
 export const ROUTE_NAME_MAX_LENGTH = 120;
 export const NOTE_MAX_LENGTH = 2000;
 

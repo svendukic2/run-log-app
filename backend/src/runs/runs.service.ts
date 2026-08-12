@@ -5,6 +5,10 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { toDbDate, toIsoDate } from '../common/dates';
+import {
+  resolvePagination,
+  type PaginationQueryDto,
+} from '../common/pagination-query.dto';
 import { runLimitViolation, type RunMeasurements } from '../common/runLimits';
 import { NotificationsService } from '../notifications/notifications.service';
 import { isPrismaError, prismaConstraint } from '../prisma/prisma-errors';
@@ -31,6 +35,19 @@ import { UpdateRunDto } from './dto/update-run.dto';
 // a run looks like, and the route is exactly the field where disagreeing
 // means leaking. Re-exported so every existing importer keeps its path.
 export type { RunResponse };
+
+// One page of the caller's runs (RUN-79). The same envelope as every other
+// paginated list in the API - items, the unfiltered total, and the page
+// coordinates echoed back - so a client that can read one can read them all.
+// It lives here rather than in run-response.ts because the public profile
+// serves runs without an envelope: this is a property of the /api/runs
+// endpoint, not of what a run looks like.
+export interface RunListResponse {
+  items: RunResponse[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
 
 // The two FK constraints a run-create transaction can violate (P2003) since
 // the RUN-65 fan-out joined it: the run's own owner FK and the notification
@@ -103,14 +120,49 @@ export class RunsService {
 
   // Newest first, the order every screen shows runs in (the ordering and
   // its reasoning live in run-response.ts, shared with the public profile
-  // read). Unbounded on purpose for now: the frontend consumes the whole
-  // list; pagination belongs to the schema-hardening follow-up.
-  async findAll(userId: string): Promise<RunResponse[]> {
-    const rows = await this.prisma.run.findMany({
-      where: { userId },
-      orderBy: [...runsNewestFirstOrder],
-    });
-    return rows.map((row) => this.toResponse(row));
+  // read), paginated since RUN-79 through the same PaginationQueryDto and
+  // the same { items, total, page, pageSize } envelope the follow lists,
+  // the notifications list and the events list use.
+  //
+  // What pagination bounds here is the work ONE request may ask for, not the
+  // data the screen sees: the frontend store still holds the caller's whole
+  // history (weekly totals, records and insights are computed from it), so
+  // it walks the pages until a short one says there is no more. Anything
+  // that makes this endpoint answer with less than it was asked for - a
+  // default applied where the caller sent an explicit pageSize, a silent cap
+  // below MAX_PAGE_SIZE - quietly shrinks that history and makes the
+  // dashboard under-report without failing anything.
+  //
+  // Deliberately NOT one $transaction snapshot, unlike the notifications
+  // list: nothing here cross-checks `total` against the rows (the client
+  // stops on a short page, never on a count it trusts separately), so a
+  // count racing a concurrent write costs an informational number, not a
+  // wrong list.
+  async findAll(
+    userId: string,
+    query: PaginationQueryDto,
+  ): Promise<RunListResponse> {
+    const { page, pageSize, skip } = resolvePagination(query);
+    const [rows, total] = await Promise.all([
+      this.prisma.run.findMany({
+        where: { userId },
+        // The shared constant, never a copy: RUN-78 is adding a createdAt
+        // tiebreak to it, and a second inlined ordering here is exactly how
+        // this list and the public profile's would start disagreeing about
+        // which same-day run comes first - which, under pagination, is a
+        // row straddling a page boundary rather than a cosmetic reorder.
+        orderBy: [...runsNewestFirstOrder],
+        skip,
+        take: pageSize,
+      }),
+      this.prisma.run.count({ where: { userId } }),
+    ]);
+    return {
+      items: rows.map((row) => this.toResponse(row)),
+      total,
+      page,
+      pageSize,
+    };
   }
 
   async findOne(userId: string, id: string): Promise<RunResponse> {

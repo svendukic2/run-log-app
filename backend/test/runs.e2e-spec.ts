@@ -2,13 +2,18 @@ import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { PrismaService } from './../src/prisma/prisma.service';
-import type { RunResponse } from './../src/runs/runs.service';
+import type { RunListResponse, RunResponse } from './../src/runs/runs.service';
 import { createE2eApp, signupUser } from './create-test-app';
 
-// supertest types response.body as any; these two keep the assertions
+// supertest types response.body as any; these three keep the assertions
 // type-checked instead of sprinkling casts through every test.
 function runBody(response: request.Response): RunResponse {
   return response.body as RunResponse;
+}
+
+// GET /api/runs answers the shared pagination envelope since RUN-79.
+function listBody(response: request.Response): RunListResponse {
+  return response.body as RunListResponse;
 }
 
 function errorMessages(response: request.Response): string[] {
@@ -127,9 +132,29 @@ describe('Runs API (e2e)', () => {
       .set(auth)
       .expect(200);
 
-    expect(
-      (response.body as RunResponse[]).map((run) => run.routeName),
-    ).toEqual(['Newer', 'Older']);
+    expect(listBody(response).items.map((run) => run.routeName)).toEqual([
+      'Newer',
+      'Older',
+    ]);
+    expect(listBody(response)).toMatchObject({ total: 2, page: 1 });
+
+    // RUN-79, against real skip/take: a page is a window on that same
+    // ordering, and `total` still counts everything behind it - which is
+    // what lets the store walk to the end instead of stopping at what one
+    // request happened to return.
+    const secondPage = await request(server)
+      .get('/api/runs?page=2&pageSize=1')
+      .set(auth)
+      .expect(200);
+
+    expect(listBody(secondPage).items.map((run) => run.routeName)).toEqual([
+      'Older',
+    ]);
+    expect(listBody(secondPage)).toMatchObject({
+      total: 2,
+      page: 2,
+      pageSize: 1,
+    });
   });
 
   it('round-trips one run through GET /api/runs/:id', async () => {
@@ -187,7 +212,8 @@ describe('Runs API (e2e)', () => {
       .get('/api/runs')
       .set(auth)
       .expect(200);
-    expect(list.body).toEqual([]);
+    expect(listBody(list).items).toEqual([]);
+    expect(listBody(list).total).toBe(0);
   });
 
   it('404s with a message on a missing id for GET, PATCH and DELETE', async () => {

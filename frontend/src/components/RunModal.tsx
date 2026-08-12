@@ -44,6 +44,23 @@ const FIELD_IDS: Record<RunFormField, string> = {
 };
 const FIELD_ORDER: RunFormField[] = ['routeName', 'distance', 'duration', 'date'];
 
+// Mirrors ROUTE_NAME_MAX_LENGTH and NOTE_MAX_LENGTH in the backend's
+// create-run.dto.ts, which is the source of truth for both. Hand-mirrored
+// because the frontend cannot import across the app boundary - the same wart
+// CLAUDE.md documents for HelloResponse, and the same shape RUN-62 used for
+// the search bound in PeopleView. Without them a runner can type 3000
+// characters and learn about the limit from a rejected save (RUN-79 AC1).
+const ROUTE_NAME_MAX_LENGTH = 120;
+const NOTE_MAX_LENGTH = 2000;
+
+// maxLength refuses further typing silently, which is invisible and fine for
+// a 2000 character note nobody reaches. The route name is different: 120
+// characters is reachable by pasting, and a name that arrives truncated with
+// no explanation looks like the app ate it. One line, and only once the
+// bound is actually reached - not a character counter ticking from the
+// first keystroke.
+const ROUTE_NAME_LIMIT_HINT = `Route names stop at ${ROUTE_NAME_MAX_LENGTH} characters.`;
+
 // Two steps since RUN-54 (Figma "STEP 1 OF 2" / "STEP 2 OF 2"): the run's
 // details, then the optional route. The order is what AC1 asks for - the map
 // only opens on a valid form - and it is also the only order that lets the
@@ -272,6 +289,10 @@ export default function RunModal({ run, onClose }: RunModalProps) {
               placeholder="e.g. Evening tempo"
               value={values.routeName}
               onChange={(value) => setValue('routeName', value)}
+              maxLength={ROUTE_NAME_MAX_LENGTH}
+              hint={
+                values.routeName.length >= ROUTE_NAME_MAX_LENGTH ? ROUTE_NAME_LIMIT_HINT : undefined
+              }
               error={errors.routeName}
             />
 
@@ -323,6 +344,7 @@ export default function RunModal({ run, onClose }: RunModalProps) {
               placeholder="How did it feel? Terrain, weather, splits…"
               value={values.note}
               onChange={(value) => setValue('note', value)}
+              maxLength={NOTE_MAX_LENGTH}
             />
           </div>
 

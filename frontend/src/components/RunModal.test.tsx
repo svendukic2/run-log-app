@@ -71,6 +71,11 @@ describe('Add run modal (RUN-23)', () => {
     // The caret starts in the first field, and the page behind cannot scroll.
     expect(screen.getByLabelText('Route name')).toHaveFocus();
     expect(document.body.style.overflow).toBe('hidden');
+
+    // The API's own bounds reach the elements (RUN-79 AC1): the form stops
+    // typing where the request would have been rejected.
+    expect(screen.getByLabelText('Route name')).toHaveAttribute('maxlength', '120');
+    expect(screen.getByLabelText('Note (optional)')).toHaveAttribute('maxlength', '2000');
   });
 
   it('creates the run and closes when the form is valid (AC2)', async () => {

@@ -406,14 +406,15 @@ describe('Events API (e2e)', () => {
     expect(JSON.stringify(outsideWindow.body)).toContain('Boundary week');
     const dora = await signupTestUser(app, 'event-dora');
     await logRun(dora, start, 4, created.id).expect(400);
-    // Nothing was stored by either rejection.
+    // Nothing was stored by either rejection. The runs list is paginated since
+    // RUN-79, so the rows are in the envelope.
     const doraRuns = (
       await request(app.getHttpServer())
         .get('/api/runs')
         .set(dora.auth)
         .expect(200)
-    ).body as unknown[];
-    expect(doraRuns).toEqual([]);
+    ).body as { items: unknown[]; total: number };
+    expect(doraRuns).toMatchObject({ items: [], total: 0 });
     taggedEventId = created.id;
     anaTaggedRunId = anaFirst.id;
 
