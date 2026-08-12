@@ -7,7 +7,8 @@ import {
   ProfileLoading,
   ProfileNotFound,
 } from '@/components/publicProfileStates';
-import { CARD, RouteSketch, StatCard } from '@/components/runDetailParts';
+import RouteCard from '@/components/RouteCard';
+import { CARD, StatCard } from '@/components/runDetailParts';
 import { usePublicProfile } from '@/lib/publicProfile';
 import { personRoute } from '@/lib/routes';
 import { EFFORT_CHIP, formatDate, formatDistanceKm, formatDuration, formatPace } from '@/lib/runs';
@@ -22,8 +23,9 @@ import { EFFORT_CHIP, formatDate, formatDistanceKm, formatDuration, formatPace }
 // The run comes from the profile's own payload, not a second endpoint, so
 // it inherits that response's privacy gate for free: a private profile
 // carries no runs, so there is no run here to find. The Route card is gated
-// once more by showRoutes (route maps themselves are RUN-72; the decorative
-// sketch stands in for one until then).
+// once more by showRoutes, and a route that IS granted arrives with its first
+// and last ~300 m already cut off server-side (RUN-55 AC4) - this view draws
+// what it was sent and decides nothing.
 export default function PublicRunDetailView({ userId, runId }: { userId: string; runId: string }) {
   const { status, profile, error } = usePublicProfile(userId);
 
@@ -115,26 +117,15 @@ export default function PublicRunDetailView({ userId, runId }: { userId: string;
       </div>
 
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
-        {/* showRoutes off means no Route card at all, not a blurred one:
-            the response carries no route data either way (RUN-72 adds the
-            real maps and the data behind them). */}
-        {profile.showRoutes && (
-          <section aria-labelledby="route-title" className={CARD}>
-            <div className="border-b border-line px-[28px] py-[20px]">
-              <h2
-                id="route-title"
-                className="font-display text-[17px] font-bold tracking-[-0.2px] text-text-primary"
-              >
-                Route
-              </h2>
-            </div>
-            <div className="p-[6px]">
-              <div className="rounded-[14px] bg-muted px-6 py-10">
-                <RouteSketch />
-              </div>
-            </div>
-          </section>
-        )}
+        {/* showRoutes off means no Route card at all, not a blurred one: the
+            response carries no route data either way (RUN-55 AC4, "no map
+            renders"), and the stats beside it are untouched.
+
+            On means the card renders - with the real map when this run has a
+            route, and with the v1 sketch when it does not. The card cannot tell
+            those apart from "the trim left nothing to serve", which is the
+            point: both arrive as `route: null`. */}
+        {profile.showRoutes && <RouteCard route={run.route} />}
 
         <div className="flex flex-col gap-5">
           {/* A run without a note shows no Note card at all (A11); a

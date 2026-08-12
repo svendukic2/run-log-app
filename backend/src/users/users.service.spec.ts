@@ -1,6 +1,7 @@
 import { NotFoundException } from '@nestjs/common';
 import { toDbDate } from '../common/dates';
 import { PrismaService } from '../prisma/prisma.service';
+import { trimPolylineEnds } from '../runs/route-trim';
 import { UsersService } from './users.service';
 
 // Mocks rather than the e2e suite, for the same reason PrivacyService uses
@@ -211,17 +212,25 @@ describe('UsersService.findPublicProfile', () => {
     expect(profile.runs?.[0]).toMatchObject({ id: 'run-1', route: null });
   });
 
-  it('serves the route itself once the owner opted in (RUN-54)', async () => {
+  // RUN-54 opened the route to a granted visitor; RUN-55 AC4 narrows what
+  // "the route" means for one - the ends are cut off and the tapped points are
+  // dropped, because the first and last of those ARE the runner's address. The
+  // trim itself is covered in runs/route-trim.spec.ts; what matters here is
+  // that this response is built from the trimmed variant and not the stored
+  // one, which is the whole difference between a privacy control and a comment.
+  it('serves a granted visitor the route TRIMMED (RUN-55 AC4)', async () => {
     const { service } = makeService({ profilePublic: true, showRoutes: true });
 
     const profile = await service.findPublicProfile(VISITOR, OWNER);
 
     expect(profile.showRoutes).toBe(true);
     expect(profile.runs?.[0].route).toEqual({
-      polyline: RUN_ROUTE.routePolyline,
-      waypoints: RUN_ROUTE.routeWaypoints,
+      polyline: trimPolylineEnds(RUN_ROUTE.routePolyline),
+      waypoints: [],
       source: RUN_ROUTE.routeSource,
+      trimmed: true,
     });
+    expect(profile.runs?.[0].route?.polyline).not.toBe(RUN_ROUTE.routePolyline);
   });
 
   // The owner's own profile ignores the toggles entirely (AC3), routes
@@ -234,8 +243,13 @@ describe('UsersService.findPublicProfile', () => {
 
     const profile = await service.findPublicProfile(OWNER, OWNER);
 
-    expect(profile.runs?.[0].route).toMatchObject({
+    // Whole and untrimmed, waypoints included: the trim protects you from
+    // strangers, and hiding your own start from you would just be a broken map.
+    expect(profile.runs?.[0].route).toEqual({
       polyline: RUN_ROUTE.routePolyline,
+      waypoints: RUN_ROUTE.routeWaypoints,
+      source: RUN_ROUTE.routeSource,
+      trimmed: false,
     });
   });
 

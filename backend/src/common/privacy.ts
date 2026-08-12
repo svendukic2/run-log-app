@@ -17,7 +17,7 @@ export interface PrivacySettings {
   // Whether this account is ranked on leaderboards, global and per event.
   showOnLeaderboard: boolean;
   // Whether this account's route maps are shown to other runners (the
-  // reader is RUN-63's profile page; route maps themselves are RUN-72).
+  // readers are RUN-63's profile page and RUN-55's run detail map).
   showRoutes: boolean;
 }
 
@@ -68,9 +68,7 @@ export function canViewProfile(
 
 // Whether this account's route maps may be shown to this viewer. Strictly
 // narrower than canViewProfile: a public profile with showRoutes off serves
-// its runs without their routes, so the grant is the AND of the two. Route
-// maps themselves are RUN-72 and render nothing yet; the gate exists now so
-// the payload never carried route data in the meantime.
+// its runs without their routes, so the grant is the AND of the two.
 export function canViewRoutes(
   settings: Pick<PrivacySettings, 'profilePublic' | 'showRoutes'>,
   viewerId: string,
@@ -78,4 +76,23 @@ export function canViewRoutes(
 ): boolean {
   if (viewerId === ownerId) return true;
   return canViewProfile(settings, viewerId, ownerId) && settings.showRoutes;
+}
+
+// How much of a route this viewer may be sent (RUN-55 AC3/AC4). A boolean is
+// no longer enough, because a granted route is not the same route: the owner
+// gets the whole thing, and everybody else gets it with the ends cut off, since
+// a route that starts at somebody's front door IS their address. Three-valued
+// on purpose - 'trimmed' has to be a state the payload builder must handle
+// rather than a flag it can leave false.
+export type RouteVisibility = 'full' | 'trimmed' | 'hidden';
+
+export function routeVisibility(
+  settings: Pick<PrivacySettings, 'profilePublic' | 'showRoutes'>,
+  viewerId: string,
+  ownerId: string,
+): RouteVisibility {
+  // Your own runs are never trimmed: the trim protects you from strangers, and
+  // hiding your own start from you would just be a broken map.
+  if (viewerId === ownerId) return 'full';
+  return canViewRoutes(settings, viewerId, ownerId) ? 'trimmed' : 'hidden';
 }

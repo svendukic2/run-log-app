@@ -88,10 +88,10 @@ export class RunsService {
   ) {}
 
   // Every response from this service is the OWNER's own run, so the route
-  // always comes with it: privacy gates who may see someone ELSE's routes
-  // (users.service, canViewRoutes), never your own.
+  // always comes with it, whole and untrimmed: privacy gates who may see
+  // someone ELSE's routes (users.service, routeVisibility), never your own.
   private toResponse(row: RunRow): RunResponse {
-    return toRunResponse(row, { withRoute: true });
+    return toRunResponse(row, { routeVisibility: 'full' });
   }
 
   // Newest first, the order every screen shows runs in (the ordering and

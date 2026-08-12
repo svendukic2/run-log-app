@@ -146,16 +146,33 @@ until the server answered, and the failure is an inline `role="alert"` line the
 caller owns. Ask "would a second screen read this?" before adding a store.
 
 **Leaflet is client-only, and that is enforced by the build, not by taste
-(RUN-54).** `frontend/src/components/RouteMapPicker.tsx` imports `leaflet` and
-its CSS, both of which touch `window` at module scope, so it is reachable only
-through `next/dynamic` with `ssr: false` (see `RouteStep.tsx`). Import it
-directly anywhere and `npm run build` fails with `window is not defined`. Under
-Jest it never runs for real: `jest.config.ts` maps `^leaflet$` to
-`src/test/leafletMock.ts` for **every** test, because the map sits inside the Add
-run modal and any test that opens that modal would otherwise boot a map in jsdom.
-The stub records what the picker drew and exposes `fireMapClick` /
-`fireMarkerDragEnd` / `fireMarkerClick`, so the component's own wiring stays
-under test.
+(RUN-54).** There are two maps, and both obey the same rule:
+`frontend/src/components/RouteMapPicker.tsx` (the editable one in the Add/Edit
+modal) and `RouteMap.tsx` (the read-only one on run detail, RUN-55). Each imports
+`leaflet` and its CSS, both of which touch `window` at module scope, so each is
+reachable only through `next/dynamic` with `ssr: false` (see `RouteStep.tsx` and
+`RouteCard.tsx`). Import either directly anywhere and `npm run build` fails with
+`window is not defined`. That dynamic import is also what makes the display map's
+tiles lazy: a run with no route never loads the chunk. Shared values the two must
+not drift on (the route colour, the OSM tile URL and the attribution the licence
+requires) live in `components/routeMapStyle.ts`, because Leaflet takes them as
+values and they cannot come from `globals.css`. Under Jest neither map runs for
+real: `jest.config.ts` maps `^leaflet$` to `src/test/leafletMock.ts` for **every**
+test, because the picker sits inside the Add run modal and any test that opens
+that modal would otherwise boot a map in jsdom. The stub records what was drawn
+and exposes `fireMapClick` / `fireMarkerDragEnd` / `fireMarkerClick`, so each
+component's own wiring stays under test.
+
+**A route served to somebody else is not the same route (RUN-55).** Route data is
+gated three ways rather than two: `routeVisibility` in `backend/src/common/privacy.ts`
+answers `'full'` (the owner), `'trimmed'` (a visitor the owner granted) or
+`'hidden'`, and `toRunResponse` takes that answer as a **required** parameter with
+no default. A trimmed route has its first and last ~300 m cut off and its
+waypoints dropped server-side (`backend/src/runs/route-trim.ts`) - the polyline
+codec there mirrors `frontend/src/lib/polyline.ts`, which is the usual
+hand-mirrored-contract tax. Do the cutting on the server, never in the client: the
+rule this app applies to every gated field is that what a viewer may not see is
+never in the payload.
 
 `frontend/src/lib/notifications.ts` (RUN-66) is app-wide but **ungated**: the
 bell it feeds is rendered by `PageHeader`, so it sits on every sidebar-reachable
