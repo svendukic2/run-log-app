@@ -78,7 +78,8 @@ export default function PublicRunDetailView({ userId, runId }: { userId: string;
           {`${profile.firstName} ${profile.lastName}`}
         </Link>
 
-        <h1 className="font-display text-[28px] font-bold tracking-[-0.6px] text-text-primary lg:text-[30px]">
+        {/* Same free-text guard as the owner's run detail (RUN-75, AC2). */}
+        <h1 className="min-w-0 font-display text-[28px] font-bold tracking-[-0.6px] break-words text-text-primary lg:text-[30px]">
           {run.routeName}
         </h1>
 
@@ -158,7 +159,9 @@ export default function PublicRunDetailView({ userId, runId }: { userId: string;
                   className="flex items-center justify-between gap-4 border-b border-line py-[14px] last:border-b-0"
                 >
                   <dt className="text-[14px] text-secondary">{row.label}</dt>
-                  <dd className="text-[14px] font-semibold text-text-primary">{row.value}</dd>
+                  <dd className="min-w-0 text-[14px] font-semibold break-words text-text-primary">
+                    {row.value}
+                  </dd>
                 </div>
               ))}
             </dl>

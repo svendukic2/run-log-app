@@ -131,7 +131,12 @@ export default function DeleteRunDialog({ run, onClose, onDeleted }: DeleteRunDi
           >
             Delete this run?
           </h2>
-          <p id={DESCRIPTION_ID} className="text-[13.5px] leading-[1.55] text-secondary">
+          {/* The dialog quotes a free-text route name, so it breaks rather
+              than widening the card (RUN-75, AC2). */}
+          <p
+            id={DESCRIPTION_ID}
+            className="text-[13.5px] leading-[1.55] break-words text-secondary"
+          >
             &ldquo;{run.routeName}&rdquo; will be permanently removed from your log. This action
             can&rsquo;t be undone.
           </p>

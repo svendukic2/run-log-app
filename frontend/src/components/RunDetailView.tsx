@@ -84,7 +84,11 @@ export default function RunDetailView({ runId }: { runId: string }) {
         </Link>
 
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
-          <h1 className="font-display text-[28px] font-bold tracking-[-0.6px] text-text-primary lg:text-[30px]">
+          {/* min-w-0 + break-words: a route name is free text, so one long
+              unbroken token would otherwise set the width of the page rather
+              than wrap inside it (RUN-75, AC2). Inert whenever the name fits,
+              which is every desktop case. */}
+          <h1 className="min-w-0 font-display text-[28px] font-bold tracking-[-0.6px] break-words text-text-primary lg:text-[30px]">
             {run.routeName}
           </h1>
           {/* Edit opens the Edit run modal (RUN-28, DET-2); Delete opens the
@@ -187,7 +191,11 @@ export default function RunDetailView({ runId }: { runId: string }) {
                   className="flex items-center justify-between gap-4 border-b border-line py-[14px] last:border-b-0"
                 >
                   <dt className="text-[14px] text-secondary">{row.label}</dt>
-                  <dd className="text-[14px] font-semibold text-text-primary">{row.value}</dd>
+                  {/* "Route name" repeats the free-text name here, so it needs
+                      the same guard the heading got (RUN-75, AC2). */}
+                  <dd className="min-w-0 text-[14px] font-semibold break-words text-text-primary">
+                    {row.value}
+                  </dd>
                 </div>
               ))}
             </dl>
