@@ -8,6 +8,9 @@ interface TextAreaProps {
   placeholder?: string;
   value: string;
   onChange: (value: string) => void;
+  // The API's own bound on this field, mirrored so typing stops where the
+  // request would have been rejected (RUN-79); see TextField.
+  maxLength?: number;
   error?: string;
 }
 
@@ -17,6 +20,7 @@ export default function TextArea({
   placeholder,
   value,
   onChange,
+  maxLength,
   error,
 }: TextAreaProps) {
   return (
@@ -28,6 +32,7 @@ export default function TextArea({
         id={id}
         name={id}
         rows={3}
+        maxLength={maxLength}
         placeholder={placeholder}
         value={value}
         onChange={(event) => onChange(event.target.value)}

@@ -4,9 +4,11 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { DEFAULT_PAGE_SIZE } from '../common/pagination-query.dto';
 import { Prisma } from '../generated/prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { runsNewestFirstOrder } from './run-response';
 import { RunsService } from './runs.service';
 
 // The owner every test acts as (RUN-57: all service methods are scoped).
@@ -78,6 +80,7 @@ describe('RunsService', () => {
   } = {
     run: {
       findMany: jest.fn(),
+      count: jest.fn(),
       findFirst: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
@@ -126,38 +129,76 @@ describe('RunsService', () => {
 
   it('lists only the callers runs, newest first with a deterministic tiebreak (AC2)', async () => {
     prisma.run.findMany.mockResolvedValue([row()]);
+    prisma.run.count.mockResolvedValue(1);
 
-    const runs = await service.findAll(USER_ID);
+    const list = await service.findAll(USER_ID, {});
 
-    // The owner is part of the query itself, not a JS filter (AC2).
-    //
-    // The ordering is the whole of RUN-78 AC4 on this side: createdAt sits
-    // between the calendar day and the id, so two runs logged on the same day
-    // come back in the order they were entered instead of in cuid order, and
-    // the id survives only for rows that predate that column. The client
-    // mirrors this list in compareRunsNewestFirst and the two have to agree.
+    // The owner is part of the query itself, not a JS filter (AC2). The
+    // ordering is asserted through the shared constant rather than a copy of
+    // its contents: this test's job is that findAll USES it, and a literal
+    // here would have to be edited every time the ordering gains a tiebreak.
     expect(prisma.run.findMany).toHaveBeenCalledWith({
       where: { userId: USER_ID },
-      orderBy: [{ date: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      orderBy: [...runsNewestFirstOrder],
+      skip: 0,
+      take: DEFAULT_PAGE_SIZE,
     });
+    // What that constant CONTAINS is pinned once, right here, because it is a
+    // contract rather than an implementation detail (merge of RUN-78 and
+    // RUN-79): createdAt sits between the calendar day and the id so same-day
+    // runs come back in the order they were entered, the id survives only for
+    // rows that predate that column, and frontend compareRunsNewestFirst
+    // mirrors this exact list. The two must never drift apart.
+    expect([...runsNewestFirstOrder]).toEqual([
+      { date: 'desc' },
+      { createdAt: 'desc' },
+      { id: 'desc' },
+    ]);
     // The response is the contract shape: date is a yyyy-mm-dd string,
     // createdAt an ISO instant, distanceKm a plain JSON number (never the
-    // stored Decimal, RUN-78 AC3) and userId stays internal.
-    expect(runs).toEqual([
-      {
-        id: 'run-1',
-        routeName: 'Morning loop',
-        distanceKm: 8.2,
-        durationSeconds: 2535,
-        date: '2026-07-14',
-        createdAt: '2026-07-14T06:31:00.000Z',
-        effort: 'Medium',
-        note: '',
-        // Every run carries the route key; null is a run with no route
-        // (RUN-54 AC3), which is what the list looked like before it existed.
-        route: null,
-      },
-    ]);
+    // stored Decimal, RUN-78 AC3) and userId stays internal, inside the
+    // shared pagination envelope (RUN-79).
+    expect(list).toEqual({
+      items: [
+        {
+          id: 'run-1',
+          routeName: 'Morning loop',
+          distanceKm: 8.2,
+          durationSeconds: 2535,
+          date: '2026-07-14',
+          createdAt: '2026-07-14T06:31:00.000Z',
+          effort: 'Medium',
+          note: '',
+          // Every run carries the route key; null is a run with no route
+          // (RUN-54 AC3), which is what the list looked like before it
+          // existed.
+          route: null,
+        },
+      ],
+      total: 1,
+      page: 1,
+      pageSize: DEFAULT_PAGE_SIZE,
+    });
+  });
+
+  // The half of RUN-79 that AC4 depends on: an explicit pageSize must reach
+  // the query untouched, because the store asks for 100 at a time and walks
+  // until a short page ends the walk. A pageSize the endpoint quietly
+  // overrides would end that walk early on a full page, and the dashboard
+  // would under-report with nothing failing.
+  it('pages on the callers request and echoes the page it served (RUN-79)', async () => {
+    prisma.run.findMany.mockResolvedValue([row({ id: 'run-3' })]);
+    prisma.run.count.mockResolvedValue(201);
+
+    const list = await service.findAll(USER_ID, { page: 3, pageSize: 100 });
+
+    expect(prisma.run.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ skip: 200, take: 100 }),
+    );
+    // `total` counts the whole history, not the page: the client needs to
+    // know there are 201 runs behind these.
+    expect(list).toMatchObject({ total: 201, page: 3, pageSize: 100 });
+    expect(list.items).toHaveLength(1);
   });
 
   it('returns one run by id scoped to the owner and 404s on a miss', async () => {
