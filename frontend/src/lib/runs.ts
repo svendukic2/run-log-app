@@ -94,18 +94,60 @@ function parseRunBody(body: unknown): Run {
   return body;
 }
 
+// GET /api/runs is paginated since RUN-79, and this store still needs the
+// WHOLE history: the dashboard's weekly totals, the records, the goal
+// progress and insights.ts all compute from the full array, so a store
+// holding the first page would not fail - it would quietly under-report.
+// The pagination therefore bounds one request's work, not what the screens
+// see: ask for the server's maximum (MAX_PAGE_SIZE in
+// backend/src/common/pagination-query.dto.ts, the source of truth) and walk
+// until a short page ends the walk.
+//
+// A runner with 300 runs makes 4 requests instead of 1. The ceiling turns a
+// server that somehow keeps answering full pages into a loud error rather
+// than an infinite loop, and it is far above any real history: 50 pages is
+// 5000 runs, roughly a decade of daily running.
+const LOAD_PAGE_SIZE = 100;
+const MAX_LOAD_PAGES = 50;
+
+// Termination is on a SHORT page, never on `collected.length >= total`
+// alone: `total` is counted per request, so a run saved in another tab
+// mid-walk can keep the collected count one behind a total that grows under
+// it. A short page is a fact about the page in hand.
 async function fetchRuns(): Promise<Run[]> {
-  const response = await apiFetch('/api/runs');
-  if (!response.ok) {
-    throw new ApiError(`Loading runs failed (${response.status}).`, response.status);
+  const collected: Run[] = [];
+  for (let page = 1; page <= MAX_LOAD_PAGES; page += 1) {
+    const response = await apiFetch(`/api/runs?page=${page}&pageSize=${LOAD_PAGE_SIZE}`);
+    if (!response.ok) {
+      throw new ApiError(`Loading runs failed (${response.status}).`, response.status);
+    }
+    const body: unknown = await response.json();
+    const envelope = body as { items?: unknown; total?: unknown };
+    // A malformed body is treated as an error, not as an empty log: an empty
+    // dashboard lies, a retry card does not. Note this holds mid-walk too -
+    // the throw propagates to loadRuns, which publishes the error state, so
+    // a failure on page 2 can never leave a half-loaded cache reading as a
+    // complete history.
+    if (
+      !Array.isArray(envelope?.items) ||
+      !envelope.items.every(isRun) ||
+      typeof envelope.total !== 'number'
+    ) {
+      throw new ApiError('The server returned runs in an unexpected shape.');
+    }
+    collected.push(...envelope.items);
+    if (collected.length >= envelope.total || envelope.items.length < LOAD_PAGE_SIZE) {
+      // Offset pages are not one snapshot: a run added from another tab
+      // between two requests shifts the boundary and the run on it arrives
+      // twice, which would reach React as a duplicate key. Last one wins.
+      return dedupeRunsById(collected);
+    }
   }
-  const body: unknown = await response.json();
-  // A malformed body is treated as an error, not as an empty log: an empty
-  // dashboard lies, a retry card does not.
-  if (!Array.isArray(body) || !body.every(isRun)) {
-    throw new ApiError('The server returned runs in an unexpected shape.');
-  }
-  return body;
+  throw new ApiError('Loading runs failed (too many pages).');
+}
+
+function dedupeRunsById(runs: Run[]): Run[] {
+  return [...new Map(runs.map((run) => [run.id, run])).values()];
 }
 
 /* One-time import of v1 localStorage data (RUN-48) ------------------------- */

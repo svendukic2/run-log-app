@@ -2,7 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { PrismaService } from './../src/prisma/prisma.service';
-import type { RunResponse } from './../src/runs/runs.service';
+import type { RunListResponse, RunResponse } from './../src/runs/runs.service';
 import { createE2eApp, E2E_PASSWORD, signupUser } from './create-test-app';
 
 // RUN-57 AC5: two registered users, complete data isolation between them.
@@ -67,11 +67,15 @@ describe('User data isolation (e2e)', () => {
       .expect(200);
 
     expect(
-      (listA.body as RunResponse[]).map((r) => r.routeName).sort(),
+      (listA.body as RunListResponse).items.map((r) => r.routeName).sort(),
     ).toEqual(['A first', 'A second']);
-    expect((listB.body as RunResponse[]).map((r) => r.routeName)).toEqual([
-      'B only',
-    ]);
+    expect(
+      (listB.body as RunListResponse).items.map((r) => r.routeName),
+    ).toEqual(['B only']);
+    // The count is scoped too: a total that counted every run in the table
+    // would tell A exactly how many runs B has logged.
+    expect((listA.body as RunListResponse).total).toBe(2);
+    expect((listB.body as RunListResponse).total).toBe(1);
   });
 
   it("404s A reading, patching and deleting B's run, without confirming it exists (AC3)", async () => {
@@ -125,7 +129,7 @@ describe('User data isolation (e2e)', () => {
       .get('/api/runs')
       .set(authC)
       .expect(200);
-    expect(list.body).toEqual([]);
+    expect((list.body as RunListResponse).items).toEqual([]);
     await request(app.getHttpServer())
       .get(`/api/runs/${runOfB}`)
       .set(authC)

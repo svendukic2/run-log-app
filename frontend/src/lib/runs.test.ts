@@ -9,6 +9,7 @@ import {
   rejectRunsNamed,
   restoreRunsApi,
   seedLegacyRuns,
+  seedRuns,
 } from '@/test/runsApiMock';
 import {
   __resetRunsStoreForTests,
@@ -422,6 +423,34 @@ describe('store (API-backed since RUN-48)', () => {
     window.localStorage.clear();
   });
 
+  // The RUN-79 regression guard, and the whole reason the load walks pages:
+  // /api/runs is paginated now, but the dashboard, the records, the weekly
+  // goal and insights.ts all compute from the FULL array this store holds.
+  // A store that stopped at the server's first page would not fail anything
+  // - it would silently under-report every one of them (AC4).
+  it('loads the whole history across more than one server page (RUN-79 AC4)', async () => {
+    seedRuns(
+      Array.from({ length: 250 }, (_, index) => ({
+        routeName: `Run ${index + 1}`,
+        distanceKm: 8.2,
+        durationSeconds: 2535,
+        // Same day throughout, so paging depends on the id tiebreak rather
+        // than on conveniently distinct dates.
+        date: '2026-07-14',
+        effort: 'Medium' as const,
+        note: '',
+      })),
+    );
+    __resetRunsStoreForTests(null); // re-arm the load against the seeded backend
+
+    render(React.createElement(StatusProbe));
+    await waitFor(() => expect(screen.getByTestId('runs-status')).toHaveTextContent('ready'));
+
+    expect(getRuns()).toHaveLength(250);
+    // No page landed twice: duplicate ids would reach React as duplicate keys.
+    expect(new Set(getRuns().map((run) => run.id)).size).toBe(250);
+  });
+
   it('starts empty and keeps what it is given', async () => {
     expect(getRuns()).toEqual([]);
 
@@ -618,7 +647,6 @@ describe('store (API-backed since RUN-48)', () => {
     expect(() => render(React.createElement(Ungated))).toThrow(/AppDataBoundary/);
     consoleError.mockRestore();
   });
-
 });
 
 describe('one-time import of v1 localStorage runs (RUN-48)', () => {

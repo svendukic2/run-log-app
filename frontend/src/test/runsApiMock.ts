@@ -375,7 +375,7 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
     }
   }
 
-  if (url === '/api/runs' && method === 'GET') {
+  if (url.split('?')[0] === '/api/runs' && method === 'GET') {
     if (holdLoading) {
       // Never resolves on its own; rejects if the caller's timeout aborts,
       // like a real fetch would.
@@ -385,7 +385,21 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
         );
       });
     }
-    return Promise.resolve(jsonResponse(200, sorted()));
+    // Paginated like the real endpoint since RUN-79, envelope included. A
+    // mock that kept answering with the whole array would let the store's
+    // page walk go untested and green while production stopped at page one.
+    const params = new URLSearchParams(url.split('?')[1] ?? '');
+    const page = Number(params.get('page') ?? '1');
+    const pageSize = Number(params.get('pageSize') ?? '20');
+    const all = sorted();
+    return Promise.resolve(
+      jsonResponse(200, {
+        items: all.slice((page - 1) * pageSize, page * pageSize),
+        total: all.length,
+        page,
+        pageSize,
+      }),
+    );
   }
 
   if (url === '/api/runs' && method === 'POST') {
