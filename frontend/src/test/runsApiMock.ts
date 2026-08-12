@@ -390,7 +390,18 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
     // page walk go untested and green while production stopped at page one.
     const params = new URLSearchParams(url.split('?')[1] ?? '');
     const page = Number(params.get('page') ?? '1');
+    // DEFAULT_PAGE_SIZE and MAX_PAGE_SIZE from the backend's
+    // pagination-query.dto.ts, hand-mirrored like every other cross-app
+    // constant. The cap is enforced rather than obeyed politely (review fix):
+    // the store asks for exactly 100, so a mock that served 200 would let
+    // someone raise LOAD_PAGE_SIZE, watch the suite stay green, and ship a
+    // store that 400s on its first load for every user.
     const pageSize = Number(params.get('pageSize') ?? '20');
+    if (pageSize > 100) {
+      return Promise.resolve(
+        jsonResponse(400, { message: ['pageSize must not be greater than 100'] }),
+      );
+    }
     const all = sorted();
     return Promise.resolve(
       jsonResponse(200, {

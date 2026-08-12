@@ -78,10 +78,12 @@ async function readDraft(page: Page): Promise<{ profile?: unknown; goal?: unknow
 }
 
 // This account's runs, straight from the API - the truth the UI renders.
+// The endpoint is paginated since RUN-79, so this reads the envelope's items;
+// one page of 100 covers every account this suite creates.
 async function runsOf(request: APIRequestContext, account: SeededAccount): Promise<unknown[]> {
   const response = await request.get('/api/runs', { headers: account.authHeaders });
   expect(response.ok()).toBeTruthy();
-  return (await response.json()) as unknown[];
+  return ((await response.json()) as { items: unknown[] }).items;
 }
 
 // Walks the Sign up form; the caller is on /signup afterwards' next stop,

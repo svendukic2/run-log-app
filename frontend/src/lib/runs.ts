@@ -106,14 +106,22 @@ function parseRunBody(body: unknown): Run {
 // A runner with 300 runs makes 4 requests instead of 1. The ceiling turns a
 // server that somehow keeps answering full pages into a loud error rather
 // than an infinite loop, and it is far above any real history: 50 pages is
-// 5000 runs, roughly a decade of daily running.
+// 5000 runs, well past a decade of daily running.
 const LOAD_PAGE_SIZE = 100;
 const MAX_LOAD_PAGES = 50;
 
-// Termination is on a SHORT page, never on `collected.length >= total`
-// alone: `total` is counted per request, so a run saved in another tab
-// mid-walk can keep the collected count one behind a total that grows under
-// it. A short page is a fact about the page in hand.
+// Termination is on a SHORT page and on nothing else. `total` is emphatically
+// NOT a stopping condition (review fix): the backend counts it in a separate
+// query from the page, so between the two, 50 runs landing from another
+// device make a full page arrive alongside a total the walk has already
+// reached - and stopping there drops every run past it, which is the exact
+// silent under-report AC4 exists to prevent. A short page is a fact about the
+// page in hand rather than a claim about a moving table. The cost of not
+// trusting it is one extra request when the history is an exact multiple of
+// 100, which answers empty and ends the walk.
+//
+// `total` is still validated: a body without it is not this endpoint's shape,
+// and failing loudly beats reading a stranger's payload as a run list.
 async function fetchRuns(): Promise<Run[]> {
   const collected: Run[] = [];
   for (let page = 1; page <= MAX_LOAD_PAGES; page += 1) {
@@ -136,10 +144,15 @@ async function fetchRuns(): Promise<Run[]> {
       throw new ApiError('The server returned runs in an unexpected shape.');
     }
     collected.push(...envelope.items);
-    if (collected.length >= envelope.total || envelope.items.length < LOAD_PAGE_SIZE) {
+    if (envelope.items.length < LOAD_PAGE_SIZE) {
       // Offset pages are not one snapshot: a run added from another tab
       // between two requests shifts the boundary and the run on it arrives
       // twice, which would reach React as a duplicate key. Last one wins.
+      // A run DELETED mid-walk shifts the boundary the other way and the run
+      // that slides across it is skipped instead - dedupe cannot repair that,
+      // and it is accepted: the walk is the owner's own history, one deleted
+      // run is one row missing until the next load, and the alternative is
+      // cursor pagination for a list nobody else writes to.
       return dedupeRunsById(collected);
     }
   }
@@ -237,8 +250,21 @@ function toRunsError(error: unknown): RunsError {
   return { message: 'Something went wrong loading your runs.', terminal: false };
 }
 
+// A load requested while another is in flight must not be dropped (the
+// events store hit this first and RUN-79 made it reachable here): the
+// in-flight walk publishes pages fetched BEFORE whatever prompted the new
+// request, so coalescing into it would silently lose that mutation. The Add
+// run button lives in PageHeader, outside AppDataBoundary, so a save during
+// the walk is an ordinary thing to do - and the walk is several sequential
+// requests wide now rather than one. The queued flag makes the settling load
+// run once more with fresh reads.
+let reloadQueued = false;
+
 async function loadRuns(): Promise<void> {
-  if (loadInFlight) return;
+  if (loadInFlight) {
+    reloadQueued = true;
+    return;
+  }
   loadInFlight = true;
   publish({ ...snapshot, status: 'loading', runs: [], error: null });
   try {
@@ -269,6 +295,10 @@ async function loadRuns(): Promise<void> {
     publish({ ...snapshot, status: 'error', runs: [], error: toRunsError(error) });
   } finally {
     loadInFlight = false;
+    if (reloadQueued) {
+      reloadQueued = false;
+      void loadRuns();
+    }
   }
 }
 
@@ -470,6 +500,7 @@ export function __resetRunsStoreForTests(runs: Run[] | null = null): void {
   }
   loadStarted = runs !== null;
   loadInFlight = false;
+  reloadQueued = false;
   snapshot =
     runs === null
       ? INITIAL_SNAPSHOT

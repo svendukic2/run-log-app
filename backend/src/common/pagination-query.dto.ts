@@ -5,7 +5,11 @@ import { Transform } from 'class-transformer';
 import { IsInt, IsOptional, Max, Min } from 'class-validator';
 
 export const DEFAULT_PAGE_SIZE = 20;
-// Caps the work a single request can ask for; the frontend pages at 20.
+// Caps the work a single request can ask for. Note that two stores are
+// pinned to exactly this number rather than paging at 20: the events store
+// and (since RUN-79) the runs store both walk every page to build a complete
+// in-memory list, so lowering this cap does not shrink their requests, it
+// 400s their first one.
 export const MAX_PAGE_SIZE = 100;
 // Bounds skip = (page - 1) * pageSize: without a ceiling, an astronomical
 // page passes @IsInt (1e20 is still an "integer" to JS) and overflows the

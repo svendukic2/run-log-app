@@ -65,12 +65,25 @@ export default function TextField({
         <p id={`${id}-error`} role="alert" className="text-[13px] text-accent-pressed">
           {error}
         </p>
-      ) : shownHint ? (
+      ) : maxLength !== undefined ? (
         // role="status", not "alert": this is polite information, and an
         // assertive announcement on every keystroke past the bound would talk
         // over the user.
-        <p id={`${id}-hint`} role="status" className="text-[13px] text-tertiary">
-          {shownHint}
+        //
+        // Mounted from the start and EMPTY until there is something to say,
+        // unlike the error line above (review fix): a live region inserted
+        // into the DOM already holding its text is frequently not announced
+        // at all, which would leave the hint visible to sighted users only -
+        // and a silently truncated paste is precisely the case a sighted user
+        // catches and a screen reader user does not. `sr-only` takes the
+        // empty one out of the flow, so it cannot add the column gap an
+        // empty <p> otherwise would.
+        <p
+          id={`${id}-hint`}
+          role="status"
+          className={shownHint ? 'text-[13px] text-tertiary' : 'sr-only'}
+        >
+          {shownHint ?? ''}
         </p>
       ) : null}
     </div>
