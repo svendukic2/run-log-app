@@ -856,11 +856,15 @@ empty table, which is a bad thing to discover mid-demo.
   global weekly leaderboard reads that week and nothing else.
 - **A follow web** centred on the primary account, so its Following and Followers tabs
   are populated in both directions.
-- **One active event** whose window contains today, with nine participants whose runs
-  inside that window are **tagged to it** (RUN-76 AC5), so the event leaderboard and its
-  run feed are populated rather than a list of zeros. Tagging is what makes a run count
-  for an event, so an untagged demo would look broken; runs older than the window stay
-  untagged, which is also what shows the feed filtering rather than listing everything.
+- **One active event** whose window contains today, with nine participants and **exactly
+  one tagged run each** (RUN-76 AC5, AC6), so the event leaderboard and its run feed are
+  populated rather than a list of zeros. Tagging is what makes a run count for an event,
+  so an untagged demo would look broken - but tagging every in-window run would put on the
+  order of a hundred rows on one event page, which is a demo of nothing. The one tagged
+  run is the latest inside the window, and the event's `targetKm` is derived from what was
+  tagged, so the headline number and the board under it describe the same runs. The
+  seeder writes through Prisma rather than the API, so it re-checks both tag rules itself
+  (`tagEventRuns`); nothing else would stop it writing a tag the API would reject.
 - **A handful of `new-follower` notifications** for the primary account only. Deliberate:
   seeding every follow edge and every followed run would put several hundred rows in the
   bell, which is noise rather than a demo.
