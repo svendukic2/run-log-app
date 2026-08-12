@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ROUTES, isActiveRoute } from '@/lib/routes';
@@ -161,6 +161,9 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   const account = useAccount();
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const drawerRef = useRef<HTMLElement>(null);
+  // Set once and never cleared: signing out ends in a full page load, so the
+  // only way out of this state is the new page (RUN-74).
+  const [signingOut, setSigningOut] = useState(false);
 
   // Opening the drawer moves focus into it so keyboard and screen-reader users
   // land on the navigation instead of staying behind the backdrop.
@@ -274,11 +277,21 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
           </div>
           {/* Sign out (RUN-58 AC5): revokes the session server-side (RUN-74),
               clears it locally and lands on Sign in via a full page load,
-              which also drops every store cache. Nothing to await here - the
-              navigation is the feedback, and signOut never rejects. */}
+              which also drops every store cache. The revoke has to finish
+              before the navigation cancels it, so on a slow or dead backend
+              this button waits (up to API_TIMEOUT_MS). Hence the pending
+              state: without it the button looks dead and every extra click
+              fires another logout and another navigation. */}
           <button
             type="button"
-            onClick={() => void signOut()}
+            disabled={signingOut}
+            onClick={() => {
+              setSigningOut(true);
+              // signOut never rejects and ends in a full page load, so there
+              // is no success branch to handle and nothing to reset.
+              void signOut();
+            }}
+            aria-busy={signingOut}
             className="mt-[10px] w-full rounded-[10px] border border-ink-border px-[12px] py-[8px] text-left text-[12.5px] font-medium text-on-dark-subtle hover:bg-ink-raised hover:text-white"
           >
             Sign out

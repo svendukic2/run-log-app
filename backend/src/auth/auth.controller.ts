@@ -56,9 +56,9 @@ export class AuthController {
     return this.auth.refresh(extractBearerToken(header));
   }
 
-  // 204: there is nothing to say. Always 204, even for a missing or
-  // unreadable token - see AuthService.logout for why signing out must not
-  // be able to fail.
+  // 204: there is nothing to say. 204 for any token, valid or not, including
+  // none at all - see AuthService.logout for why surrendering a credential
+  // must not be refusable. A database failure is still a 500.
   @Public()
   @Post('logout')
   @HttpCode(HttpStatus.NO_CONTENT)

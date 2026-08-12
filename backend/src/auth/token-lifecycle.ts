@@ -29,8 +29,10 @@
 //   * Refresh is refused when the SESSION began more than
 //     SESSION_ABSOLUTE_MAX_SECONDS ago. The session start rides along in
 //     the `sst` claim and is COPIED, never reset, by every refresh, so
-//     sliding cannot outrun it. That is the ceiling: no amount of refreshing
-//     keeps one sign-in alive beyond it.
+//     sliding cannot outrun it. That is the ceiling. To be exact about it: a
+//     refresh accepted one second before the ceiling still mints a token
+//     good for its full TTL, so the true bound is the ceiling plus at most
+//     one ACCESS_TOKEN_TTL_SECONDS. Not worth clamping the expiry for.
 //   * POST /api/auth/logout increments User.tokenVersion. Every token
 //     carrying the old `ver` is then unrefreshable, so every session on
 //     every device for that account ends.

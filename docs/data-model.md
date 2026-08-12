@@ -163,8 +163,12 @@ per-session revocation nobody has asked for. So:
   by every renewal, so no amount of refreshing outruns the 30 day ceiling.
 - `POST /api/auth/logout` increments `tokenVersion`, which ends every session for that
   account **on every device** - revocation is per account, not per session. It answers
-  204 to anything, including a missing or unreadable token, because signing out must not
-  be able to fail.
+  204 for any token, valid or not, including none at all, because surrendering a
+  credential must not be refusable; a database failure is still a 500.
+- On the client, a failed renewal only signs the user out when the server actually
+  **said 401**. A 5xx, a timeout or an offline laptop surfaces as an ordinary retryable
+  connection error with the session left intact, because a backend restart must not log
+  out everyone who happened to renew during it.
 - **What this does not cover**, stated so nobody assumes otherwise: an already-issued
   access token keeps working until its own expiry, because the guard does not consult
   `tokenVersion`. Logout therefore ends a session immediately but an outstanding token

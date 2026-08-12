@@ -42,6 +42,9 @@ let validTokens = new Set<string>();
 // set, which is exactly the state the renewal path exists for; a token in
 // neither set is a session that is over.
 let refreshableTokens = new Set<string>();
+// When set, POST /api/auth/refresh answers with this status instead of
+// renewing (failRunsRefresh below).
+let refreshFailure: number | null = null;
 // When set, matching requests fail with the given status before reaching
 // the in-memory backend (failRunsApi below).
 let failure: { method: string; status: number } | null = null;
@@ -159,6 +162,11 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
   // presented token is allowed to be expired, an unrenewable one is a flat
   // 401, and success returns the same { token, user } body login does.
   if (url === '/api/auth/refresh') {
+    // A backend that is up but unwell (failRunsRefresh below). Distinct from
+    // a 401 on purpose: the session layer must not sign anyone out for it.
+    if (refreshFailure !== null) {
+      return Promise.resolve(jsonResponse(refreshFailure, { message: 'Server error' }));
+    }
     const presented = (
       (init.headers as Record<string, string> | undefined)?.Authorization ?? ''
     ).replace(/^Bearer /, '');
@@ -516,6 +524,7 @@ export function installRunsApiMock(): void {
   tokenCounter = 0;
   validTokens = new Set();
   refreshableTokens = new Set();
+  refreshFailure = null;
   failure = null;
   rejectedNames = new Set();
   authBroken = false;
@@ -624,6 +633,13 @@ export function expireRunsTokens(): void {
 // session layer renews and replays it. Nothing visible should happen.
 export function expireRunsAccessTokens(): void {
   validTokens.clear();
+}
+
+// A renewal that cannot complete because the SERVER is unwell - mid-deploy
+// 502, a 500, anything that is not a 401. The session is still perfectly
+// good and the session layer must not end it (RUN-74).
+export function failRunsRefresh(status = 500): void {
+  refreshFailure = status;
 }
 
 // How many times an expired/missing session made the session layer redirect

@@ -52,6 +52,10 @@ const CONNECTION_MESSAGE =
 const TIMEOUT_MESSAGE = 'The server took too long to respond. Try again in a moment.';
 export const WRONG_CREDENTIALS_MESSAGE = 'Wrong email or password.';
 export const SESSION_EXPIRED_MESSAGE = 'Your session has expired. Sign in again.';
+// Deliberately NOT a sign-out (RUN-74): the server never told us the session
+// was over, we just could not reach it to ask.
+export const RENEWAL_UNAVAILABLE_MESSAGE =
+  "Couldn't reach the server to refresh your session. Try again in a moment.";
 
 // The one inline-error fallback for awaited mutations (the app-wide error
 // pattern): a named error explains itself, anything else gets this line.
@@ -310,30 +314,58 @@ function handleExpiredSession(): ApiError {
 // one of those would be racing against a token their sibling just replaced.
 // One promise, everyone else awaits it. Same shape as the load-token guards
 // in eventParticipants.ts and friends.
-let refreshInFlight: Promise<string | null> | null = null;
+let refreshInFlight: Promise<RenewOutcome> | null = null;
 
-// Exchanges the stored token for a fresh one. Resolves to the new token, or
-// to null for every kind of failure - a rejection here would surface as a
-// mysterious error from whichever unlucky request triggered the renewal,
-// when the only meaningful outcome is "could not renew, so sign out".
-async function performRefresh(token: string): Promise<string | null> {
+// How a renewal ended. The distinction between the last two is the whole
+// point of this type and is worth stating plainly: 'refused' means the
+// SERVER said this session is over, and only a 401 says that. 'unavailable'
+// means we never got an answer - a 500, a proxy 502 mid-deploy, an offline
+// laptop, an 8 second timeout - and the session is almost certainly still
+// perfectly good. Collapsing the two would mean every restart of the backend
+// signs out every user who happened to renew during it, and with a fifteen
+// minute token that is several times a day per user.
+type RenewOutcome =
+  { kind: 'renewed'; token: string } | { kind: 'refused' } | { kind: 'unavailable' };
+
+// Exchanges the stored token for a fresh one. Never rejects: a rejection
+// would surface as a mysterious error from whichever unlucky request
+// happened to trigger the renewal.
+async function performRefresh(token: string): Promise<RenewOutcome> {
+  let response: Response;
   try {
-    const response = await timedFetch('/api/auth/refresh', {
+    response = await timedFetch('/api/auth/refresh', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (!response.ok) return null;
+  } catch {
+    // timedFetch only throws for connectivity and timeouts, both of which
+    // say nothing about whether the session is still valid.
+    return { kind: 'unavailable' };
+  }
+  // The backend answers 401 and only 401 for every genuine end-of-session:
+  // expired past the idle window, past the absolute ceiling, revoked by a
+  // logout, unknown user, bad signature. See auth.service.ts refresh().
+  if (response.status === 401) return { kind: 'refused' };
+  if (!response.ok) return { kind: 'unavailable' };
+
+  try {
     const body = (await response.json()) as {
       token?: unknown;
       user?: { email?: unknown };
     };
-    if (typeof body.token !== 'string' || body.token.length === 0) return null;
+    if (typeof body.token !== 'string' || body.token.length === 0) {
+      return { kind: 'unavailable' };
+    }
     // Re-read rather than trusting the session we started with: a sign-out
     // (or another 401's sign-out) may have landed while this was in flight,
     // and writing here would resurrect the session the user just ended - the
     // hard navigation would then reload straight back into it.
     const existing = readSession();
-    if (!existing) return null;
+    if (!existing) return { kind: 'refused' };
+    // And if the stored token is no longer the one we renewed, a different
+    // session owns this browser now. Hand back what is stored rather than
+    // overwriting it with a token derived from the previous identity.
+    if (existing.token !== token) return { kind: 'renewed', token: existing.token };
     // The response carries the account's current email, so a rename made in
     // another tab lands here too; falling back to the stored one keeps the
     // session writable if the shape ever changes.
@@ -342,22 +374,26 @@ async function performRefresh(token: string): Promise<string | null> {
         ? body.user.email
         : existing.email;
     writeSession({ email, token: body.token });
-    return body.token;
+    return { kind: 'renewed', token: body.token };
   } catch {
-    return null;
+    // A 200 whose body will not parse is a broken server, not a dead
+    // session. Same treatment as a 500.
+    return { kind: 'unavailable' };
   }
 }
 
-// Returns a usable token, or null if the session is over.
-async function renewToken(staleToken: string): Promise<string | null> {
+async function renewToken(staleToken: string): Promise<RenewOutcome> {
   const current = readSession();
-  if (!current) return null;
+  if (!current) return { kind: 'refused' };
   // Someone already renewed while this request was in flight. Reuse their
   // token rather than spending another refresh - and rotating away the one
   // every other caller is about to use.
-  if (current.token !== staleToken) return current.token;
+  if (current.token !== staleToken) return { kind: 'renewed', token: current.token };
 
   if (!refreshInFlight) {
+    // No await between this read and the write, so the check-and-set is
+    // atomic within the microtask: N callers that 401 in the same tick all
+    // see the same promise and exactly one refresh goes out.
     const attempt = performRefresh(current.token);
     refreshInFlight = attempt;
     void attempt.finally(() => {
@@ -379,6 +415,12 @@ async function renewToken(staleToken: string): Promise<string | null> {
 // on the replay, which is safe because every caller in this app passes a
 // string body or none; a stream body would need reading twice and does not
 // exist here.
+//
+// The assumption being made is that a 401 from any /api/* endpoint means the
+// TOKEN is stale, which holds because JwtAuthGuard is the only thing in the
+// backend that answers 401 on a guarded route. A handler that starts
+// throwing UnauthorizedException for a business reason would spend a renewal
+// and then sign the user out on the replay, so give it a different status.
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const session = readSession();
   if (!session) throw handleExpiredSession();
@@ -386,10 +428,15 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   const response = await sendWithToken(path, init, session.token);
   if (response.status !== 401) return response;
 
-  const renewed = await renewToken(session.token);
-  if (!renewed) throw handleExpiredSession();
+  const outcome = await renewToken(session.token);
+  // Could not reach the server to find out: the session stays, and this
+  // reads as the ordinary connection failure it is - retryable, not
+  // terminal, so the error cards keep their "Try again" and the next
+  // attempt renews normally.
+  if (outcome.kind === 'unavailable') throw new ApiError(RENEWAL_UNAVAILABLE_MESSAGE);
+  if (outcome.kind === 'refused') throw handleExpiredSession();
 
-  const replay = await sendWithToken(path, init, renewed);
+  const replay = await sendWithToken(path, init, outcome.token);
   if (replay.status === 401) throw handleExpiredSession();
   return replay;
 }

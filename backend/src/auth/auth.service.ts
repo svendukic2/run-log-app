@@ -177,9 +177,10 @@ export class AuthService {
     if (!rawToken) return null;
     let claims: AccessTokenClaims;
     try {
-      // The signature, the issuer and the shape are all still enforced; only
-      // `exp` is waived, because renewing an expired token is the entire
-      // point of the endpoint.
+      // The signature and the shape are both still enforced; only `exp` is
+      // waived, because renewing an expired token is the entire point of the
+      // endpoint. (The module configures no issuer or audience, so there is
+      // nothing else being checked here - do not read more into it.)
       claims = await this.jwt.verifyAsync<AccessTokenClaims>(rawToken, {
         ignoreExpiration: true,
       });
@@ -235,12 +236,15 @@ export class AuthService {
   // POST /api/auth/logout (RUN-74). Ends every session this account has by
   // bumping the version each outstanding token was minted against.
   //
-  // It answers 204 whatever it is given - no token, a garbage token, a token
-  // for a deleted user - and that is deliberate. Signing out is the one
-  // action that must never fail in the user's face, and the client clears
-  // its own session regardless, so a 401 here would be a broken button
-  // reporting an outcome the user already got. It also cannot be used to
-  // probe: the response is identical for a valid and an invalid token.
+  // It answers 204 for ANY token - none, garbage, expired, one naming a
+  // deleted user - and that is deliberate. Signing out is the one action
+  // that must never fail because of the credential being surrendered, and
+  // the client clears its own session regardless, so a 401 here would be a
+  // broken button reporting an outcome the user already got. It also cannot
+  // be used to probe: valid and invalid tokens answer identically.
+  //
+  // A DATABASE failure is still a 500, not a silent 204. "Cannot fail" means
+  // "cannot fail on the token", not "swallows everything".
   //
   // Expiry is ignored for the same reason. A user who left a tab open
   // overnight and then clicks Sign out holds an expired token, and that is

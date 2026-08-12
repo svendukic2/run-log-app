@@ -9,6 +9,7 @@ import {
   clearTestSession,
   expireRunsAccessTokens,
   expireRunsTokens,
+  failRunsRefresh,
   signInRedirectCount,
 } from '@/test/runsApiMock';
 import {
@@ -190,6 +191,21 @@ describe('silent token renewal (RUN-74)', () => {
     ]);
     const replayHeaders = fetchCalls()[2][1]?.headers as Record<string, string>;
     expect(replayHeaders.Authorization).toBe(`Bearer ${fresh}`);
+  });
+
+  it('keeps the session when the renewal fails for any reason other than a 401', async () => {
+    // A backend restart, a proxy 502, an offline laptop. The server never
+    // said the session was over, so signing out here would log every user
+    // out of a perfectly good session several times a deploy.
+    expireRunsAccessTokens();
+    failRunsRefresh(500);
+
+    const failure = await apiFetch('/api/runs').catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ApiError);
+    expect((failure as ApiError).terminal).toBe(false);
+    expect(hasStoredSession()).toBe(true);
+    expect(signInRedirectCount()).toBe(0);
   });
 
   it('shares ONE renewal between requests that 401 together', async () => {
