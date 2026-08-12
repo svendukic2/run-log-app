@@ -62,12 +62,6 @@ interface RunRowMenuProps {
   sizeClassName?: string;
 }
 
-// The kebab and the row menu it opens (RUN-29, 12 · Runs - Row menu): "Edit"
-// opens the Edit run modal prefilled with that row's run (AC2); "Delete"
-// opens the delete confirmation quoting that row's run (RUN-30 AC1). Clicking
-// elsewhere or pressing Escape closes the menu without any action (AC4): the
-// transparent backdrop swallows the click, so a dismissal on the table can
-// never fall through to the row navigation underneath.
 // The table's 32px kebab is under the 44px minimum touch target, and the
 // table is on screen from `md` up, which includes tablet widths where the
 // sidebar is still a drawer. So the default grows its HIT area with a
@@ -83,6 +77,12 @@ interface RunRowMenuProps {
 const TABLE_SIZE =
   "size-8 pointer-coarse:before:absolute pointer-coarse:before:-inset-[6px] pointer-coarse:before:content-['']";
 
+// The kebab and the row menu it opens (RUN-29, 12 · Runs - Row menu): "Edit"
+// opens the Edit run modal prefilled with that row's run (AC2); "Delete"
+// opens the delete confirmation quoting that row's run (RUN-30 AC1). Clicking
+// elsewhere or pressing Escape closes the menu without any action (AC4): the
+// transparent backdrop swallows the click, so a dismissal on the table can
+// never fall through to the row navigation underneath.
 export default function RunRowMenu({ run, sizeClassName = TABLE_SIZE }: RunRowMenuProps) {
   const [placement, setPlacement] = useState<MenuPlacement | null>(null);
   const [isEditing, setIsEditing] = useState(false);
