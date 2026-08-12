@@ -14,6 +14,9 @@ import * as bcrypt from 'bcrypt';
 import { BCRYPT_ROUNDS } from '../auth/auth.service';
 import { toDbDate } from '../common/dates';
 import type { NewFollowerPayload } from '../notifications/notifications.service';
+import { ROUTE_SOURCE_DEMO_SEED } from '../routes/route-sources';
+// Value import: Prisma.DbNull is read at runtime (routeColumns below).
+import { Prisma } from '../generated/prisma/client';
 import type { PrismaClient } from '../generated/prisma/client';
 import {
   buildDemoDataset,
@@ -21,11 +24,16 @@ import {
   DEMO_PASSWORD,
   type BuildDemoDatasetOptions,
 } from './demo-data';
+import type { DemoRoute } from './demo-routes';
 
 export interface DemoSeedSummary {
   removedUsers: number;
   users: number;
   runs: number;
+  // How many of those runs carry a Zagreb route (RUN-77 AC6). Reported rather
+  // than left to be counted in psql because it is the one number that says
+  // whether the event map has anything to draw.
+  routedRuns: number;
   follows: number;
   notifications: number;
   events: number;
@@ -146,6 +154,7 @@ export async function seedDemoData(
             // and its feed lists since tagging became explicit (RUN-76). The
             // generator decided WHICH runs; this only carries the id.
             eventId: run.inEvent ? eventRow.id : null,
+            ...routeColumns(run.route),
           })),
         ),
       });
@@ -185,6 +194,14 @@ export async function seedDemoData(
         removedUsers: removed.count,
         users: idByEmail.size,
         runs: runs.count,
+        // Counted off the dataset rather than with a second query: createMany
+        // reports a total only, and the dataset is what decided which runs got a
+        // route in the first place.
+        routedRuns: dataset.users.reduce(
+          (total, user) =>
+            total + user.runs.filter((run) => run.route !== null).length,
+          0,
+        ),
         follows: follows.count,
         notifications: notifications.count,
         events: 1,
@@ -192,6 +209,45 @@ export async function seedDemoData(
     },
     { timeout: TRANSACTION_TIMEOUT_MS, maxWait: TRANSACTION_MAX_WAIT_MS },
   );
+}
+
+// The three route columns for one run (RUN-77), returned as ONE object so
+// all-or-none is structural here the way it is everywhere else: there is no way
+// to write a polyline without its waypoints and its source, which is the
+// invariant the database CHECK enforces and run-response.ts throws a named 500
+// over.
+//
+// A near-twin of runs.service's routeColumns and deliberately not shared with it:
+// that one stamps ROUTE_SOURCE_OPENROUTESERVICE, because the only route a user
+// can save is one the app's own proxy planned. A seeded route was not, and
+// borrowing the function would mean seeding a row that claims it was.
+//
+// Prisma needs DbNull rather than null to put SQL NULL into a nullable Json
+// column, which is the only reason "no route" is not simply three nulls.
+function routeColumns(route: DemoRoute | null): {
+  routePolyline: string | null;
+  routeWaypoints: Prisma.InputJsonValue | typeof Prisma.DbNull;
+  routeSource: string | null;
+} {
+  if (!route) {
+    return {
+      routePolyline: null,
+      routeWaypoints: Prisma.DbNull,
+      routeSource: null,
+    };
+  }
+  return {
+    routePolyline: route.polyline,
+    // Rebuilt point by point rather than handed over as-is: the table's entries
+    // are readonly, and rebuilding is what keeps a future extra key on a
+    // DemoRoute waypoint out of a JSONB column that run-response.ts re-validates
+    // on the way out.
+    routeWaypoints: route.waypoints.map((point) => ({
+      lat: point.lat,
+      lng: point.lng,
+    })),
+    routeSource: ROUTE_SOURCE_DEMO_SEED,
+  };
 }
 
 // Every email in the dataset's follows, notifications and event comes from

@@ -262,7 +262,12 @@ export function installEventsApiMock(): void {
 
 // Seeds the runs tagged to one event (RUN-76) and primes that store, so the
 // card is populated from the first render. Defaults make a plausible row; pass
-// `runner` to attribute it to somebody in particular.
+// `runner` to attribute it to somebody in particular, and `route` to give it
+// geometry for the event map (RUN-77).
+//
+// `route` defaults to NULL rather than to a polyline, and that is deliberate: a
+// run with no route is the ordinary case, and defaulting the other way would make
+// every existing test silently start drawing a map.
 export function seedEventRuns(
   eventId: string,
   drafts: Array<Partial<EventRun> & { distanceKm: number }>,
@@ -271,6 +276,7 @@ export function seedEventRuns(
     id: `event-run-${index + 1}`,
     date: todayIso(),
     durationSeconds: Math.round(draft.distanceKm * 300),
+    route: null,
     runner: { id: 'user-ana', firstName: 'Ana', lastName: 'Tester' },
     ...draft,
   }));

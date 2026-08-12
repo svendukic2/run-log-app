@@ -35,6 +35,10 @@ interface MapState {
   // bottom-right corner, out from under its legend).
   zoomControls: Array<Record<string, unknown>>;
   fitBoundsCalls: number;
+  // What each fitBounds was actually framed to, not just how many there were.
+  // The count alone cannot tell "framed to every route" from "framed to the
+  // first one", which is exactly what RUN-77 AC2 is about (review finding).
+  fitBoundsArgs: Array<Array<[number, number]>>;
   removed: boolean;
 }
 
@@ -50,6 +54,7 @@ function freshState(): MapState {
     tileLayers: [],
     zoomControls: [],
     fitBoundsCalls: 0,
+    fitBoundsArgs: [],
     removed: false,
   };
 }
@@ -119,8 +124,11 @@ const leaflet = {
       state.clickHandlers = [];
     },
     invalidateSize: () => undefined,
-    fitBounds: () => {
+    // latLngBounds below is the identity, so what arrives here is the point list
+    // the caller framed to.
+    fitBounds: (bounds: Array<[number, number]>) => {
       state.fitBoundsCalls += 1;
+      state.fitBoundsArgs.push(bounds);
     },
   }),
 

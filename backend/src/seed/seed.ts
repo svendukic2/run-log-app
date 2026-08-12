@@ -60,7 +60,8 @@ async function main(): Promise<void> {
     console.log(
       [
         `Seeded ${summary.users} demo accounts (${summary.removedUsers} removed first), ` +
-          `${summary.runs} runs, ${summary.follows} follows, ` +
+          `${summary.runs} runs (${summary.routedRuns} with a Zagreb route), ` +
+          `${summary.follows} follows, ` +
           `${summary.notifications} notifications and ${summary.events} active event.`,
         `Sign in as ${DEMO_PRIMARY_EMAIL} with the password: ${DEMO_PASSWORD}`,
         `The same password works for all ${DEMO_USER_COUNT} demo accounts.`,

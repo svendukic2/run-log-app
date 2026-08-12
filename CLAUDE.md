@@ -153,17 +153,23 @@ until the server answered, and the failure is an inline `role="alert"` line the
 caller owns. Ask "would a second screen read this?" before adding a store.
 
 **Leaflet is client-only, and that is enforced by the build, not by taste
-(RUN-54).** There are two maps, and both obey the same rule:
+(RUN-54).** There are three maps, and all of them obey the same rule:
 `frontend/src/components/RouteMapPicker.tsx` (the editable one in the Add/Edit
-modal) and `RouteMap.tsx` (the read-only one on run detail, RUN-55). Each imports
+modal), `RouteMap.tsx` (the read-only one on run detail, RUN-55) and
+`EventRoutesMap.tsx` (every tagged run of one event at once, RUN-77). Three
+siblings, deliberately not one component with modes: a read-only flag on an
+editable map is one bad merge away from letting a stranger drag somebody else's
+route, and on the event map they would be dragging eight of them. Each imports
 `leaflet` and its CSS, both of which touch `window` at module scope, so each is
-reachable only through `next/dynamic` with `ssr: false` (see `RouteStep.tsx` and
-`RouteCard.tsx`). Import either directly anywhere and `npm run build` fails with
-`window is not defined`. That dynamic import is also what makes the display map's
-tiles lazy: a run with no route never loads the chunk. Shared values the two must
-not drift on (the route colour, the OSM tile URL and the attribution the licence
-requires) live in `components/routeMapStyle.ts`, because Leaflet takes them as
-values and they cannot come from `globals.css`. Under Jest neither map runs for
+reachable only through `next/dynamic` with `ssr: false` (see `RouteStep.tsx`,
+`RouteCard.tsx` and `EventRoutesCard.tsx`). Import any of them directly anywhere
+and `npm run build` fails with `window is not defined`. That dynamic import is
+also what makes the display maps' tiles lazy: a run with no route, or an event
+whose tagged runs have none, never loads the chunk. Shared values the three must
+not drift on (the route colour, the per-runner palette the event map and its
+legend both read, the OSM tile URL and the attribution the licence requires) live
+in `components/routeMapStyle.ts`, because Leaflet takes them as values and they
+cannot come from `globals.css`. Under Jest no map runs for
 real: `jest.config.ts` maps `^leaflet$` to `src/test/leafletMock.ts` for **every**
 test, because the picker sits inside the Add run modal and any test that opens
 that modal would otherwise boot a map in jsdom. The stub records what was drawn
@@ -193,6 +199,16 @@ hand-mirrored-contract tax. Do the cutting on the server, never in the client: t
 rule this app applies to every gated field is that what a viewer may not see is
 never in the payload.
 
+**The one exception is the event map, and it is a decision rather than a leak
+(RUN-77).** `GET /api/events/:id/runs` serves tagged runs' routes WHOLE - no trim -
+because a trimmed shared map is barely worth drawing in a student showcase app. So a
+visitor who may not see your start on your run detail page can see it on the event
+map, which makes the trim above ineffective against anyone who shares an event with
+you. `showRoutes` is still honoured there (via `canViewRoutes`, so that endpoint can
+never draw a line the runner's own profile would withhold), and the map's route shape
+carries no waypoints at all. If this hole ever needs closing, close it by trimming in
+`events.service.listRuns`, never by loosening the trim above.
+
 `frontend/src/lib/notifications.ts` (RUN-66) is app-wide but **ungated**: the
 bell it feeds is rendered by `PageHeader`, so it sits on every sidebar-reachable
 screen, and it is nobody's reason for visiting any of them. A failed read
@@ -213,8 +229,20 @@ worth knowing before you touch it: seeded accounts must be opted **into** the
 privacy settings explicitly, because the columns default to false and a
 defaulted demo is invisible on every social screen; and it runs from the
 compiled output rather than ts-node, because the Prisma 7 generated client's
-ESM-style specifiers do not survive ts-node's CommonJS resolution. The shared
-demo password, the `@runlog.demo` idempotency marker and the rest are in
+ESM-style specifiers do not survive ts-node's CommonJS resolution.
+
+Its third piece since RUN-77 is `demo-routes.ts`: eight real Zagreb routes as
+encoded polylines, checked in as constants and attached to the tagged runs so the
+event map has something to draw. **The seeder must never call a routing
+provider** - that would cost it both of its hard properties, determinism and
+working offline with no API key - so the routing happened once, at authoring time,
+through `scripts/plan-demo-routes.mjs`. Regenerate with that script rather than
+hand-encoding a polyline; it refuses to write anything that breaks the limits a
+real client's write would have been held to. Attaching a route also REWRITES that
+run's `distanceKm` to the route's own length, which is why the order in
+`buildDemoDataset` is window -> tags -> routes -> target.
+
+The shared demo password, the `@runlog.demo` idempotency marker and the rest are in
 `docs/data-model.md`.
 
 **Configuration goes through ConfigService.** `ConfigModule.forRoot({ isGlobal: true })`

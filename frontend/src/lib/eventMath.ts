@@ -188,20 +188,42 @@ export function isEventParticipant(value: unknown): value is EventParticipant {
 
 /* The event's tagged runs (RUN-76) ------------------------------------------- */
 
+// A tagged run's geometry, for the event map (RUN-77). Just the line: the
+// backend's EventRunRouteResponse deliberately sends no waypoints, no source and
+// no `trimmed` flag, because this map draws lines and nothing else - see that
+// type for why each omission is a decision rather than an oversight.
+export interface EventRunRoute {
+  // Encoded polyline, precision 5 (decode with decodePolyline from lib/polyline).
+  polyline: string;
+}
+
 // One run tagged to this event, as GET /api/events/:id/runs serves it
 // (EventRunResponse, hand-mirrored). Narrower than a Run on purpose: this is
-// somebody else's run seen through an event, so it carries no note and no
-// route - the route is gated by a privacy setting this endpoint does not read.
+// somebody else's run seen through an event, so it carries no note.
 export interface EventRun {
   id: string;
   date: string;
   distanceKm: number;
   durationSeconds: number;
+  // null means EITHER "no route on this run" OR "not yours to see" - the server
+  // makes the two indistinguishable on purpose (RUN-77, gated by canViewRoutes).
+  //
+  // OPTIONAL, unlike the fields above, and that is about deployment rather than
+  // taste: the frontend and the backend deploy independently here (Vercel and
+  // Render), so a frontend that is one release ahead has to keep reading a body
+  // that has no `route` key yet. Absent and null mean the same thing to every
+  // caller - no line to draw. Same reasoning as Run.route in runMath.ts.
+  route?: EventRunRoute | null;
   runner: {
     id: string;
     firstName: string;
     lastName: string;
   };
+}
+
+export function isEventRunRoute(value: unknown): value is EventRunRoute {
+  const route = value as EventRunRoute;
+  return typeof route?.polyline === 'string' && route.polyline.length > 0;
 }
 
 export function isEventRun(value: unknown): value is EventRun {
@@ -211,6 +233,9 @@ export function isEventRun(value: unknown): value is EventRun {
     typeof row.date === 'string' &&
     typeof row.distanceKm === 'number' &&
     typeof row.durationSeconds === 'number' &&
+    // A malformed route is a malformed response, not a routeless run: the run
+    // feed beside the map would rather report an error than silently lose a line.
+    (row.route === undefined || row.route === null || isEventRunRoute(row.route)) &&
     typeof row.runner?.id === 'string' &&
     typeof row.runner.firstName === 'string' &&
     typeof row.runner.lastName === 'string'
