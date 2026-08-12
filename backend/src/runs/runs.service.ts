@@ -5,6 +5,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { toDbDate, toIsoDate } from '../common/dates';
+import { kmNumber } from '../common/decimal';
 import { runLimitViolation, type RunMeasurements } from '../common/runLimits';
 import { NotificationsService } from '../notifications/notifications.service';
 import { isPrismaError, prismaConstraint } from '../prisma/prisma-errors';
@@ -175,7 +176,10 @@ export class RunsService {
           await this.notifications.fanOutRunLogged(tx, userId, {
             id: created.id,
             routeName: created.routeName,
-            distanceKm: created.distanceKm,
+            // The Decimal boundary (RUN-78): the payload is a JSON snapshot
+            // the bell renders straight, so a decimal.js object here would be
+            // stored as {s, e, d} and printed as "[object Object] km".
+            distanceKm: kmNumber(created.distanceKm),
             durationSeconds: created.durationSeconds,
             date: toIsoDate(created.date),
           });
@@ -269,7 +273,11 @@ export class RunsService {
       });
       if (!existing) throw new NotFoundException(`Run ${id} not found`);
       this.assertWithinLimits({
-        distanceKm: dto.distanceKm ?? existing.distanceKm,
+        // The Decimal boundary (RUN-78). This one is the dangerous kind: the
+        // limit rules are plain arithmetic, and `decimal > 150` is false for
+        // every Decimal, so leaving the conversion out would disable the
+        // distance cap on PATCH without failing a single type check.
+        distanceKm: dto.distanceKm ?? kmNumber(existing.distanceKm),
         durationSeconds: dto.durationSeconds ?? existing.durationSeconds,
       });
     }

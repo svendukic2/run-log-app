@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { addDaysIso, mondayOf, toDbDate, utcTodayIso } from '../common/dates';
+import { kmNumber, toMeasuredRuns } from '../common/decimal';
 import { rankByDistance, roundKm } from '../common/ranking';
 import { outlierUserIds } from '../common/runLimits';
 import { PrismaService } from '../prisma/prisma.service';
@@ -111,7 +112,7 @@ export class LeaderboardService {
       candidates.map((row) => ({
         id: row.id,
         showOnLeaderboard: true,
-        totalKm: roundKm(byUser.get(row.id)?._sum.distanceKm ?? 0),
+        totalKm: roundKm(kmNumber(byUser.get(row.id)?._sum.distanceKm)),
       })),
     );
 
@@ -125,7 +126,7 @@ export class LeaderboardService {
           // Every candidate is opted in, so rankByDistance ranked all of
           // them; the fallback only satisfies the Map's type.
           rank: ranks.get(row.id) ?? 0,
-          totalKm: roundKm(aggregate?._sum.distanceKm ?? 0),
+          totalKm: roundKm(kmNumber(aggregate?._sum.distanceKm)),
           runCount: aggregate?._count._all ?? 0,
           me: row.id === userId,
         };
@@ -163,14 +164,20 @@ export class LeaderboardService {
     // way.
     const flagged = shownIds.length
       ? outlierUserIds(
-          await this.prisma.run.findMany({
-            where: {
-              userId: { in: shownIds },
-              user: { showOnLeaderboard: true },
-              date: { gte: toDbDate(weekStart), lte: toDbDate(weekEnd) },
-            },
-            select: { userId: true, distanceKm: true, durationSeconds: true },
-          }),
+          // toMeasuredRuns is the Decimal boundary (RUN-78): the outlier
+          // rules are plain arithmetic on numbers, and a Decimal compared
+          // against a threshold reads false every time - a marker that
+          // silently stops appearing, which no type check catches.
+          toMeasuredRuns(
+            await this.prisma.run.findMany({
+              where: {
+                userId: { in: shownIds },
+                user: { showOnLeaderboard: true },
+                date: { gte: toDbDate(weekStart), lte: toDbDate(weekEnd) },
+              },
+              select: { userId: true, distanceKm: true, durationSeconds: true },
+            }),
+          ),
         )
       : new Set<string>();
     const withMarker = (row: Omit<LeaderboardRow, 'unverified'>) => ({

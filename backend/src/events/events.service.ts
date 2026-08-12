@@ -5,6 +5,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { toDbDate, toIsoDate, utcTodayIso } from '../common/dates';
+import { kmNumber, toMeasuredRuns } from '../common/decimal';
 import { resolvePagination } from '../common/pagination-query.dto';
 import { rankByDistance, roundKm } from '../common/ranking';
 import { outlierUserIds } from '../common/runLimits';
@@ -299,14 +300,19 @@ export class EventsService {
     const rankedIds = participants
       .filter((row) => row.user.showOnLeaderboard)
       .map((row) => row.user.id);
+    // toMeasuredRuns is the Decimal boundary (RUN-78), for the same reason
+    // the global board applies it: the outlier rules compare plain numbers,
+    // and a Decimal against a threshold is false every time.
     const windowRuns = rankedIds.length
-      ? await this.prisma.run.findMany({
-          where: {
-            userId: { in: rankedIds },
-            date: { gte: event.startDate, lte: event.endDate },
-          },
-          select: { userId: true, distanceKm: true, durationSeconds: true },
-        })
+      ? toMeasuredRuns(
+          await this.prisma.run.findMany({
+            where: {
+              userId: { in: rankedIds },
+              date: { gte: event.startDate, lte: event.endDate },
+            },
+            select: { userId: true, distanceKm: true, durationSeconds: true },
+          }),
+        )
       : [];
     const flagged = outlierUserIds(windowRuns);
 
@@ -317,7 +323,7 @@ export class EventsService {
       participants.map((row) => ({
         id: row.user.id,
         showOnLeaderboard: row.user.showOnLeaderboard,
-        totalKm: roundKm(byUser.get(row.user.id)?._sum.distanceKm ?? 0),
+        totalKm: roundKm(kmNumber(byUser.get(row.user.id)?._sum.distanceKm)),
       })),
     );
 
@@ -334,7 +340,7 @@ export class EventsService {
         // client reconstruct one (AC3).
         rank,
         totalKm:
-          rank === null ? null : roundKm(aggregate?._sum.distanceKm ?? 0),
+          rank === null ? null : roundKm(kmNumber(aggregate?._sum.distanceKm)),
         runCount: rank === null ? null : (aggregate?._count._all ?? 0),
         unverified: rank === null ? null : flagged.has(row.user.id),
       };

@@ -1,8 +1,15 @@
 // Run Log Tracker - database shape, live since RUN-46 (see docs/data-model.md,
 // "Adopting the database"). Mirrors the TypeScript types in frontend/src/lib/
 // and must stay in sync with them: string ids, calendar-day dates, durations
-// in seconds, capitalized enums as plain strings, derived data (records,
-// totals, pace) never stored.
+// in seconds, capitalized enums (real database enums since RUN-78), derived
+// data (records, totals, pace) never stored.
+//
+// Since RUN-78 every table also carries updatedAt, and every migration in
+// this directory has to be safe against a database that already holds rows
+// (there has been one since RUN-60). That is why the hand-written SQL adds
+// audit columns WITH a default and drops the default afterwards: the default
+// backfills the rows that already exist, and dropping it again leaves the
+// column exactly as Prisma renders it, so `migrate diff` stays quiet.
 
 // Prisma 7: the client is generated TypeScript compiled with the rest of the
 // app, and the connection URL lives in prisma.config.ts (CLI) and
@@ -21,6 +28,29 @@ datasource db {
   provider = "postgresql"
 }
 
+// The two vocabularies the UI copy is written in, as real database enums
+// since RUN-78 (they were TEXT before). The values are capitalized exactly
+// as the frontend unions spell them (EFFORT_LEVELS in
+// frontend/src/lib/runMath.ts, RUNNING_LEVELS in the profile DTO), because
+// the enum label IS the API value - there is no translation layer.
+//
+// What this buys: the database now refuses a value outside the vocabulary,
+// which is what let the read-side guards go (toEffort, toRunningLevel and
+// their 500s). What it costs: adding a level is a migration rather than an
+// edit to one array, which for two closed three-value vocabularies is the
+// right trade.
+enum Effort {
+  Easy
+  Medium
+  Hard
+}
+
+enum RunningLevel {
+  Beginner
+  Intermediate
+  Advanced
+}
+
 // One row per user since RUN-57 (was single-row in v1, WEL-4). runningLevel
 // is one of Beginner | Intermediate | Advanced (LVL-2); defaultWeeklyGoalKm
 // seeds future weeks only (SET-3, SET-6).
@@ -28,11 +58,12 @@ datasource db {
 // the User row, which every social surface already reads, so keeping copies
 // here only created two truths for one fact.
 model Profile {
-  id                  String @id @default(cuid())
-  runningLevel        String
+  id                  String       @id @default(cuid())
+  runningLevel        RunningLevel
   defaultWeeklyGoalKm Int
-  userId              String @unique
-  user                User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  updatedAt           DateTime     @updatedAt
+  userId              String       @unique
+  user                User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 // One row per user since RUN-57: the onboarding goal period (GOAL-2..4).
@@ -42,6 +73,7 @@ model Goal {
   km        Int
   startDate DateTime  @db.Date
   endDate   DateTime? @db.Date
+  updatedAt DateTime  @updatedAt
   userId    String    @unique
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
@@ -55,6 +87,7 @@ model WeekTarget {
   id        String   @id @default(cuid())
   weekStart DateTime @db.Date
   targetKm  Int
+  updatedAt DateTime @updatedAt
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -68,11 +101,38 @@ model WeekTarget {
 model Run {
   id              String   @id @default(cuid())
   routeName       String
-  distanceKm      Float
+  // NUMERIC(5, 2) since RUN-78, not DOUBLE PRECISION: a distance is money,
+  // not physics. 12.3 has no exact binary representation, so summing floats
+  // produced totals like 30.000000000000004 that the leaderboard had to
+  // round back into honesty. Precision 5 is provably enough because RUN-72
+  // caps a single run at 150 km, and scale 2 matches what the form accepts;
+  // Postgres rounds a third decimal away on write, which is the "stored
+  // exactly at two decimals" the ticket asks for.
+  //
+  // The cost is that Prisma types this field as Decimal (a decimal.js
+  // object), and a Decimal reaching the browser as {s, e, d} would be a
+  // broken API. It is converted at the backend boundary and nowhere else -
+  // see common/decimal.ts, which lists every place that conversion happens.
+  distanceKm      Decimal  @db.Decimal(5, 2)
   durationSeconds Int
   date            DateTime @db.Date
-  effort          String // Easy | Medium | Hard
+  effort          Effort
   note            String   @default("")
+
+  // When the row was written, so two runs on the same calendar day have a
+  // real order instead of the arbitrary-but-deterministic cuid tiebreak
+  // (RUN-78). `date` is still the sort key that matters - this only breaks
+  // its ties - and it is part of the API contract, not just the database:
+  // the client re-sorts its cache after every mutation, so the two
+  // orderings have to be the same one. See runsNewestFirstOrder in
+  // src/runs/run-response.ts and compareRunsNewestFirst in
+  // frontend/src/lib/runs.ts.
+  //
+  // Rows that predate the migration all share its timestamp and therefore
+  // still tie, falling through to the id exactly as before. Nothing can be
+  // done about that: their real insertion order was never recorded.
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // The optional route (RUN-54), the columns RUN-53 deliberately left to
   // this ticket. All three are written together or not at all - a database
@@ -89,14 +149,19 @@ model Run {
   //                  RUN-55 knows to draw it dashed
   // A run with no route leaves all three NULL and behaves exactly as it did
   // before this ticket (AC3), which is why nothing here has a default.
-  routePolyline   String?
-  routeWaypoints  Json?
-  routeSource     String?
+  routePolyline  String?
+  routeWaypoints Json?
+  routeSource    String?
 
-  userId          String
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([userId, date])
+  // The list query's full shape: filter by owner, ORDER BY (date, createdAt,
+  // id) newest first - the same reasoning as the Follow and Notification
+  // list indexes below. It was (userId, date) until RUN-78 added the
+  // createdAt tiebreak; leaving it that way would have made every page of
+  // the run list sort its date groups in memory.
+  @@index([userId, date, createdAt, id])
 }
 
 // One row per registered account (RUN-56), the anchor entity of the v2
@@ -133,6 +198,7 @@ model User {
   // from signing out real users. See src/auth/token-lifecycle.ts.
   tokenVersion        Int                @default(0)
   createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
   profile             Profile?
   goal                Goal?
   weekTargets         WeekTarget[]
@@ -156,6 +222,11 @@ model Follow {
   followerId String
   followeeId String
   createdAt  DateTime @default(now())
+  // An edge is created and deleted, never edited, so this column will
+  // normally equal createdAt forever. It is here because RUN-78 AC5 asks
+  // for it on every table, and a uniform audit convention is worth more
+  // than eight bytes saved on the one table that does not change.
+  updatedAt  DateTime @updatedAt
   follower   User     @relation("UserFollowing", fields: [followerId], references: [id], onDelete: Cascade)
   followee   User     @relation("UserFollowers", fields: [followeeId], references: [id], onDelete: Cascade)
 
@@ -181,6 +252,9 @@ model Notification {
   payload   Json
   readAt    DateTime?
   createdAt DateTime  @default(now())
+  // Moves when the row is marked read, which is the only edit a
+  // notification ever gets.
+  updatedAt DateTime  @updatedAt
   userId    String
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -195,8 +269,9 @@ model Notification {
 // owner; both dates are inclusive calendar days and upcoming/active/finished
 // is derived from them against today at read time, never stored (a stored
 // state would go stale at every midnight). targetKm is an optional collective
-// distance goal, Float like Run.distanceKm because the leaderboard sums run
-// distances against it. The owner cascade deletes the event (and, through
+// distance goal and stays a Float: it is one round number a human types once,
+// never summed and never compared for equality, so the exactness RUN-78 gave
+// Run.distanceKm would buy nothing here. The owner cascade deletes the event (and, through
 // it, the participant rows): an event does not outlive its owner.
 //
 // Not visible here: the add_event_date_order_check migration adds
@@ -211,6 +286,7 @@ model Event {
   endDate      DateTime           @db.Date
   targetKm     Float?
   createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
   ownerId      String
   owner        User               @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   participants EventParticipant[]
@@ -231,6 +307,9 @@ model Event {
 model EventParticipant {
   id        String   @id @default(cuid())
   createdAt DateTime @default(now())
+  // Like Follow's: a join row is created and deleted, never edited. Present
+  // for the uniform audit convention (RUN-78 AC5).
+  updatedAt DateTime @updatedAt
   eventId   String
   userId    String
   event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
@@ -246,12 +325,21 @@ model EventParticipant {
 // One row per generation (AIC-3..9). The newest row for the current week is
 // "This week's plan"; the newest row of each past week feeds "Previous plans".
 // ranKm and the Hit/Missed outcome are derived from Run and WeekTarget.
+// The plan is COMPUTED ON THE CLIENT (frontend/src/lib/plan.ts) and this
+// table has no reader and no writer in backend/src - it is the agreed shape
+// for RUN-32/RUN-35, nothing more. RUN-78 replaced the display string
+// "3-4" with the two numbers the frontend plan already carries
+// (sessionsMin, sessionsMax), so the schema describes the data instead of
+// its rendering: "3-4" cannot be compared, averaged or bounded without
+// being parsed back, and a string is where "3 to 4" and "3-4" and "3 - 4"
+// all become equally valid. Formatting the range is the UI's job.
 model CoachPlan {
   id                 String   @id @default(cuid())
   weekStart          DateTime @db.Date
   suggestedTargetKm  Int
   deltaVsLastWeekPct Int
-  sessions           String // "3-4"
+  sessionsMin        Int
+  sessionsMax        Int
   keyWorkout         String // "1 tempo"
   narrative          String
   updatedAt          DateTime @updatedAt
