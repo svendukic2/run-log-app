@@ -158,9 +158,12 @@ describe('LeaderboardService (RUN-70)', () => {
     );
     // Read through the same opt-in gate as the aggregation, so an
     // opted-out runner's runs are never even fetched.
+    // Bounded to the rows this response carries and gated on the opt-in,
+    // so an opted-out runner's runs are never fetched.
     expect(prisma.run.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
+          userId: { in: ['user-ana', USER_ID] },
           user: { showOnLeaderboard: true },
           date: { gte: toDbDate(MONDAY), lte: toDbDate(SUNDAY) },
         },

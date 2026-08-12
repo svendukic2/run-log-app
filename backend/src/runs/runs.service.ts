@@ -254,6 +254,14 @@ export class RunsService {
     // date order does: a PATCH moving only the duration must not slide the
     // pace past the limit against the stored distance. One extra read, and
     // only when one of the two fields is actually being written.
+    //
+    // Note that this read and the write below are NOT one statement, so two
+    // concurrent PATCHes of the same run - one moving the distance, one the
+    // duration - can each validate against a pre-merge value and commit a
+    // pair outside the limits. That is one owner racing themselves across
+    // two tabs, and these are honest-mistake guards rather than an
+    // invariant the database enforces, so the read stays cheap and separate
+    // instead of taking a row lock.
     if (dto.distanceKm !== undefined || dto.durationSeconds !== undefined) {
       const existing = await this.prisma.run.findFirst({
         where: { id, userId },

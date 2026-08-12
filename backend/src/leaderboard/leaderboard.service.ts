@@ -103,27 +103,6 @@ export class LeaderboardService {
     });
     const byUser = new Map(totals.map((row) => [row.userId, row]));
 
-    // The outlier marker (RUN-72 AC2) is a fact about a single RUN, so it
-    // cannot come out of the aggregation above: a week totalling 80 km is a
-    // good week, one 80 km run is the unusual thing. Hence a second read of
-    // the same window, selecting three columns and no more.
-    //
-    // It is a read rather than a smarter WHERE because the pace rule
-    // compares two columns arithmetically (durationSeconds < 210 *
-    // distanceKm), which Prisma's filters cannot express without dropping
-    // to raw SQL - and a raw query here would buy one scan at the cost of
-    // the type checking every other query in this service has. The gate is
-    // the same relation filter, so a runner who is off leaderboards is
-    // never even read.
-    const weekRuns = await this.prisma.run.findMany({
-      where: {
-        user: { showOnLeaderboard: true },
-        date: { gte: toDbDate(weekStart), lte: toDbDate(weekEnd) },
-      },
-      select: { userId: true, distanceKm: true, durationSeconds: true },
-    });
-    const flagged = outlierUserIds(weekRuns);
-
     // Everyone opted in is ranked, including runners with no runs this
     // week: they tie at 0 km at the bottom, which is what makes a pinned
     // "you" row (AC2) truthful in a week the caller sat out instead of
@@ -149,18 +128,61 @@ export class LeaderboardService {
           totalKm: roundKm(aggregate?._sum.distanceKm ?? 0),
           runCount: aggregate?._count._all ?? 0,
           me: row.id === userId,
-          unverified: flagged.has(row.id),
         };
       })
       // Tied rows share a rank, so the id decides only which of them is
       // drawn first - the same deterministic tiebreak the ranking uses.
       .sort((a, b) => a.rank - b.rank || a.id.localeCompare(b.id));
 
+    // The rows this response actually carries: the served slice plus the
+    // caller's own row when it falls outside it (AC2).
+    const served = rows.slice(0, LEADERBOARD_LIMIT);
+    const meRow = rows.find((row) => row.me) ?? null;
+    const shownIds = [...new Set(served.map((row) => row.id))];
+    if (meRow && !shownIds.includes(meRow.id)) shownIds.push(meRow.id);
+
+    // The outlier marker (RUN-72 AC2) is a fact about a single RUN, so it
+    // cannot come out of the aggregation above: a week totalling 80 km is a
+    // good week, one 80 km run is the unusual thing. Hence a second read,
+    // selecting three columns and no more.
+    //
+    // It is a read rather than a smarter WHERE because the pace rule
+    // compares two columns arithmetically (durationSeconds < 210 *
+    // distanceKm), which Prisma's filters cannot express without dropping
+    // to raw SQL - and a raw query here would buy one scan at the cost of
+    // the type checking every other query in this service has.
+    //
+    // Deliberately AFTER the ranking, unlike the aggregation above (review
+    // fix): the whole week's runs would be an unbounded read of the whole
+    // user base, while the rows that will be drawn are at most
+    // LEADERBOARD_LIMIT + 1. That id list is what the comment on the
+    // aggregation rules out for the GROUP BY, and it is safe here for the
+    // opposite reason - it is bounded by the page, not by the user table,
+    // and it hits the (userId, date) index. The relation filter stays on
+    // top of it so the opt-in gate is enforced by the query itself either
+    // way.
+    const flagged = shownIds.length
+      ? outlierUserIds(
+          await this.prisma.run.findMany({
+            where: {
+              userId: { in: shownIds },
+              user: { showOnLeaderboard: true },
+              date: { gte: toDbDate(weekStart), lte: toDbDate(weekEnd) },
+            },
+            select: { userId: true, distanceKm: true, durationSeconds: true },
+          }),
+        )
+      : new Set<string>();
+    const withMarker = (row: Omit<LeaderboardRow, 'unverified'>) => ({
+      ...row,
+      unverified: flagged.has(row.id),
+    });
+
     return {
       weekStart,
       weekEnd,
-      items: rows.slice(0, LEADERBOARD_LIMIT),
-      me: rows.find((row) => row.me) ?? null,
+      items: served.map(withMarker),
+      me: meRow ? withMarker(meRow) : null,
       total: rows.length,
     };
   }

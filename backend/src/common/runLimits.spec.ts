@@ -25,9 +25,23 @@ describe('runLimitViolation (RUN-72 hard limits)', () => {
     } else {
       // The message has to name what to fix; an empty or generic string
       // would satisfy "not null" while telling the runner nothing.
-      expect(violation).toEqual(expect.stringMatching(/distanceKm|duration/));
+      expect(violation).toEqual(
+        expect.stringMatching(/Distance|Duration|distance and time/),
+      );
     }
   });
+});
+
+// Review fix: a pace just inside the boundary must not be refused with the
+// boundary's own number, which is what rounding to the nearest second did
+// ("2:30 /km is outside 2:30 to 20:00").
+it('names a rejected pace rounded away from the range it quotes', () => {
+  expect(
+    runLimitViolation({ distanceKm: 10, durationSeconds: 1_496 }),
+  ).toContain('2:29 /km');
+  expect(
+    runLimitViolation({ distanceKm: 10, durationSeconds: 12_004 }),
+  ).toContain('20:01 /km');
 });
 
 // The soft threshold reads the other way round: exactly at it is ordinary,

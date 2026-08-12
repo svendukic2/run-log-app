@@ -344,7 +344,9 @@ describe('RunsService', () => {
         durationSeconds: 3600,
         date: '2026-07-14',
       }),
-    ).rejects.toThrow(BadRequestException);
+      // The message is the one the Add run form shows inline, so it names
+      // the number to fix rather than a DTO field.
+    ).rejects.toThrow('Distance must be at most 150 km per run.');
     expect(prisma.run.create).not.toHaveBeenCalled();
   });
 

@@ -683,9 +683,16 @@ Three server-side specifics worth knowing:
 
   `RUN_OUTLIER_THRESHOLDS` is the soft tier: a run faster than **3:30 /km** or longer
   than **60 km** is legal, stored and ranked like any other, and only picks up the subtle
-  `unverified` marker on leaderboards (see below). RUN-71's seeder imports both constants
-  rather than repeating the literals, so demo data cannot drift past the rules that guard
-  real data.
+  `unverified` marker on leaderboards (see below). RUN-71's seeder is meant to import both
+  constants rather than repeat the literals, so demo data cannot drift past the rules that
+  guard real data.
+
+  The 400 body reaches the runner: `addRun`/`updateRun` in `frontend/src/lib/runs.ts`
+  surface a 400's `message` inline in the Add run form instead of a generic
+  "Saving the run failed (400)". These limits are the first rejection the form cannot
+  predict for itself, which is why the messages are written for a person ("Distance must
+  be at most 150 km per run.") rather than naming DTO fields. Other statuses keep the
+  generic sentence: a 500's message is about the server, not about the run.
 - **Explicit `null` is always a 400**, on create and on PATCH, with exactly one
   documented exception: `route` (RUN-54), where null is the way to say "no route" on
   create and "remove the route" on PATCH. Omitting `effort` or `note` means "use the

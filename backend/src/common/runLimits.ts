@@ -24,8 +24,10 @@
 // fails. The soft thresholds read the other way round, strictly: exactly
 // 3:30 /km and exactly 60 km are ordinary, faster or longer is flagged.
 
-// The hard limits. RUN-71's seeder imports these rather than repeating the
-// literals, so demo data cannot drift past the rules that guard real data.
+// The hard limits. RUN-71's seeder is meant to import these rather than
+// repeat the literals, so demo data cannot drift past the rules that guard
+// real data; that ticket is in flight as this lands, hence the exported
+// names and values being fixed in advance.
 export const RUN_LIMITS = {
   maxDistanceKm: 150,
   fastestPaceSecPerKm: 150, // 2:30 /km
@@ -57,8 +59,16 @@ function paceSecPerKm(run: RunMeasurements): number {
 
 // "2:30", the way the app writes a pace, so a rejection message names the
 // limit in the same units the runner reads on their watch.
-function formatPace(secPerKm: number): string {
-  const whole = Math.round(secPerKm);
+//
+// `round` is the caller's choice, and it is load-bearing (review fix):
+// rounding a rejected pace to the nearest second can print the boundary
+// itself, so 149.6 s/km would be refused with "2:30 /km is outside 2:30 to
+// 20:00". A rejection has to round AWAY from the range it names.
+function formatPace(
+  secPerKm: number,
+  round: (value: number) => number = Math.round,
+): string {
+  const whole = round(secPerKm);
   const minutes = Math.floor(whole / 60);
   const seconds = whole % 60;
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
@@ -69,8 +79,14 @@ function formatPace(secPerKm: number): string {
 //
 // A message, not an exception: this module stays free of Nest so both the
 // service that throws a BadRequestException and the seeder that just wants
-// to know can call it. Messages follow the DTOs' tone next door - the
-// field, the limit, the number that broke it, and no lecture.
+// to know can call it.
+//
+// These sentences are written for the RUNNER, not for an API log (review
+// fix): the Add run form surfaces the server's message inline, and this is
+// the one class of 400 the form cannot predict for itself, so it says
+// "Distance" rather than "distanceKm" and names the number to fix. Plain
+// and specific, no scolding: the runner mistyped something, they did not do
+// anything wrong.
 export function runLimitViolation(run: RunMeasurements): string | null {
   const { distanceKm, durationSeconds } = run;
 
@@ -79,25 +95,26 @@ export function runLimitViolation(run: RunMeasurements): string | null {
   // callers with no DTO in front of them (the seeder), where dividing by
   // zero would silently produce Infinity and pass the pace check.
   if (!(distanceKm > 0) || !(durationSeconds > 0)) {
-    return 'distanceKm and durationSeconds must both be greater than 0';
+    return 'Distance and duration must both be greater than 0.';
   }
 
   if (distanceKm > RUN_LIMITS.maxDistanceKm) {
-    return `distanceKm must be at most ${RUN_LIMITS.maxDistanceKm} km per run`;
+    return `Distance must be at most ${RUN_LIMITS.maxDistanceKm} km per run.`;
   }
 
   if (durationSeconds > RUN_LIMITS.maxDurationSec) {
-    return `durationSeconds must be at most ${RUN_LIMITS.maxDurationSec} seconds (24 hours) per run`;
+    return `Duration must be at most ${RUN_LIMITS.maxDurationSec / 3600} hours per run.`;
   }
 
   const pace = paceSecPerKm(run);
-  if (
-    pace < RUN_LIMITS.fastestPaceSecPerKm ||
-    pace > RUN_LIMITS.slowestPaceSecPerKm
-  ) {
-    return `distanceKm and durationSeconds work out to ${formatPace(pace)} /km; a run must be between ${formatPace(
-      RUN_LIMITS.fastestPaceSecPerKm,
-    )} and ${formatPace(RUN_LIMITS.slowestPaceSecPerKm)} /km`;
+  const range = `${formatPace(RUN_LIMITS.fastestPaceSecPerKm)} and ${formatPace(
+    RUN_LIMITS.slowestPaceSecPerKm,
+  )} /km`;
+  if (pace < RUN_LIMITS.fastestPaceSecPerKm) {
+    return `That distance and time work out to ${formatPace(pace, Math.floor)} /km. A run has to be between ${range}, so check both numbers.`;
+  }
+  if (pace > RUN_LIMITS.slowestPaceSecPerKm) {
+    return `That distance and time work out to ${formatPace(pace, Math.ceil)} /km. A run has to be between ${range}, so check both numbers.`;
   }
 
   return null;
