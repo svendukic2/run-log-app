@@ -93,10 +93,31 @@ model Run {
   routeWaypoints  Json?
   routeSource     String?
 
+  // The event this run was logged FOR (RUN-76), or NULL for the ordinary run
+  // that belongs to no event - which is most of them, and which behaves
+  // exactly as it did before this ticket (AC7).
+  //
+  // ONE event per run, a nullable FK rather than a join table: the ticket
+  // decides that, and the tradeoff it accepts is that two events overlapping
+  // in time can no longer both count the same run. What the column replaces is
+  // the implicit rule the leaderboard used to apply - "every run of every
+  // participant whose date falls in the window" - so joining an event no
+  // longer silently enrols all of your running.
+  //
+  // SetNull, not Cascade: the run is the runner's own data and outlives the
+  // event it was logged for. Deleting an event unties its runs; it must never
+  // delete them.
+  eventId         String?
+  event           Event?   @relation(fields: [eventId], references: [id], onDelete: SetNull)
+
   userId          String
   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, date])
+  // The event run feed and the event leaderboard both read "the runs tagged to
+  // this event", which is this index and nothing else: the date range that
+  // used to narrow those queries is now enforced when the tag is written.
+  @@index([eventId])
 }
 
 // One row per registered account (RUN-56), the anchor entity of the v2
@@ -214,6 +235,9 @@ model Event {
   ownerId      String
   owner        User               @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   participants EventParticipant[]
+  // The runs tagged to this event (RUN-76). Not a cascade in either
+  // direction: see Run.eventId.
+  runs         Run[]
 
   // The list orders chronologically (startDate, id) and the state filter is
   // a date-range comparison on either column, so each date gets an index;

@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import EffortField from '@/components/EffortField';
+import EventField from '@/components/EventField';
 import RouteStep, { type RoutePlanFailure } from '@/components/RouteStep';
 import TextArea from '@/components/TextArea';
 import TextField from '@/components/TextField';
@@ -119,6 +120,13 @@ export default function RunModal({ run, onClose }: RunModalProps) {
 
   const setValue = <Field extends keyof RunFormValues>(field: Field, value: RunFormValues[Field]) =>
     setValues((current) => ({ ...current, [field]: value }));
+
+  // Stable across renders, and that is load-bearing rather than tidy: the event
+  // picker re-reads its options in an effect that depends on this callback, so a
+  // fresh function every render would refetch on every keystroke in the form.
+  const setEventId = useCallback((eventId: string) => {
+    setValues((current) => ({ ...current, eventId }));
+  }, []);
 
   // Dismissal is refused while a save is in flight (RUN-68 review fix,
   // back-ported here: the two modals share the pattern): closing mid-save
@@ -322,6 +330,11 @@ export default function RunModal({ run, onClose }: RunModalProps) {
               onChange={(value) => setValue('date', value)}
               error={errors.date}
             />
+
+            {/* Directly under the date, because its options ARE a function of
+                the date: an event can only be chosen for a run inside its
+                window (RUN-76 AC1). */}
+            <EventField date={values.date} value={values.eventId} onChange={setEventId} />
 
             <EffortField value={values.effort} onChange={(effort) => setValue('effort', effort)} />
 

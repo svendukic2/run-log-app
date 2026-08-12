@@ -44,6 +44,15 @@ export const DEFAULT_EFFORT: Effort = 'Medium';
 export const ROUTE_NAME_MAX_LENGTH = 120;
 export const NOTE_MAX_LENGTH = 2000;
 
+// A bound on the event id (RUN-76), the same kind of thing as the two above:
+// ids are cuid()s of about 25 characters, so this is far above anything real
+// and far below "a stray script sent a megabyte". Deliberately NOT a cuid
+// format check - the id's real validation is the lookup in runs.service, which
+// has to happen anyway (the event must exist, be one the caller joined, and
+// contain the run's date), and a format rule here would only turn a 400 that
+// explains itself into a 400 about syntax.
+export const EVENT_ID_MAX_LENGTH = 64;
+
 // The latest calendar day the API accepts: tomorrow in UTC, computed from
 // UTC getters end to end (local getters here would silently shrink the
 // slack on any server west of Greenwich). The server cannot know the
@@ -184,4 +193,22 @@ export class CreateRunDto {
   @ValidateNested()
   @Type(() => RunRouteDto)
   route?: RunRouteDto | null;
+
+  // The event this run counts towards (RUN-76 AC1), or null / omitted for the
+  // ordinary untagged run. null is accepted here for the same reason it is on
+  // `route` above: the run form submits its complete shape on every save, so
+  // "No event" has to be sayable.
+  //
+  // Everything that makes a tag LEGAL is checked in runs.service, not here:
+  // the event has to exist, the caller has to have joined it, and the run's
+  // date has to fall inside its window (AC3). None of those are knowable from
+  // the payload alone, and splitting the rules across two files is how one of
+  // them ends up enforced on create but not on PATCH.
+  @ValidateIfNotNull()
+  @IsString({ message: 'eventId must be a string' })
+  @IsNotEmpty({ message: 'eventId must not be empty' })
+  @MaxLength(EVENT_ID_MAX_LENGTH, {
+    message: `eventId must be at most ${EVENT_ID_MAX_LENGTH} characters`,
+  })
+  eventId?: string | null;
 }

@@ -137,6 +137,13 @@ open profile), `leaderboard.ts` (RUN-70, one open week) and `userSearch.ts`
 (RUN-62, one open search query, whose load token is what stops a slow "an" from
 landing on top of "ana").
 
+`frontend/src/lib/eventRuns.ts` (RUN-76) is the same per-entity shape applied to
+a second question on the same screen, and deliberately a **copy rather than a
+generalisation**: two 150-line modules that each read one endpoint are easier to
+follow than one abstraction with an endpoint parameter, and the two cards on the
+event page have to fail and retry independently - a run feed that did not load
+must not take the leaderboard down with it.
+
 A third variation, and the one to copy for anything that is a **command rather
 than a cache**: `frontend/src/lib/routePlan.ts` (RUN-54) has no store at all. A
 planned route belongs to one open modal, is thrown away when it closes, and no
@@ -162,6 +169,18 @@ test, because the picker sits inside the Add run modal and any test that opens
 that modal would otherwise boot a map in jsdom. The stub records what was drawn
 and exposes `fireMapClick` / `fireMarkerDragEnd` / `fireMarkerClick`, so each
 component's own wiring stays under test.
+
+**A run counts for an event only if it is TAGGED to it (RUN-76).** `Run.eventId`
+is a nullable FK, and it replaced the rule the event leaderboard used to apply -
+"every run of every participant whose date falls inside the window". That is a
+behaviour change, not a refactor: joining an event no longer enrols all of your
+running, and an untagged run counts for nothing. The two rules that make a tag
+legal (an event you have joined, a date inside its window) live in
+`runs.service.assertTaggable`, never in a DTO, because neither is knowable from
+the payload - and they are re-checked on the MERGED row for a PATCH, so moving a
+date cannot slide a tagged run out of its event. The form's picker reads
+`GET /api/events/taggable?date=`, which answers exactly the set that write path
+accepts; if the two ever disagree, the endpoint is the half that is wrong.
 
 **A route served to somebody else is not the same route (RUN-55).** Route data is
 gated three ways rather than two: `routeVisibility` in `backend/src/common/privacy.ts`

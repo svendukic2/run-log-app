@@ -71,6 +71,16 @@ export interface RunResponse {
   // indistinguishable to a viewer: a "there is a route here you may not see"
   // signal is itself information the owner did not share.
   route: RunRouteResponse | null;
+  // The event this run was logged for (RUN-76), or null for the ordinary
+  // untagged run. Just the id: the run form's picker needs to know which option
+  // is selected, and everything else about the event (its name, its window) is
+  // the events store's job - denormalising a name into every run row would only
+  // give it somewhere to go stale.
+  //
+  // Not gated by privacy, unlike `route`: which event a run counts towards is
+  // exactly what the event's own run feed publishes, so it is not a secret from
+  // someone reading that runner's public profile.
+  eventId: string | null;
 }
 
 // The column is plain TEXT until RUN-73 adds a real enum, so a row edited
@@ -195,6 +205,7 @@ export function toRunResponse(
     effort: toEffort(row.id, row.effort),
     note: row.note,
     route: toRoute(row, routeVisibility),
+    eventId: row.eventId,
   };
 }
 

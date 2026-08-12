@@ -414,6 +414,39 @@ start or end day counts), computed by one `GROUP BY` at read time and never
 stored, the same rule the event's own derived state follows. Ties share a rank
 and the next distinct distance skips the places they consumed (1, 1, 3).
 
+**What counts changed in RUN-76: tagged runs, not dated ones.** `totalKm` and
+`runCount` are now the sum and count of that runner's runs **tagged to this
+event** (`Run.eventId`), not of every run whose date happens to fall inside the
+window. The window has not stopped mattering - it is enforced when the tag is
+written - so a tagged run always sits inside it and filtering on both would be
+the same query twice. This is a **behaviour change, not a refactor**: joining an
+event no longer silently enrols all of your running, an untagged run counts for
+nothing, and existing runs start untagged (the migration deliberately backfills
+nothing, because "inside the window" was never a statement of intent).
+
+**The event's run feed (RUN-76 AC2).** `GET /api/events/:id/runs` answers
+`{ items, total }` with `{ id, date, distanceKm, durationSeconds, runner: { id,
+firstName, lastName } }` per tagged run, newest first, unpaginated for the same
+reason the list above is. Two things it deliberately does not carry: the note and
+the route. The route especially is gated by a privacy setting this endpoint does
+not read (`showRoutes`, RUN-55), so adding it would mean answering that question
+first.
+
+One privacy rule of its own, and it is not optional: a run appears only if its
+runner has `showOnLeaderboard` true, **or** it is the caller's own. Without that,
+this feed would undo the opt-out the leaderboard beside it honours - summing an
+opted-out runner's rows here rebuilds exactly the `totalKm` and `runCount` that
+are withheld from them.
+
+**The picker's options (RUN-76 AC1).** `GET /api/events/taggable?date=yyyy-mm-dd`
+answers `{ items, total }` with `{ id, name, startDate, endDate }` for every
+event the caller has joined whose inclusive window contains that date - exactly
+the set the run write accepts. The date is required, with no default of today: a
+caller who omitted it would otherwise be handed today's answer for a run dated
+last week, i.e. a list of options the write path then rejects. The two must agree,
+and if they ever disagree this endpoint is the half that is wrong, because the
+other one is the enforcement.
+
 **The `unverified` marker (RUN-72).** True when at least one of that runner's
 runs inside the window is past `RUN_OUTLIER_THRESHOLDS` (see API validation
 below): faster than 3:30 /km or longer than 60 km. It is computed per **run**,
@@ -576,6 +609,7 @@ Exactly as implemented in `runs.ts` (RUN-23):
 | effort | Effort | Defaults to 'Medium' (ADD-8) |
 | note | string | Only optional field; `''` when absent |
 | route | RunRoute \| null | The optional drawn route (RUN-54); `null` on every run saved without one |
+| eventId | string \| null | The event this run was logged for (RUN-76); `null` on every untagged run, which is most of them |
 
 Start time, elevation and route type from Run detail (DET-7) are **deliberately absent**:
 they are display-only fields no form captures (assumption A10). If the designer answers
@@ -632,6 +666,33 @@ Six things about it are decisions, not accidents:
   infer it from `me`/`showRoutes`, so the two can never disagree; neither field is part
   of a write (`RunRouteDraft` is `polyline` + `waypoints` only, and the whitelist pipe
   400s a save that sends either).
+
+**The event tag (RUN-76).** `Run.eventId` is a nullable FK to `Event` with
+**`ON DELETE SET NULL`**: deleting an event unties its runs and must never delete
+them, because the run is the runner's own data and outlives the event it was
+logged for. One event per run, a single column rather than a join table - the
+ticket's decision, and the tradeoff it accepts is that two events overlapping in
+time can no longer both count the same run.
+
+Four things about it:
+
+- **Two server rules make a tag legal**, and both live in `runs.service`
+  (`assertTaggable`) rather than in a DTO, because neither is knowable from the
+  payload: the event must be one the **caller has joined**, and the run's date
+  must fall inside its **inclusive** window. The form offers only legal options
+  (`GET /api/events/taggable`), but the form is not the enforcement.
+- **"No such event" and "an event you have not joined" are one message**, from one
+  query. A run POST must not be a way to probe which event ids exist - the same
+  reasoning as the 404 on somebody else's run.
+- **The rules hold on the MERGED row for a PATCH**, like the pace limits: moving
+  only the date re-checks the stored tag against the new date, and moving only the
+  tag checks it against the stored date. A date move that would take a tagged run
+  out of its event is a 400 rather than a silent untag - the untag has to be asked
+  for.
+- **`null` is legal for this field**, like `route` and for the same reason: the run
+  form submits its complete shape on every save, so "No event" has to be sayable,
+  and on a PATCH null is how a run is untagged (AC6). Omitting the key leaves the
+  tag alone.
 
 ### CoachPlan (one per generation)
 
@@ -770,9 +831,10 @@ Three server-side specifics worth knowing:
   predict for itself, which is why the messages are written for a person ("Distance must
   be at most 150 km per run.") rather than naming DTO fields. Other statuses keep the
   generic sentence: a 500's message is about the server, not about the run.
-- **Explicit `null` is always a 400**, on create and on PATCH, with exactly one
-  documented exception: `route` (RUN-54), where null is the way to say "no route" on
-  create and "remove the route" on PATCH. Omitting `effort` or `note` means "use the
+- **Explicit `null` is always a 400**, on create and on PATCH, with exactly two
+  documented exceptions: `route` (RUN-54), where null is the way to say "no route" on
+  create and "remove the route" on PATCH, and `eventId` (RUN-76), which works the same
+  way for "No event" and "untag this run". Omitting `effort` or `note` means "use the
   defaults" (`Medium`, `''`); sending `null` for anything else is rejected in validation
   rather than reaching a NOT NULL column as a 500. The two mechanisms are named after
   what they do: `ValidateIfPresent` (null is a mistake) and `ValidateIfNotNull` (null is
@@ -794,8 +856,11 @@ empty table, which is a bad thing to discover mid-demo.
   global weekly leaderboard reads that week and nothing else.
 - **A follow web** centred on the primary account, so its Following and Followers tabs
   are populated in both directions.
-- **One active event** whose window contains today, with nine participants who already
-  have runs inside it, so the event leaderboard is populated rather than a list of zeros.
+- **One active event** whose window contains today, with nine participants whose runs
+  inside that window are **tagged to it** (RUN-76 AC5), so the event leaderboard and its
+  run feed are populated rather than a list of zeros. Tagging is what makes a run count
+  for an event, so an untagged demo would look broken; runs older than the window stay
+  untagged, which is also what shows the feed filtering rather than listing everything.
 - **A handful of `new-follower` notifications** for the primary account only. Deliberate:
   seeding every follow edge and every followed run would put several hundred rows in the
   bell, which is noise rather than a demo.
