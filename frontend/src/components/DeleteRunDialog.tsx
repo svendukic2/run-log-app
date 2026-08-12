@@ -44,14 +44,14 @@ interface DeleteRunDialogProps {
 export default function DeleteRunDialog({ run, onClose, onDeleted }: DeleteRunDialogProps) {
   const cancelRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
-
-  // Tab stays inside the dialog, as aria-modal already claimed (RUN-75).
-  useFocusTrap(dialogRef, true);
   // The delete round-trips to the API since RUN-48: `deleting` guards the
   // destructive button against a double press, `deleteError` is the inline
   // failure line (dialog stays open, the run still exists).
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // Tab stays inside the dialog, as aria-modal already claimed (RUN-75).
+  useFocusTrap(dialogRef, true);
 
   useEffect(() => {
     // Focus lands on Cancel: the safe answer to a destructive question, so

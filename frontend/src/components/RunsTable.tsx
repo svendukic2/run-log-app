@@ -58,7 +58,13 @@ export default function RunsTable({ runs }: RunsTableProps) {
       {/* Capped at roughly the ten rows the design shows, so longer histories
           scroll vertically inside the card with no pagination (AC7, A8). The
           header stays put while the rows scroll under it. */}
-      <div className="hidden max-h-[576px] overflow-y-auto rounded-[18px] border border-line bg-white md:block">
+      {/* overflow-x-auto is explicit rather than inherited: setting only
+          overflow-y makes CSS compute overflow-x to `auto` as a side effect,
+          which is what kept the six columns scrollable at 768px, where the
+          sidebar is still a drawer and the table has the full viewport but
+          not much more than it needs. Saying it out loud is what AC2 asks
+          for, and it changes no rendering at any width (RUN-75). */}
+      <div className="hidden max-h-[576px] overflow-x-auto overflow-y-auto rounded-[18px] border border-line bg-white md:block">
         <table className="w-full border-separate border-spacing-0 text-left">
           <thead>
             <tr>
