@@ -18,6 +18,7 @@ import {
   type WeeklyLeaderboard,
 } from '@/lib/leaderboard';
 import { personRoute, ROUTES } from '@/lib/routes';
+import UnverifiedMarker from './UnverifiedMarker';
 
 const CARD = 'rounded-[18px] border border-line bg-white';
 
@@ -226,7 +227,12 @@ function LeaderboardRow({ row }: { row: LeaderboardEntry }) {
           {row.firstName} {row.lastName}
           {row.me && <span className="pl-2 text-[12px] font-medium text-accent-pressed">You</span>}
         </Link>
-        <span className="block text-[12.5px] text-tertiary">{formatRunCount(row.runCount)}</span>
+        <span className="block text-[12.5px] text-tertiary">
+          {formatRunCount(row.runCount)}
+          {/* RUN-72 AC2: the server flagged one of the runs behind this
+              total as legal but extreme. */}
+          {row.unverified && <UnverifiedMarker />}
+        </span>
       </span>
       <span className="shrink-0 text-[14px] font-semibold tabular-nums text-text-primary">
         {formatKm(row.totalKm)} km

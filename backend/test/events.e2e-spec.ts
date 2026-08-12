@@ -350,11 +350,21 @@ describe('Events API (e2e)', () => {
       data: { showOnLeaderboard: true },
     });
 
+    // The duration follows the distance at a flat 5:00 /km rather than
+    // being a fixed half hour: since RUN-72 the API rejects an impossible
+    // pace, and a 50 km run in 30 minutes is exactly that. Well inside both
+    // the hard limits and the outlier thresholds, so these rows stay
+    // ordinary and the board's ranking is what is under test.
     const logRun = (user: TestUser, date: string, distanceKm: number) =>
       request(app.getHttpServer())
         .post('/api/runs')
         .set(user.auth)
-        .send({ routeName: 'Loop', distanceKm, durationSeconds: 1800, date })
+        .send({
+          routeName: 'Loop',
+          distanceKm,
+          durationSeconds: Math.round(distanceKm * 300),
+          date,
+        })
         .expect(201);
 
     // ana runs on both boundary days (counted) and on the days just
@@ -386,6 +396,8 @@ describe('Events API (e2e)', () => {
       rank: null,
       totalKm: null,
       runCount: null,
+      // RUN-72's marker is one of those numbers, so it is withheld too.
+      unverified: null,
     });
     const byId = new Map(body.items.map((row) => [row.id, row]));
     expect(byId.get(ana.id)).toMatchObject({
