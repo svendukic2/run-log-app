@@ -11,6 +11,7 @@ import {
   type EventParticipant,
 } from '@/lib/events';
 import { personRoute, ROUTES } from '@/lib/routes';
+import UnverifiedMarker from './UnverifiedMarker';
 
 interface EventLeaderboardCardProps {
   event: CommunityEvent;
@@ -98,6 +99,10 @@ export default function EventLeaderboardCard({ event, participants }: EventLeade
                 </Link>
                 <span className="block text-[12.5px] text-tertiary">
                   {formatRunCount(row.runCount)}
+                  {/* RUN-72 AC2: the same marker the global board draws,
+                      from the same server-side rule. Only ranked rows reach
+                      here, so an opted-out runner cannot carry it. */}
+                  {row.unverified && <UnverifiedMarker />}
                 </span>
               </span>
               <span className="shrink-0 text-[14px] font-semibold tabular-nums text-text-primary">

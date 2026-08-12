@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { addDaysIso, mondayOf, toDbDate, utcTodayIso } from '../common/dates';
 import { rankByDistance, roundKm } from '../common/ranking';
+import { outlierUserIds } from '../common/runLimits';
 import { PrismaService } from '../prisma/prisma.service';
 import { LeaderboardQueryDto } from './dto/leaderboard-query.dto';
 
@@ -17,6 +18,11 @@ export interface LeaderboardRow {
   totalKm: number;
   runCount: number;
   me: boolean;
+  // RUN-72: at least one of the runs behind this total is legal but
+  // extreme (see common/runLimits.ts). The page draws a subtle marker for
+  // it. False is the ordinary case, so an opted-out runner - who is not a
+  // row here at all - leaks nothing by their absence.
+  unverified: boolean;
 }
 
 // The window is echoed back because the request may omit it (current week)
@@ -128,11 +134,55 @@ export class LeaderboardService {
       // drawn first - the same deterministic tiebreak the ranking uses.
       .sort((a, b) => a.rank - b.rank || a.id.localeCompare(b.id));
 
+    // The rows this response actually carries: the served slice plus the
+    // caller's own row when it falls outside it (AC2).
+    const served = rows.slice(0, LEADERBOARD_LIMIT);
+    const meRow = rows.find((row) => row.me) ?? null;
+    const shownIds = [...new Set(served.map((row) => row.id))];
+    if (meRow && !shownIds.includes(meRow.id)) shownIds.push(meRow.id);
+
+    // The outlier marker (RUN-72 AC2) is a fact about a single RUN, so it
+    // cannot come out of the aggregation above: a week totalling 80 km is a
+    // good week, one 80 km run is the unusual thing. Hence a second read,
+    // selecting three columns and no more.
+    //
+    // It is a read rather than a smarter WHERE because the pace rule
+    // compares two columns arithmetically (durationSeconds < 210 *
+    // distanceKm), which Prisma's filters cannot express without dropping
+    // to raw SQL - and a raw query here would buy one scan at the cost of
+    // the type checking every other query in this service has.
+    //
+    // Deliberately AFTER the ranking, unlike the aggregation above (review
+    // fix): the whole week's runs would be an unbounded read of the whole
+    // user base, while the rows that will be drawn are at most
+    // LEADERBOARD_LIMIT + 1. That id list is what the comment on the
+    // aggregation rules out for the GROUP BY, and it is safe here for the
+    // opposite reason - it is bounded by the page, not by the user table,
+    // and it hits the (userId, date) index. The relation filter stays on
+    // top of it so the opt-in gate is enforced by the query itself either
+    // way.
+    const flagged = shownIds.length
+      ? outlierUserIds(
+          await this.prisma.run.findMany({
+            where: {
+              userId: { in: shownIds },
+              user: { showOnLeaderboard: true },
+              date: { gte: toDbDate(weekStart), lte: toDbDate(weekEnd) },
+            },
+            select: { userId: true, distanceKm: true, durationSeconds: true },
+          }),
+        )
+      : new Set<string>();
+    const withMarker = (row: Omit<LeaderboardRow, 'unverified'>) => ({
+      ...row,
+      unverified: flagged.has(row.id),
+    });
+
     return {
       weekStart,
       weekEnd,
-      items: rows.slice(0, LEADERBOARD_LIMIT),
-      me: rows.find((row) => row.me) ?? null,
+      items: served.map(withMarker),
+      me: meRow ? withMarker(meRow) : null,
       total: rows.length,
     };
   }

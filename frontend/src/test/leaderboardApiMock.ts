@@ -57,6 +57,8 @@ export function seedLeaderboard(
     totalKm: 0,
     runCount: 0,
     me: false,
+    // RUN-72: ordinary unless the test seeding the row says otherwise.
+    unverified: false,
     ...draft,
   })) as LeaderboardEntry[];
   const board: WeeklyLeaderboard = {

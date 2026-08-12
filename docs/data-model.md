@@ -345,21 +345,32 @@ transaction; the owner joining their own event and repeat joins never notify.
 
 **The detail page's one read (RUN-69).** `GET /api/events/:id/participants`
 answers `{ items, total }` with one row per member: `{ id, firstName, lastName,
-joinedAt, me, rank, totalKm, runCount }`, in join order, where `id` is the
+joinedAt, me, rank, totalKm, runCount, unverified }`, in join order, where `id` is the
 **user's** id. The participant list and the leaderboard are the same set of
 people counted two ways, so they travel together rather than as two endpoints.
 This list is deliberately **not paginated**, unlike every other list in the API:
 a leaderboard is only correct as a whole, and the set is bounded by one event's
 membership rather than by the database.
 
-`rank`, `totalKm` and `runCount` are one decision, not three - all three are
-`null` exactly when that runner has `showOnLeaderboard` false. The numbers are
+`rank`, `totalKm`, `runCount` and `unverified` are one decision, not four - all
+four are `null` exactly when that runner has `showOnLeaderboard` false. The numbers are
 withheld rather than flagged, so an opted-out runner appears in the participant
 list and no client can reconstruct their standing. `totalKm` is the sum of that
 runner's run distances inside the event's **inclusive** window (a run on the
 start or end day counts), computed by one `GROUP BY` at read time and never
 stored, the same rule the event's own derived state follows. Ties share a rank
 and the next distinct distance skips the places they consumed (1, 1, 3).
+
+**The `unverified` marker (RUN-72).** True when at least one of that runner's
+runs inside the window is past `RUN_OUTLIER_THRESHOLDS` (see API validation
+below): faster than 3:30 /km or longer than 60 km. It is computed per **run**,
+never from the aggregated total, because a window adding up to 80 km is a good
+week while one 80 km run is the unusual thing - so it needs its own small read
+of `{ userId, distanceKm, durationSeconds }` alongside the `GROUP BY` (the pace
+rule compares two columns arithmetically, which no Prisma filter expresses
+without raw SQL). That read is narrowed to the runners who are **on** the board,
+so an opted-out runner's runs are never fetched at all. The flag changes nothing
+about the ranking; the UI draws a subtle "unverified" note on the row.
 
 ### The global weekly leaderboard (RUN-70, stores nothing)
 
@@ -374,8 +385,10 @@ the resolved `{ weekStart, weekEnd }` back, so a client never has to guess which
 week it is looking at. Omitting it means the current week.
 
 The envelope is `{ weekStart, weekEnd, items, me, total }`, where each row is
-`{ id, firstName, lastName, rank, totalKm, runCount, me }` and `id` is the
-**user's** id (the row links to their public profile). Nothing in a row is
+`{ id, firstName, lastName, rank, totalKm, runCount, me, unverified }` and `id`
+is the **user's** id (the row links to their public profile). `unverified` is the
+same per-run marker the event board carries, derived by the same helper and read
+through the same opt-in gate (RUN-72). Nothing in a row is
 nullable, unlike the event board's: a runner with `showOnLeaderboard` false is
 **absent** here rather than present with withheld numbers, because a global board
 has no membership list they would otherwise appear on. `me` repeats the caller's
@@ -651,6 +664,35 @@ Three server-side specifics worth knowing:
   characters, note at 2000. The v1 forms enforce no lengths, so these exist to keep a
   stray script from storing megabytes in unbounded TEXT columns, not to police real
   input.
+- **Sanity limits are enforced in the service, not the DTOs (RUN-72).**
+  `src/common/runLimits.ts` holds both tiers as constants with the reasoning next to
+  them. `RUN_LIMITS` is hard: distance at most **150 km**, duration at most **24 h**, and
+  a pace between **2:30** and **20:00 /km**. Past any of them the API answers **400** and
+  nothing is stored. The boundaries are **inclusive-legal**: exactly 150 km, exactly 24 h
+  and exactly 2:30 /km all pass. They live in the service because the pace rule reads
+  distance and duration *together*, so a PATCH carrying only one of them is checked
+  against the **merged** pair (the stored value fills the other side) exactly the way an
+  event's date order is. A DTO cannot see the stored row, and two half-rules would be two
+  places to forget.
+
+  These are **honest-mistake guards, not fraud proof**. Every number in this app is typed
+  by the person it flatters, so nothing here can prove a run happened; what the limits
+  catch is a distance entered in metres or a stray zero. Someone determined to invent a
+  plausible run still can, and that is accepted rather than papered over with a stricter
+  number that would start rejecting real ultras.
+
+  `RUN_OUTLIER_THRESHOLDS` is the soft tier: a run faster than **3:30 /km** or longer
+  than **60 km** is legal, stored and ranked like any other, and only picks up the subtle
+  `unverified` marker on leaderboards (see below). RUN-71's seeder is meant to import both
+  constants rather than repeat the literals, so demo data cannot drift past the rules that
+  guard real data.
+
+  The 400 body reaches the runner: `addRun`/`updateRun` in `frontend/src/lib/runs.ts`
+  surface a 400's `message` inline in the Add run form instead of a generic
+  "Saving the run failed (400)". These limits are the first rejection the form cannot
+  predict for itself, which is why the messages are written for a person ("Distance must
+  be at most 150 km per run.") rather than naming DTO fields. Other statuses keep the
+  generic sentence: a 500's message is about the server, not about the run.
 - **Explicit `null` is always a 400**, on create and on PATCH, with exactly one
   documented exception: `route` (RUN-54), where null is the way to say "no route" on
   create and "remove the route" on PATCH. Omitting `effort` or `note` means "use the

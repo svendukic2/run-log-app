@@ -107,6 +107,7 @@ describe('EventsService', () => {
     },
     run: {
       groupBy: jest.fn(),
+      findMany: jest.fn(),
     },
     user: {
       findUnique: jest.fn(),
@@ -119,6 +120,9 @@ describe('EventsService', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    // The outlier read (RUN-72) runs on every participant list; the tests
+    // that care about it override this.
+    prisma.run.findMany.mockResolvedValue([]);
     // join() uses the interactive (callback) form, list() the batch (array)
     // form; the mock serves both.
     prisma.$transaction.mockImplementation(
@@ -309,6 +313,13 @@ describe('EventsService', () => {
         aggregate('user-hidden', 40, 5),
         aggregate('user-ana', 20.25, 3),
       ]);
+      // RUN-72: one of Ana's runs is legal but extreme (10 km at 3:20 /km),
+      // the caller's is ordinary. The hidden runner's runs are not here
+      // because they are never read.
+      prisma.run.findMany.mockResolvedValue([
+        { userId: USER_ID, distanceKm: 10, durationSeconds: 3_000 },
+        { userId: 'user-ana', distanceKm: 10, durationSeconds: 2_000 },
+      ]);
 
       const { items, total } = await service.listParticipants(
         USER_ID,
@@ -322,13 +333,30 @@ describe('EventsService', () => {
         ['user-hidden', null],
         ['user-ana', 1],
       ]);
-      expect(items[0]).toMatchObject({ me: true, totalKm: 12.5, runCount: 2 });
-      // Opted out: no place and no numbers at all.
+      expect(items[0]).toMatchObject({
+        me: true,
+        totalKm: 12.5,
+        runCount: 2,
+        unverified: false,
+      });
+      // Opted out: no place and no numbers at all, the marker included.
       expect(items[1]).toMatchObject({
         me: false,
         totalKm: null,
         runCount: null,
+        unverified: null,
       });
+      // RUN-72 AC2: the extreme run reaches the row as the marker, and the
+      // runs it is derived from are read only for runners on the board.
+      expect(items[2]).toMatchObject({ rank: 1, unverified: true });
+      expect(prisma.run.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            userId: { in: [USER_ID, 'user-ana'] },
+            date: { gte: toDbDate(YESTERDAY), lte: toDbDate(TOMORROW) },
+          },
+        }),
+      );
 
       // The aggregation is one GROUP BY over these participants, bounded by
       // the event's own inclusive window (AC6's contract; the e2e suite

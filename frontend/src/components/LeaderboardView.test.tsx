@@ -36,6 +36,23 @@ describe('LeaderboardView (RUN-70)', () => {
     );
   });
 
+  // RUN-72 AC2: the marker is server-decided, subtle, and carries its own
+  // explanation for a screen reader rather than being a bare word.
+  it('marks the row of a runner whose week holds an unusual run (RUN-72 AC2)', () => {
+    seedLeaderboard(THIS_WEEK, [
+      { firstName: 'Ana', rank: 1, totalKm: 92, runCount: 2, unverified: true },
+      { firstName: 'Bruno', rank: 2, totalKm: 12.5, runCount: 2 },
+    ]);
+
+    render(<LeaderboardView />);
+
+    const rows = board().getAllByRole('listitem');
+    const marker = within(rows[0]).getByTitle(/has not been verified/);
+    expect(marker).toHaveTextContent(/^unverified/);
+    expect(marker).toHaveTextContent(/Unusually fast or long/);
+    expect(within(rows[1]).queryByTitle(/has not been verified/)).toBeNull();
+  });
+
   it('pins my row with my real rank when I rank below the served ones (AC2)', () => {
     const me: LeaderboardEntry = {
       id: 'user-me',
@@ -45,6 +62,7 @@ describe('LeaderboardView (RUN-70)', () => {
       totalKm: 3,
       runCount: 1,
       me: true,
+      unverified: false,
     };
     seedLeaderboard(THIS_WEEK, [{ firstName: 'Ana', rank: 1, totalKm: 42, runCount: 4 }], {
       me,

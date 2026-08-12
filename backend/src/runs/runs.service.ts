@@ -1,9 +1,11 @@
 import {
+  BadRequestException,
   Injectable,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { toDbDate, toIsoDate } from '../common/dates';
+import { runLimitViolation, type RunMeasurements } from '../common/runLimits';
 import { NotificationsService } from '../notifications/notifications.service';
 import { isPrismaError, prismaConstraint } from '../prisma/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
@@ -111,7 +113,25 @@ export class RunsService {
     return this.toResponse(row);
   }
 
-  create(userId: string, dto: CreateRunDto): Promise<RunResponse> {
+  // The sanity limits (RUN-72) are enforced here rather than in the DTOs,
+  // and for one reason: the pace rule reads distance and duration TOGETHER,
+  // so on a PATCH carrying only one of them the other has to come off the
+  // stored row. A DTO cannot see that row. Putting all four limits in the
+  // one place that can is what makes create and update agree by
+  // construction instead of by two copies staying in step.
+  private assertWithinLimits(run: RunMeasurements): void {
+    const violation = runLimitViolation(run);
+    if (violation) throw new BadRequestException(violation);
+  }
+
+  // async, not a bare Promise-returning method: the limit check below
+  // throws before any await, and a synchronous throw out of a method every
+  // caller treats as a promise is a trap - `create(...).catch(...)` would
+  // never see it.
+  async create(userId: string, dto: CreateRunDto): Promise<RunResponse> {
+    // Both fields are required on create, so the pair is complete here and
+    // nothing needs reading first.
+    this.assertWithinLimits(dto);
     return this.createRun(userId, dto, /* retryOnFanOutRace */ true);
   }
 
@@ -229,6 +249,30 @@ export class RunsService {
     // the id is unknown or owned by someone else) rather than rejecting a
     // request that asks for nothing.
     if (Object.keys(data).length === 0) return this.findOne(userId, id);
+
+    // The limits hold on the MERGED pair (RUN-72), the same way the event
+    // date order does: a PATCH moving only the duration must not slide the
+    // pace past the limit against the stored distance. One extra read, and
+    // only when one of the two fields is actually being written.
+    //
+    // Note that this read and the write below are NOT one statement, so two
+    // concurrent PATCHes of the same run - one moving the distance, one the
+    // duration - can each validate against a pre-merge value and commit a
+    // pair outside the limits. That is one owner racing themselves across
+    // two tabs, and these are honest-mistake guards rather than an
+    // invariant the database enforces, so the read stays cheap and separate
+    // instead of taking a row lock.
+    if (dto.distanceKm !== undefined || dto.durationSeconds !== undefined) {
+      const existing = await this.prisma.run.findFirst({
+        where: { id, userId },
+        select: { distanceKm: true, durationSeconds: true },
+      });
+      if (!existing) throw new NotFoundException(`Run ${id} not found`);
+      this.assertWithinLimits({
+        distanceKm: dto.distanceKm ?? existing.distanceKm,
+        durationSeconds: dto.durationSeconds ?? existing.durationSeconds,
+      });
+    }
 
     // One atomic query: WhereUniqueInput carries the owner alongside the
     // id, so "no such row" and "not your row" are both a P2025 mapped to
