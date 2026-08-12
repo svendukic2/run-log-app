@@ -87,6 +87,11 @@ export interface DemoRun {
   date: string; // yyyy-mm-dd
   effort: Effort;
   note: string;
+  // Whether this run is TAGGED to the demo event (RUN-76 AC5). Set by
+  // tagEventRuns below rather than by buildRun, because it is not a property of
+  // the run - it depends on an event that does not exist yet when the run is
+  // generated. The writer turns it into Run.eventId.
+  inEvent: boolean;
 }
 
 export interface DemoUser {
@@ -286,6 +291,10 @@ function buildRun(
     note: faker.datatype.boolean(0.3)
       ? faker.helpers.arrayElement(RUN_NOTES)
       : '',
+    // Untagged until tagEventRuns says otherwise: a run knows nothing about
+    // events, and the event's window is derived from these runs rather than the
+    // other way round.
+    inEvent: false,
   };
 }
 
@@ -484,6 +493,35 @@ function buildEvent(users: DemoUser[], today: string): DemoEvent {
   };
 }
 
+// AC5, and since RUN-76 it is what makes the event page populated at all: the
+// event leaderboard counts TAGGED runs, so an untagged demo would show nine
+// participants on zero kilometres and an empty run feed - the exact empty table
+// this seeder exists to prevent.
+//
+// Every in-window run of every participant is tagged, which restores precisely
+// the set the leaderboard used to sum implicitly, so the board reads the same as
+// it did before that change. Runs outside the window and non-participants' runs
+// stay untagged, which is also what proves the feed is filtering rather than
+// listing everything.
+//
+// Returns new objects instead of mutating: the generator is a pure function and
+// the spec relies on that (same dataset for the same seed, no order-dependent
+// surprises).
+function tagEventRuns(users: DemoUser[], event: DemoEvent): DemoUser[] {
+  const participants = new Set(event.participantEmails);
+  return users.map((user) => {
+    if (!participants.has(user.email)) return user;
+    return {
+      ...user,
+      runs: user.runs.map((run) =>
+        run.date >= event.startDate && run.date <= event.endDate
+          ? { ...run, inEvent: true }
+          : run,
+      ),
+    };
+  });
+}
+
 export interface BuildDemoDatasetOptions {
   // The calendar day the history is generated backwards from. Injectable so
   // the spec is not a different test on a Monday than on a Sunday.
@@ -500,11 +538,17 @@ export function buildDemoDataset(
 
   const users = buildUsers(faker, today);
   const follows = buildFollows(faker, users);
+  // The event is derived from the runs (its window and its target), and the
+  // tags are then derived from the event - so this order is the dependency, not
+  // a preference.
+  const event = buildEvent(users, today);
 
   return {
-    users,
+    users: tagEventRuns(users, event),
     follows,
+    // Built from the ORIGINAL users: the tags change no field these read, and
+    // passing the tagged copy would only suggest they might.
     notifications: buildNotifications(users, follows),
-    event: buildEvent(users, today),
+    event,
   };
 }

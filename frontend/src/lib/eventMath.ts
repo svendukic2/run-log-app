@@ -186,6 +186,57 @@ export function isEventParticipant(value: unknown): value is EventParticipant {
   );
 }
 
+/* The event's tagged runs (RUN-76) ------------------------------------------- */
+
+// One run tagged to this event, as GET /api/events/:id/runs serves it
+// (EventRunResponse, hand-mirrored). Narrower than a Run on purpose: this is
+// somebody else's run seen through an event, so it carries no note and no
+// route - the route is gated by a privacy setting this endpoint does not read.
+export interface EventRun {
+  id: string;
+  date: string;
+  distanceKm: number;
+  durationSeconds: number;
+  runner: {
+    id: string;
+    firstName: string;
+    lastName: string;
+  };
+}
+
+export function isEventRun(value: unknown): value is EventRun {
+  const row = value as EventRun;
+  return (
+    typeof row?.id === 'string' &&
+    typeof row.date === 'string' &&
+    typeof row.distanceKm === 'number' &&
+    typeof row.durationSeconds === 'number' &&
+    typeof row.runner?.id === 'string' &&
+    typeof row.runner.firstName === 'string' &&
+    typeof row.runner.lastName === 'string'
+  );
+}
+
+// One option in the run form's event picker, from
+// GET /api/events/taggable?date= (TaggableEventResponse). The window comes
+// along so the form can say WHY the list is what it is.
+export interface TaggableEvent {
+  id: string;
+  name: string;
+  startDate: string;
+  endDate: string;
+}
+
+export function isTaggableEvent(value: unknown): value is TaggableEvent {
+  const row = value as TaggableEvent;
+  return (
+    typeof row?.id === 'string' &&
+    typeof row.name === 'string' &&
+    typeof row.startDate === 'string' &&
+    typeof row.endDate === 'string'
+  );
+}
+
 // A ranked row: the same participant, with the nullables narrowed away, so
 // the leaderboard component never re-checks what the filter already proved.
 export type RankedParticipant = EventParticipant & {

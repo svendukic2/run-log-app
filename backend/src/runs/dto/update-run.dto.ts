@@ -13,6 +13,7 @@ import {
 } from 'class-validator';
 import {
   EFFORT_LEVELS,
+  EVENT_ID_MAX_LENGTH,
   IsRealNotFutureDate,
   NOTE_MAX_LENGTH,
   ROUTE_NAME_MAX_LENGTH,
@@ -83,4 +84,16 @@ export class UpdateRunDto {
   @ValidateNested()
   @Type(() => RunRouteDto)
   route?: RunRouteDto | null;
+
+  // The same three meanings as `route` (RUN-76): omitted leaves the tag alone,
+  // null UNTAGS the run (AC6), an id retags it. Whether the id is allowed is
+  // decided in runs.service, on the MERGED pair - moving only the date must not
+  // slide a tagged run out of its event's window.
+  @ValidateIfNotNull()
+  @IsString({ message: 'eventId must be a string' })
+  @IsNotEmpty({ message: 'eventId must not be empty' })
+  @MaxLength(EVENT_ID_MAX_LENGTH, {
+    message: `eventId must be at most ${EVENT_ID_MAX_LENGTH} characters`,
+  })
+  eventId?: string | null;
 }

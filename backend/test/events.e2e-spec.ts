@@ -11,6 +11,8 @@ import type {
   EventListResponse,
   EventParticipantListResponse,
   EventResponse,
+  EventRunListResponse,
+  TaggableEventListResponse,
 } from './../src/events/events.service';
 import { createE2eApp, signupTestUser, TestUser } from './create-test-app';
 
@@ -25,6 +27,11 @@ describe('Events API (e2e)', () => {
   let ana: TestUser;
   let bruno: TestUser;
   let eventId: string;
+  // The RUN-76 fixture, built by the ranking test and read by the two that
+  // follow it: this suite runs in order and shares one story (see the header).
+  let taggedEventId: string;
+  let anaTaggedRunId: string;
+  let carlaId: string;
 
   // Days relative to the real today: state derivation runs against the
   // server's UTC today, so fixed dates would rot. Assigned in beforeAll
@@ -321,8 +328,9 @@ describe('Events API (e2e)', () => {
   // real database. The window is deliberately in the past - the runs API
   // accepts at most tomorrow, so a finished event is the only shape whose
   // day-after boundary can carry a run at all.
-  it('ranks participants by km inside the inclusive window and honours the leaderboard opt-out (RUN-69 AC2, AC3, AC6)', async () => {
+  it('ranks participants by their TAGGED runs and honours the leaderboard opt-out (RUN-69 AC2/AC3, RUN-76 AC3/AC4)', async () => {
     const carla = await signupTestUser(app, 'event-carla');
+    carlaId = carla.id;
     const start = addDaysIso(today, -5);
     const end = addDaysIso(today, -3);
 
@@ -355,7 +363,14 @@ describe('Events API (e2e)', () => {
     // pace, and a 50 km run in 30 minutes is exactly that. Well inside both
     // the hard limits and the outlier thresholds, so these rows stay
     // ordinary and the board's ranking is what is under test.
-    const logRun = (user: TestUser, date: string, distanceKm: number) =>
+    // `eventId` is what makes a run count since RUN-76; a run merely dated
+    // inside the window is now an ordinary run.
+    const logRun = (
+      user: TestUser,
+      date: string,
+      distanceKm: number,
+      tagged: string | null = null,
+    ) =>
       request(app.getHttpServer())
         .post('/api/runs')
         .set(user.auth)
@@ -364,18 +379,43 @@ describe('Events API (e2e)', () => {
           distanceKm,
           durationSeconds: Math.round(distanceKm * 300),
           date,
-        })
-        .expect(201);
+          ...(tagged !== null && { eventId: tagged }),
+        });
 
-    // ana runs on both boundary days (counted) and on the days just
-    // outside them (not counted): 5 + 3 = 8 km over 2 runs.
-    await logRun(ana, addDaysIso(start, -1), 10);
-    await logRun(ana, start, 5);
-    await logRun(ana, end, 3);
-    await logRun(ana, addDaysIso(end, 1), 20);
-    await logRun(bruno, addDaysIso(start, 1), 12);
+    // ana tags runs on both boundary days, which is what the inclusive window
+    // means: 5 + 3 = 8 km over 2 runs.
+    const anaFirst = (await logRun(ana, start, 5, created.id).expect(201))
+      .body as { id: string };
+    await logRun(ana, end, 3, created.id).expect(201);
+    // Inside the window but UNTAGGED, and this is the behaviour change: before
+    // RUN-76 this 10 km counted simply for being in the window, and now it does
+    // not. Nothing else in the suite proves that as directly.
+    await logRun(ana, addDaysIso(start, 1), 10).expect(201);
+    await logRun(bruno, addDaysIso(start, 1), 12, created.id).expect(201);
     // carla out-runs everyone and still must not appear on the board.
-    await logRun(carla, addDaysIso(start, 1), 50);
+    await logRun(carla, addDaysIso(start, 1), 50, created.id).expect(201);
+
+    // RUN-76 AC3, and deliberately over HTTP with no form in sight: both server
+    // rules reject and store nothing.
+    const outsideWindow = await logRun(
+      ana,
+      addDaysIso(start, -1),
+      10,
+      created.id,
+    ).expect(400);
+    expect(JSON.stringify(outsideWindow.body)).toContain('Boundary week');
+    const dora = await signupTestUser(app, 'event-dora');
+    await logRun(dora, start, 4, created.id).expect(400);
+    // Nothing was stored by either rejection.
+    const doraRuns = (
+      await request(app.getHttpServer())
+        .get('/api/runs')
+        .set(dora.auth)
+        .expect(200)
+    ).body as unknown[];
+    expect(doraRuns).toEqual([]);
+    taggedEventId = created.id;
+    anaTaggedRunId = anaFirst.id;
 
     const body = (
       await request(app.getHttpServer())
@@ -420,6 +460,111 @@ describe('Events API (e2e)', () => {
     await request(app.getHttpServer())
       .get(`/api/events/${created.id}/participants`)
       .expect(401);
+  });
+
+  // RUN-76 AC2 and AC6, reading the same fixture the ranking test built: the
+  // feed lists what is tagged, and untagging or deleting a run moves both the
+  // feed and the board on the next read.
+  it('lists the event’s tagged runs, and untagging or deleting one moves both reads (RUN-76 AC2, AC6)', async () => {
+    const feed = () =>
+      request(app.getHttpServer())
+        .get(`/api/events/${taggedEventId}/runs`)
+        .set(ana.auth)
+        .expect(200)
+        .then((response) => response.body as EventRunListResponse);
+    const standing = () =>
+      request(app.getHttpServer())
+        .get(`/api/events/${taggedEventId}/participants`)
+        .set(ana.auth)
+        .expect(200)
+        .then((response) => {
+          const body = response.body as EventParticipantListResponse;
+          return body.items.find((row) => row.id === ana.id);
+        });
+
+    const before = await feed();
+    // ana's two tagged runs and bruno's one. NOT ana's untagged 10 km inside
+    // the window, and not carla's 50 km - she is off leaderboards, and a feed
+    // of her rows would rebuild exactly the total the board withholds.
+    expect(before.total).toBe(3);
+    expect(before.items.every((row) => row.runner.id !== carlaId)).toBe(true);
+    expect(
+      before.items.map((row) => row.distanceKm).sort((a, b) => a - b),
+    ).toEqual([3, 5, 12]);
+    // Newest first, the order every run list in this app uses.
+    expect(before.items.map((row) => row.date)).toEqual(
+      [...before.items.map((row) => row.date)].sort().reverse(),
+    );
+    expect(before.items[0].runner).toMatchObject({ lastName: 'Tester' });
+
+    // Untag: the run survives as an ordinary run, and both event reads drop it.
+    await request(app.getHttpServer())
+      .patch(`/api/runs/${anaTaggedRunId}`)
+      .set(ana.auth)
+      .send({ eventId: null })
+      .expect(200);
+    expect((await feed()).total).toBe(2);
+    expect(await standing()).toMatchObject({ totalKm: 3, runCount: 1 });
+
+    // Delete the other one: ana keeps her place with nothing on it.
+    const remaining = (await feed()).items.find(
+      (row) => row.runner.id === ana.id,
+    );
+    await request(app.getHttpServer())
+      .delete(`/api/runs/${remaining?.id}`)
+      .set(ana.auth)
+      .expect(204);
+    expect((await feed()).total).toBe(1);
+    expect(await standing()).toMatchObject({ totalKm: 0, runCount: 0 });
+
+    await request(app.getHttpServer())
+      .get(`/api/events/${taggedEventId}/runs`)
+      .expect(401);
+    await request(app.getHttpServer())
+      .get('/api/events/nonexistent/runs')
+      .set(ana.auth)
+      .expect(404);
+  });
+
+  // RUN-76 AC1: the picker's options are exactly what the write path accepts.
+  it('lists only the caller’s own events covering the given day (RUN-76 AC1)', async () => {
+    const taggable = (user: TestUser, date: string) =>
+      request(app.getHttpServer())
+        .get(`/api/events/taggable?date=${date}`)
+        .set(user.auth)
+        .expect(200)
+        .then((response) => response.body as TaggableEventListResponse);
+
+    const start = addDaysIso(today, -5);
+    const inside = await taggable(ana, start);
+    expect(inside.items.map((row) => row.id)).toContain(taggedEventId);
+    // The picker needs a label and the window; nothing else is served.
+    expect(Object.keys(inside.items[0]).sort()).toEqual([
+      'endDate',
+      'id',
+      'name',
+      'startDate',
+    ]);
+
+    // A day the event does not cover, and a runner who never joined it: both
+    // are empty answers rather than errors, and both match the rule the run
+    // POST enforces.
+    expect(
+      (await taggable(ana, addDaysIso(start, -1))).items.map((row) => row.id),
+    ).not.toContain(taggedEventId);
+    const dora = await signupTestUser(app, 'taggable-dora');
+    expect((await taggable(dora, start)).items).toEqual([]);
+
+    // A missing or nonsensical date is a 400, not today's answer for a run
+    // dated last week.
+    await request(app.getHttpServer())
+      .get('/api/events/taggable')
+      .set(ana.auth)
+      .expect(400);
+    await request(app.getHttpServer())
+      .get('/api/events/taggable?date=2026-02-31')
+      .set(ana.auth)
+      .expect(400);
   });
 
   it('PATCH updates the owner event; non-owners get 404, never 403 (AC5)', async () => {

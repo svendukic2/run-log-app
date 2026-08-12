@@ -14,19 +14,24 @@ import { CurrentUser } from '../auth/current-user.decorator';
 import type { AuthenticatedUser } from '../auth/jwt-auth.guard';
 import { CreateEventDto } from './dto/create-event.dto';
 import { EventListQueryDto } from './dto/event-list-query.dto';
+import { TaggableEventsQueryDto } from './dto/taggable-events-query.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
 import {
   EventsService,
   type EventListResponse,
   type EventParticipantListResponse,
   type EventResponse,
+  type EventRunListResponse,
+  type TaggableEventListResponse,
 } from './events.service';
 
 // The events API (RUN-67), under the global 'api' prefix:
 //   POST   /api/events           create (caller becomes owner + participant)
 //   GET    /api/events           list, paginated, ?state= filterable
+//   GET    /api/events/taggable?date=  events I may tag a run of that date to
 //   GET    /api/events/:id       one event
 //   GET    /api/events/:id/participants  members + their event standings
+//   GET    /api/events/:id/runs  the runs tagged to this event
 //   POST   /api/events/:id/join  join (idempotent, notifies the owner)
 //   DELETE /api/events/:id/join  leave (idempotent; owner cannot)
 //   PATCH  /api/events/:id       owner-only update
@@ -52,6 +57,18 @@ export class EventsController {
     return this.events.list(user.id, query);
   }
 
+  // BEFORE the ':id' route below, and this one really does need the order:
+  // 'taggable' is a single path segment, so a route declared after ':id' would
+  // never be reached - Nest would read it as an event id and 404. ':id/runs'
+  // and ':id/participants' are safe either way (two segments); this is not.
+  @Get('taggable')
+  listTaggableEvents(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: TaggableEventsQueryDto,
+  ): Promise<TaggableEventListResponse> {
+    return this.events.listTaggableEvents(user.id, query.date);
+  }
+
   @Get(':id')
   findOne(
     @CurrentUser() user: AuthenticatedUser,
@@ -71,6 +88,17 @@ export class EventsController {
     @Param('id') id: string,
   ): Promise<EventParticipantListResponse> {
     return this.events.listParticipants(user.id, id);
+  }
+
+  // The event's run feed (RUN-76 AC2): the runs tagged to it, which is a
+  // different question from the standings beside it and answered separately
+  // because the detail page's two cards fail and retry independently.
+  @Get(':id/runs')
+  listRuns(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ): Promise<EventRunListResponse> {
+    return this.events.listRuns(user.id, id);
   }
 
   // 200 rather than 201: this is "ensure I am in", and the repeat call

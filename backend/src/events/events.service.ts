@@ -11,6 +11,10 @@ import { outlierUserIds } from '../common/runLimits';
 import { NotificationsService } from '../notifications/notifications.service';
 import { isPrismaError, prismaConstraint } from '../prisma/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
+// The shared newest-first ordering, imported rather than retyped so the event's
+// run feed arrives in the same order as every other run list (the users module
+// imports from here for the same reason).
+import { runsNewestFirstOrder } from '../runs/run-response';
 // Value import: TransactionIsolationLevel is read at runtime (list batch).
 import { Prisma } from '../generated/prisma/client';
 import type { Event as EventRow } from '../generated/prisma/client';
@@ -82,6 +86,49 @@ export interface EventParticipantResponse {
   totalKm: number | null;
   runCount: number | null;
   unverified: boolean | null;
+}
+
+// One run tagged to this event (RUN-76 AC2), as the event page's run feed
+// lists it: who ran it, when, and the two numbers. The runner is a live join
+// like the event's owner - an event's tagged runs cannot outlive their runner
+// (Run cascades with User), so there is nothing to snapshot.
+//
+// No route and no note: this is a feed of other people's runs, and the route
+// especially is gated by a privacy setting this endpoint does not read
+// (User.showRoutes, RUN-55). Adding either means answering that question
+// first, which is exactly why neither is here by accident.
+export interface EventRunResponse {
+  id: string;
+  date: string;
+  distanceKm: number;
+  durationSeconds: number;
+  runner: {
+    id: string;
+    firstName: string;
+    lastName: string;
+  };
+}
+
+export interface EventRunListResponse {
+  items: EventRunResponse[];
+  total: number;
+}
+
+// One event the caller may tag a run to (RUN-76 AC1). Narrow on purpose: the
+// picker needs a label, and the window is there so the form can explain WHY a
+// given event is or is not on the list. Everything else an EventResponse
+// carries - the participant count, the derived state, the owner - would be
+// joins paid for on every keystroke in a date field.
+export interface TaggableEventResponse {
+  id: string;
+  name: string;
+  startDate: string;
+  endDate: string;
+}
+
+export interface TaggableEventListResponse {
+  items: TaggableEventResponse[];
+  total: number;
 }
 
 // Deliberately not paginated, unlike every other list in this API: a
@@ -236,23 +283,29 @@ export class EventsService {
   // user, like the event itself.
   //
   // Three reads, exactly one of them the aggregation the ticket asks for
-  // (AC6): the event (for the window, and the 404 on an unknown id), its
-  // participants, and one GROUP BY over the runs of those participants
-  // inside the window. Prisma's groupBy compiles to that single SQL
-  // aggregation, which is why there is no raw query here: the same one
-  // statement, but type-checked and injection-free.
+  // (AC6): the event (for the 404 on an unknown id), its participants, and one
+  // GROUP BY over the runs TAGGED to this event. Prisma's groupBy compiles to
+  // that single SQL aggregation, which is why there is no raw query here: the
+  // same one statement, but type-checked and injection-free.
   //
-  // Both dates are inclusive, so the window is a closed interval and a run
-  // logged on the first or the last day counts (the same rule the event's
-  // own state derivation uses). The DATE column stores midnight UTC, so
-  // gte/lte on the day boundaries needs no time-of-day slack.
+  // RUN-76 changed what "counts" means here, and it is worth being explicit
+  // because it is a behaviour change rather than a refactor. This used to sum
+  // every run of every participant whose DATE fell inside the event window, so
+  // joining silently enrolled all of your running and there was no way to say
+  // "this run was for the event, that one was not". Now a run counts when it
+  // carries this event's id, full stop. The window has not stopped mattering -
+  // it is checked when the tag is WRITTEN (runs.service assertTaggable), which
+  // is the one place it can be checked against the run's own date - so an
+  // eventId here already implies a date inside the window and filtering on both
+  // would be the same query twice.
   async listParticipants(
     userId: string,
     eventId: string,
   ): Promise<EventParticipantListResponse> {
+    // Read for the 404 alone now that the aggregation below needs no window.
     const event = await this.prisma.event.findUnique({
       where: { id: eventId },
-      select: { startDate: true, endDate: true },
+      select: { id: true },
     });
     if (!event) throw new NotFoundException(`Event ${eventId} not found`);
 
@@ -280,7 +333,7 @@ export class EventsService {
       by: ['userId'],
       where: {
         userId: { in: participants.map((row) => row.user.id) },
-        date: { gte: event.startDate, lte: event.endDate },
+        eventId,
       },
       _sum: { distanceKm: true },
       _count: { _all: true },
@@ -289,9 +342,9 @@ export class EventsService {
 
     // The outlier marker (RUN-72 AC2), read exactly the way the global
     // board reads it: per RUN, because one 80 km run is unusual while a
-    // window totalling 80 km is not, and as its own small select because
-    // the pace rule compares two columns arithmetically and no Prisma
-    // filter can express that without raw SQL.
+    // set of runs totalling 80 km is not, and as its own small select
+    // because the pace rule compares two columns arithmetically and no
+    // Prisma filter can express that without raw SQL.
     //
     // Narrowed to the participants who are ON the board: an opted-out
     // runner's runs are never read here, so there is nothing to withhold
@@ -299,16 +352,13 @@ export class EventsService {
     const rankedIds = participants
       .filter((row) => row.user.showOnLeaderboard)
       .map((row) => row.user.id);
-    const windowRuns = rankedIds.length
+    const taggedRuns = rankedIds.length
       ? await this.prisma.run.findMany({
-          where: {
-            userId: { in: rankedIds },
-            date: { gte: event.startDate, lte: event.endDate },
-          },
+          where: { userId: { in: rankedIds }, eventId },
           select: { userId: true, distanceKm: true, durationSeconds: true },
         })
       : [];
-    const flagged = outlierUserIds(windowRuns);
+    const flagged = outlierUserIds(taggedRuns);
 
     // Ranked across every participant, not within some page or the
     // opted-in subset's own arrival order: a rank means "your place among
@@ -340,6 +390,102 @@ export class EventsService {
       };
     });
 
+    return { items, total: items.length };
+  }
+
+  // RUN-76 AC2: the runs tagged to this event, newest first, each with its
+  // runner. Readable by any signed-in user, like the event and its
+  // participants - what an event publishes is what its members put in it.
+  //
+  // ONE privacy rule, and it is not optional: a run is in this feed only if its
+  // runner is on leaderboards, or if it is the caller's own. Without that, this
+  // endpoint would quietly undo the leaderboard opt-out the card next to it
+  // honours - summing an opted-out runner's rows here rebuilds exactly the
+  // totalKm and runCount that listParticipants withholds from them. The opt-out
+  // is about the numbers, not about one particular list of them.
+  //
+  // Not paginated, for the leaderboard's reason and with the leaderboard's
+  // envelope: the set is bounded by one event's tagged runs rather than by the
+  // database, and `total` is here so a page window can be added later without
+  // reshaping the response.
+  async listRuns(
+    userId: string,
+    eventId: string,
+  ): Promise<EventRunListResponse> {
+    const event = await this.prisma.event.findUnique({
+      where: { id: eventId },
+      select: { id: true },
+    });
+    if (!event) throw new NotFoundException(`Event ${eventId} not found`);
+
+    const rows = await this.prisma.run.findMany({
+      where: {
+        eventId,
+        // Still a participant, and this is not belt-and-braces: leaving an event
+        // does not untag the runs you tagged to it, so without this a runner who
+        // joined, tagged a run and left would stay in the feed while the
+        // leaderboard beside it (which reads through the participant list)
+        // dropped them. Two cards on one page disagreeing about who is in the
+        // event is worse than either answer alone (review finding).
+        user: { eventParticipations: { some: { eventId } } },
+        OR: [{ user: { showOnLeaderboard: true } }, { userId }],
+      },
+      // The same order every run list in this app uses, imported rather than
+      // retyped (run-response.ts explains the id tiebreak).
+      orderBy: [...runsNewestFirstOrder],
+      select: {
+        id: true,
+        date: true,
+        distanceKm: true,
+        durationSeconds: true,
+        user: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
+
+    const items = rows.map((row) => ({
+      id: row.id,
+      date: toIsoDate(row.date),
+      distanceKm: row.distanceKm,
+      durationSeconds: row.durationSeconds,
+      runner: row.user,
+    }));
+    return { items, total: items.length };
+  }
+
+  // RUN-76 AC1: the events the caller may tag a run of this date to, which is
+  // exactly the set runs.service's assertTaggable accepts - joined by the
+  // caller, and containing the date. Stated as one query in one place so the
+  // form cannot offer an option the write path then rejects; if these two ever
+  // disagree, this is the half that is wrong, because the other one is the
+  // enforcement.
+  //
+  // A caller who has joined nothing, or nothing covering that day, gets an
+  // empty list rather than an error: "no event" is a perfectly ordinary answer
+  // and the form's own "No event" option is always there.
+  async listTaggableEvents(
+    userId: string,
+    dateIso: string,
+  ): Promise<TaggableEventListResponse> {
+    const date = toDbDate(dateIso);
+    const rows = await this.prisma.event.findMany({
+      where: {
+        participants: { some: { userId } },
+        // Inclusive both ends, the closed interval the whole module uses.
+        startDate: { lte: date },
+        endDate: { gte: date },
+      },
+      // The list's own chronological order, so a picker with two overlapping
+      // events lists them the way every other event surface does.
+      orderBy: [{ startDate: 'asc' }, { id: 'asc' }],
+      select: { id: true, name: true, startDate: true, endDate: true },
+    });
+
+    const items = rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      startDate: toIsoDate(row.startDate),
+      endDate: toIsoDate(row.endDate),
+    }));
     return { items, total: items.length };
   }
 
@@ -455,15 +601,44 @@ export class EventsService {
       return this.findOne(userId, id);
     }
 
+    // Moving the window can leave tagged runs outside it, and since RUN-76 the
+    // leaderboard trusts that it cannot: it aggregates by eventId alone, on the
+    // grounds that the window was checked when the tag was written. So the check
+    // is re-applied here, on the only other write that can break it - the runs
+    // that fall outside the NEW window are untagged (review finding).
+    //
+    // Untagging rather than refusing the edit: the owner's window is theirs to
+    // change, and a date they no longer count is not a run anyone needs to lose.
+    // It also keeps those runs editable - the run form always submits its whole
+    // shape, so a run left tagged to an event that no longer covers it would be
+    // a 400 on every subsequent save.
+    const movesWindow =
+      dto.startDate !== undefined || dto.endDate !== undefined;
+
     try {
       // WhereUniqueInput carries the owner alongside the id, so an event
       // deleted between the read and this write is a P2025, mapped to the
       // same 404 as any miss - never a write to a row that stopped being
       // the caller's.
-      const row = await this.prisma.event.update({
-        where: { id, ownerId: userId },
-        data,
-        include: eventInclude(userId),
+      const row = await this.prisma.$transaction(async (tx) => {
+        const updated = await tx.event.update({
+          where: { id, ownerId: userId },
+          data,
+          include: eventInclude(userId),
+        });
+        if (movesWindow) {
+          await tx.run.updateMany({
+            where: {
+              eventId: id,
+              OR: [
+                { date: { lt: updated.startDate } },
+                { date: { gt: updated.endDate } },
+              ],
+            },
+            data: { eventId: null },
+          });
+        }
+        return updated;
       });
       return this.toResponse(row, utcTodayIso(), userId);
     } catch (error) {

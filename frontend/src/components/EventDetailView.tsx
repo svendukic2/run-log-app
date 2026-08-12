@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import EventLeaderboardCard from '@/components/EventLeaderboardCard';
 import EventParticipantsCard from '@/components/EventParticipantsCard';
+import EventRunsCard from '@/components/EventRunsCard';
 import EventStateChips from '@/components/EventStateChips';
 import JoinEventButton from '@/components/JoinEventButton';
 import {
@@ -122,6 +123,11 @@ export default function EventDetailView({ eventId }: { eventId: string }) {
       )}
 
       <EventRosterCards eventId={eventId} event={event} />
+
+      {/* Outside EventRosterCards on purpose: it reads its own store, so a
+          participants read that failed must not hide the run feed (RUN-76 AC2),
+          and the feed's own failure must not hide the leaderboard. */}
+      <EventRunsCard eventId={eventId} />
     </div>
   );
 }

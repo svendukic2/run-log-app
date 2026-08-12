@@ -27,7 +27,7 @@ import {
 import { __resetSessionForTests, __setHardNavigateForTests, hasStoredSession } from '@/lib/session';
 import { jsonResponse } from './apiMockShared';
 import { resetLeafletMock } from './leafletMock';
-import { handleEventsRequest } from './eventsApiMock';
+import { acceptsRunTag, handleEventsRequest } from './eventsApiMock';
 import { handleLeaderboardRequest } from './leaderboardApiMock';
 import { handleNotificationsRequest } from './notificationsApiMock';
 import { handleUsersRequest } from './usersApiMock';
@@ -109,6 +109,20 @@ function routeRejection(route: RunDraft['route']): Response | null {
   if (unknown.length === 0) return null;
   return jsonResponse(400, {
     message: unknown.map((key) => `property route.${key} should not exist`),
+  });
+}
+
+// The event tag rules (RUN-76 AC3), mirrored from the events mock next door for
+// the same reason routeRejection mirrors the whitelist pipe: the real API
+// refuses a tag to an event the caller has not joined or whose window does not
+// contain the run's date, and a mock that accepted any id would let a broken
+// form pass its tests. `date` is the run's MERGED date, which is what the server
+// checks on a PATCH.
+function eventTagRejection(eventId: string | null | undefined, date: string): Response | null {
+  if (!eventId) return null;
+  if (acceptsRunTag(eventId, date)) return null;
+  return jsonResponse(400, {
+    message: ['eventId must be an event you have joined'],
   });
 }
 
@@ -393,12 +407,15 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
     if (rejectedNames.has(draft.routeName)) {
       return Promise.resolve(jsonResponse(400, { message: ['routeName rejected'] }));
     }
-    const rejection = routeRejection(draft.route);
+    const rejection = routeRejection(draft.route) ?? eventTagRejection(draft.eventId, draft.date);
     if (rejection) return Promise.resolve(rejection);
     const run: Run = {
       ...draft,
       effort: draft.effort ?? 'Medium',
       note: draft.note ?? '',
+      // Absent and null are both "no event"; the key is always present in a
+      // served run (RUN-76 AC7).
+      eventId: draft.eventId ?? null,
       // The real server stamps the source itself and answers with the key
       // present, null included (RUN-54). Mirroring that here is what keeps a
       // frontend test from passing against a shape the API never sends.
@@ -496,7 +513,14 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
     if (method === 'PATCH') {
       if (index === -1) return Promise.resolve(jsonResponse(404, { message: 'Not found' }));
       const patch = JSON.parse(String(init.body)) as Partial<RunDraft>;
-      const rejection = routeRejection(patch.route);
+      // The MERGED pair, like the service: a PATCH moving only the date has to
+      // be checked against the stored tag, and one moving only the tag against
+      // the stored date.
+      const mergedEventId =
+        patch.eventId !== undefined ? patch.eventId : db[index].eventId;
+      const rejection =
+        routeRejection(patch.route) ??
+        eventTagRejection(mergedEventId, patch.date ?? db[index].date);
       if (rejection) return Promise.resolve(rejection);
       // The route is pulled out of the spread because the submitted shape and
       // the stored one differ (no client-supplied source), and because absent /

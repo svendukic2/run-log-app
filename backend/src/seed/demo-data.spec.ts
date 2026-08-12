@@ -99,6 +99,29 @@ describe('demo dataset (RUN-71)', () => {
       event.participantEmails.length,
     );
 
+    // RUN-76 AC5: the event's runs are TAGGED. Since tagging became explicit,
+    // an untagged demo would show nine participants on zero kilometres and an
+    // empty run feed - the empty table this whole seeder exists to prevent.
+    const participants = new Set(event.participantEmails);
+    const tagged = dataset.users.flatMap((user) =>
+      user.runs
+        .filter((run) => run.inEvent)
+        .map((run) => ({ email: user.email, date: run.date })),
+    );
+    expect(tagged.length).toBeGreaterThan(20);
+    for (const run of tagged) {
+      // Exactly the set the API would accept for these accounts: a participant
+      // of this event, on a day inside its window (runs.service assertTaggable).
+      expect(participants).toContain(run.email);
+      expect(run.date >= event.startDate).toBe(true);
+      expect(run.date <= event.endDate).toBe(true);
+    }
+    // And the filtering is real rather than "everything is tagged": history
+    // older than the window stays out of the event.
+    expect(
+      dataset.users.some((user) => user.runs.some((run) => !run.inEvent)),
+    ).toBe(true);
+
     // Determinism (house rule): the same day produces the same demo, so the
     // screens can be talked about the same way twice.
     expect(buildDemoDataset({ today: TODAY })).toEqual(dataset);

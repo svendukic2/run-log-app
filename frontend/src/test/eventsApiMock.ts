@@ -9,8 +9,10 @@ import {
   compareEventsChronological,
   type CommunityEvent,
   type EventParticipant,
+  type EventRun,
 } from '@/lib/events';
 import { __resetEventParticipantsForTests } from '@/lib/eventParticipants';
+import { __resetEventRunsForTests } from '@/lib/eventRuns';
 import { todayIso } from '@/lib/runs';
 import { jsonResponse } from './apiMockShared';
 
@@ -19,12 +21,21 @@ let db: CommunityEvent[] = [];
 // derived from them: the real endpoint ranks server-side, so a test that
 // seeds ranks is testing the rendering, which is the part that lives here.
 let participantDb = new Map<string, EventParticipant[]>();
+// The runs tagged to each event (RUN-76), seeded the same way and for the same
+// reason: which runs are tagged is a server fact, and a mock that derived it
+// from a run list would be re-implementing assertTaggable.
+let eventRunDb = new Map<string, EventRun[]>();
 let idCounter = 0;
 // When set, matching /api/events requests fail with the given status
 // before reaching the in-memory backend (failEventsApi below).
 let failure: { method: string; status: number } | null = null;
 // Same idea, scoped to GET /api/events/:id/participants (RUN-69).
 let participantsFailure: number | null = null;
+// And to the two RUN-76 reads, each with its own switch for the same reason:
+// the event page's cards load independently, so a test must be able to fail one
+// without the others.
+let eventRunsFailure: number | null = null;
+let taggableFailure: number | null = null;
 // When true, GET /api/events answers are withheld until release: the
 // response BODY is captured at request time (like a real server whose
 // pages predate a concurrent write), so tests can prove what a load that
@@ -170,6 +181,44 @@ export function handleEventsRequest(
     return Promise.resolve(jsonResponse(200, { items, total: items.length }));
   }
 
+  const eventRuns = url.match(/^\/api\/events\/([^/]+)\/runs$/);
+  if (eventRuns && method === 'GET') {
+    if (eventRunsFailure !== null) {
+      return Promise.resolve(jsonResponse(eventRunsFailure, { message: 'Simulated failure' }));
+    }
+    const eventId = eventRuns[1];
+    if (!db.some((row) => row.id === eventId)) {
+      return Promise.resolve(jsonResponse(404, { message: 'Not found' }));
+    }
+    const items = eventRunDb.get(eventId) ?? [];
+    return Promise.resolve(jsonResponse(200, { items, total: items.length }));
+  }
+
+  // BEFORE the by-id match below, and it has to be: that pattern is
+  // `[^/]+`, which happily swallows `taggable?date=2026-08-12` - the same trap
+  // the real controller has with its ':id' route, for the same reason.
+  if (url.startsWith('/api/events/taggable') && method === 'GET') {
+    if (taggableFailure !== null) {
+      return Promise.resolve(jsonResponse(taggableFailure, { message: 'Simulated failure' }));
+    }
+    const date = new URLSearchParams(url.split('?')[1] ?? '').get('date') ?? '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return Promise.resolve(jsonResponse(400, { message: ['date must be a yyyy-mm-dd string'] }));
+    }
+    // The server's rule, mirrored: joined by the caller, and covering the date.
+    // Derived from the seeded events rather than seeded separately, so a test
+    // cannot make the picker offer an event the write path would reject.
+    const items = sorted()
+      .filter((event) => event.joined && event.startDate <= date && date <= event.endDate)
+      .map((event) => ({
+        id: event.id,
+        name: event.name,
+        startDate: event.startDate,
+        endDate: event.endDate,
+      }));
+    return Promise.resolve(jsonResponse(200, { items, total: items.length }));
+  }
+
   const byId = url.match(/^\/api\/events\/([^/]+)$/);
   if (byId && method === 'GET') {
     const event = db.find((row) => row.id === byId[1]);
@@ -181,20 +230,74 @@ export function handleEventsRequest(
   return null;
 }
 
+// The server's two tag rules (RUN-76 AC3) as one predicate, exported so
+// runsApiMock can mirror the 400 rather than accepting whatever the form sends.
+// That is not pedantry: a mock that accepted any eventId would turn "every save
+// of a tagged run is a 400" into a green suite, which is exactly the bug
+// routeRejection exists to prevent for the route.
+export function acceptsRunTag(eventId: string, date: string): boolean {
+  const event = db.find((row) => row.id === eventId);
+  return Boolean(event?.joined && event.startDate <= date && date <= event.endDate);
+}
+
 // Called from jest.setup.ts before every test: fresh backend, store primed
 // to ready-and-empty.
 export function installEventsApiMock(): void {
   db = [];
   participantDb = new Map();
+  eventRunDb = new Map();
   idCounter = 0;
   failure = null;
   participantsFailure = null;
+  eventRunsFailure = null;
+  taggableFailure = null;
   holdListLoading = false;
   heldListResolvers = [];
   holdCreate = false;
   heldCreateResolvers = [];
   __resetEventsStoreForTests([]);
   __resetEventParticipantsForTests(null);
+  __resetEventRunsForTests(null);
+}
+
+// Seeds the runs tagged to one event (RUN-76) and primes that store, so the
+// card is populated from the first render. Defaults make a plausible row; pass
+// `runner` to attribute it to somebody in particular.
+export function seedEventRuns(
+  eventId: string,
+  drafts: Array<Partial<EventRun> & { distanceKm: number }>,
+): EventRun[] {
+  const items = drafts.map((draft, index) => ({
+    id: `event-run-${index + 1}`,
+    date: todayIso(),
+    durationSeconds: Math.round(draft.distanceKm * 300),
+    runner: { id: 'user-ana', firstName: 'Ana', lastName: 'Tester' },
+    ...draft,
+  }));
+  eventRunDb.set(eventId, items);
+  __resetEventRunsForTests(eventId, items);
+  return items;
+}
+
+// Re-arms the run feed against a failing GET: the card lands in its error state
+// while the leaderboard beside it stays fine.
+export function makeEventRunsLoadFail(status = 500): void {
+  eventRunsFailure = status;
+  __resetEventRunsForTests(null);
+}
+
+export function restoreEventRunsApi(): void {
+  eventRunsFailure = null;
+}
+
+// The same for the run form's picker: its options fail to load and the form
+// still has to save.
+export function failTaggableEvents(status = 500): void {
+  taggableFailure = status;
+}
+
+export function restoreTaggableEvents(): void {
+  taggableFailure = null;
 }
 
 // Seeds one event's participants (RUN-69). Ranks are given, not derived:

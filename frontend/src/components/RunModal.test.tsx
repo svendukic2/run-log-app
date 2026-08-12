@@ -95,8 +95,10 @@ describe('Add run modal (RUN-23)', () => {
         effort: 'Hard',
         note: 'Windy',
         // Nobody opened the map, so the run stores no route and is
-        // indistinguishable from one saved before RUN-54 (AC3).
+        // indistinguishable from one saved before RUN-54 (AC3). Nobody touched
+        // the event picker either, so it belongs to no event (RUN-76 AC7).
         route: null,
+        eventId: null,
       },
     ]);
     expect(onClose).toHaveBeenCalled();
@@ -306,6 +308,7 @@ describe('Edit run modal (RUN-28)', () => {
         effort: 'Hard',
         note: 'Felt smooth, negative splits.',
         route: null,
+        eventId: null,
       },
     ]);
     expect(onClose).toHaveBeenCalled();
