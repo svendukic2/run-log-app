@@ -228,6 +228,28 @@ TypeScript** in `backend/src/generated/` (gitignored, recreated by the `postinst
 script). Feature modules import `PrismaModule` explicitly - it is deliberately not
 `@Global` - and inject `PrismaService`, the app's single database entry point.
 
+**Migrations are hand written, and every one must survive a table with rows
+(RUN-78).** There is no local database on most clones, so the check is
+`npx prisma migrate diff --from-empty --to-schema ./prisma/schema.prisma --script`
+from `backend/`, which renders the schema's SHAPE and is not a template you can paste:
+its output for a new `updatedAt` is a bare `NOT NULL`, which fails on any table that
+already holds data. The pattern that works is to add the column WITH a default and then
+`DROP DEFAULT`, so existing rows are backfilled and the column still matches what Prisma
+expects to find. Enum casts need the same care in the other direction: normalize stray
+values BEFORE `ALTER TABLE ... TYPE ... USING`, because one bad row aborts the whole
+deploy. CI's `prisma migrate deploy` against Postgres 18 is the only thing that actually
+runs these, so a green CI is the proof, not a formality.
+
+**No `Decimal` ever leaves the backend (RUN-78).** `Run.distanceKm` is `NUMERIC(5, 2)`,
+which Prisma types as a decimal.js object. It is converted to a plain number the moment
+it comes out of Prisma, and `backend/src/common/decimal.ts` lists every site that does
+so. This is not tidiness: `decimal > 150` is false for every Decimal, so a missed
+conversion disables a limit or an outlier marker silently and passes every type check.
+Pure modules (`runLimits`, `ranking`) take plain numbers and know nothing about Decimal.
+Relatedly, the runs ordering (`runsNewestFirstOrder` in `backend/src/runs/run-response.ts`
+and `compareRunsNewestFirst` in `frontend/src/lib/runs.ts`) is one decision written in
+two places and the two must change together.
+
 **API response contract is hand-mirrored, and that is a known wart.** `HelloResponse`
 is declared in `backend/src/app.service.ts` (the source of truth) and copied by hand
 into `frontend/src/app/page.tsx`. Change a response shape and you must edit both. The
