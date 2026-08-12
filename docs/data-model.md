@@ -659,6 +659,76 @@ Three server-side specifics worth knowing:
   what they do: `ValidateIfPresent` (null is a mistake) and `ValidateIfNotNull` (null is
   a meaning), both in `src/common/validation.ts`.
 
+## Demo data seeder (RUN-71)
+
+`cd backend && npm run seed` fills an empty database with a demo that makes the social
+features demonstrable. Without it every leaderboard, event and search screen renders an
+empty table, which is a bad thing to discover mid-demo.
+
+**What it creates**, all derived from the day it runs on:
+
+- **15 accounts** on the reserved `@runlog.demo` domain, each with a profile (so they
+  sign in straight onto the dashboard rather than into the setup wizard) and an
+  open-ended goal.
+- **6 to 10 weeks of run history each**, 3 to 5 runs a week, at paces and distances that
+  match the account's running level. The **current** week always has runs, because the
+  global weekly leaderboard reads that week and nothing else.
+- **A follow web** centred on the primary account, so its Following and Followers tabs
+  are populated in both directions.
+- **One active event** whose window contains today, with nine participants who already
+  have runs inside it, so the event leaderboard is populated rather than a list of zeros.
+- **A handful of `new-follower` notifications** for the primary account only. Deliberate:
+  seeding every follow edge and every followed run would put several hundred rows in the
+  bell, which is noise rather than a demo.
+
+**Signing in.** Every seeded account shares one password:
+
+| | |
+| --- | --- |
+| Primary account | `ana.demo@runlog.demo` |
+| Password (all 15 accounts) | `demo-only-password` |
+
+The other fourteen addresses are `firstname.lastname@runlog.demo` from faker-generated
+names; `npm run seed` prints the primary one and the password when it finishes. The
+password is hashed with `AuthService`'s own `BCRYPT_ROUNDS`, so these are ordinary
+accounts that log in through the real Sign in screen.
+
+**Privacy is opted in explicitly.** The three privacy columns default to `false`
+(`common/privacy.ts`), so a seeded account left at the defaults would appear on no
+leaderboard and have a private profile - which would defeat the point. The seeder is the
+intended exception to that default, not a reason to change it. **One** account is left at
+the defaults on purpose: it joins the event and logs runs like the rest, and the event
+board shows it with its rank and distance withheld, so the privacy gate is demonstrable
+rather than merely claimed.
+
+**Idempotency marker: the email domain.** Running the seeder twice does not duplicate
+anything. Every seeded account lives on `@runlog.demo` and nothing else does, so the
+seeder deletes exactly its own previous output first (cascades take the runs, follows,
+notifications and the event with it) and writes it again, all in one transaction. Real
+accounts are never touched. Upserting by email was rejected: it would leave the previous
+run's runs and follows behind and grow the demo on every invocation.
+
+**Determinism.** faker is seeded with a fixed constant and every date is derived from
+today, so two runs on the same day produce the same demo down to the last note. A demo
+that looks different every time is harder to talk about.
+
+**It never runs automatically.** Nothing in `render.yaml`'s build or start command
+reaches it; it is a standalone command a human invokes. It also refuses to run with
+`NODE_ENV=production` unless `npm run seed -- --force` is passed, because it deletes
+before it writes.
+
+Two implementation notes for anyone extending it (`backend/src/seed/`):
+
+- `demo-data.ts` generates the dataset as **plain data with no Prisma in it**, and
+  `seed-demo-data.ts` is the thin writer. That split is what makes the interesting half
+  unit-testable with no database at all (`demo-data.spec.ts`), which matters because a
+  fresh clone has none. `test/seed.e2e-spec.ts` covers the writing half against CI's real
+  Postgres.
+- It runs from the **compiled output** (`nest build && node dist/seed/seed.js`), not
+  ts-node: the Prisma 7 generated client uses ESM-style relative specifiers that
+  ts-node's CommonJS resolution cannot follow, the same incompatibility `jest.shared.js`
+  works around for the test suites.
+
 ## Test database
 
 `npm run test:e2e` never touches the development database. The suite derives its own

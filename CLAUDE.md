@@ -64,6 +64,7 @@ Backend, from `backend/`:
 | `npm run test:watch` | Same, in watch mode                                       |
 | `npm run test:e2e`   | Supertest e2e (`test/`, uses `test/jest-e2e.json`)        |
 | `npm run test:cov`   | Coverage                                                  |
+| `npm run seed`       | Fill the database with demo data (RUN-71, see below)      |
 
 Frontend, from `frontend/`:
 
@@ -158,6 +159,21 @@ only the newest page (the panel is a dropdown, not a list screen), takes its
 badge count from the server envelope, and re-reads whenever the panel opens
 without blanking the rows already on screen. Put a store behind `AppDataBoundary`
 unless, like this one, it decorates every screen rather than being one.
+
+**The demo seeder is two halves, and the split is the point (RUN-71).**
+`backend/src/seed/demo-data.ts` builds the whole demo (15 accounts, weeks of run
+history, follows, one active event) as **plain data with no Prisma in it**;
+`seed-demo-data.ts` is the thin writer, and `seed.ts` is the `npm run seed`
+CLI. A fresh clone has no database, so everything interesting - realistic runs,
+the shape the leaderboard needs - is unit-tested without one, and
+`test/seed.e2e-spec.ts` covers the writing against CI's Postgres. Two traps
+worth knowing before you touch it: seeded accounts must be opted **into** the
+privacy settings explicitly, because the columns default to false and a
+defaulted demo is invisible on every social screen; and it runs from the
+compiled output rather than ts-node, because the Prisma 7 generated client's
+ESM-style specifiers do not survive ts-node's CommonJS resolution. The shared
+demo password, the `@runlog.demo` idempotency marker and the rest are in
+`docs/data-model.md`.
 
 **Configuration goes through ConfigService.** `ConfigModule.forRoot({ isGlobal: true })`
 is registered in `backend/src/app.module.ts`, so it reads `backend/.env` at startup and
