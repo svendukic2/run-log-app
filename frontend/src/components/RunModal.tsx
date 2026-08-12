@@ -234,7 +234,8 @@ export default function RunModal({ run, onClose }: RunModalProps) {
               onClick={onClose}
               disabled={saving}
               aria-label="Close"
-              className="flex size-[34px] shrink-0 items-center justify-center rounded-[10px] text-secondary hover:bg-muted hover:text-ink disabled:cursor-default disabled:opacity-60"
+              // 34x34 drawn, 44x44 tapped (RUN-75 AC3, the RUN-64 pattern).
+              className="relative flex size-[34px] shrink-0 items-center justify-center rounded-[10px] text-secondary before:absolute before:-inset-[5px] before:content-[''] hover:bg-muted hover:text-ink disabled:cursor-default disabled:opacity-60"
             >
               <CloseIcon />
             </button>

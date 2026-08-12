@@ -244,7 +244,10 @@ export default function NotificationsBell() {
         aria-haspopup="dialog"
         aria-expanded={isOpen}
         onClick={() => (isOpen ? closePanel(true) : openPanel())}
-        className="relative flex size-10 shrink-0 items-center justify-center rounded-[10px] border border-line bg-white text-secondary hover:bg-muted hover:text-text-primary"
+        // The bell is drawn 40x40, under the 44px minimum touch target, so a
+        // pseudo-element grows the HIT area to 44x44 without moving anything
+        // on screen (the pattern RUN-64 established for the privacy toggle).
+        className="relative flex size-10 shrink-0 items-center justify-center rounded-[10px] border border-line bg-white text-secondary before:absolute before:-inset-[2px] before:content-[''] hover:bg-muted hover:text-text-primary"
       >
         <BellIcon />
         {/* AC1. The count already lives in the button's accessible name, so

@@ -71,7 +71,8 @@ export default function AppShell({ children }: Readonly<{ children: React.ReactN
           aria-label="Open navigation"
           aria-controls={SIDEBAR_ID}
           aria-expanded={isNavOpen}
-          className="ml-auto flex size-10 items-center justify-center rounded-[10px] text-on-dark-soft hover:bg-ink-raised hover:text-white"
+          // 40x40 drawn, 44x44 tapped (RUN-75 AC3, the RUN-64 pattern).
+          className="relative ml-auto flex size-10 items-center justify-center rounded-[10px] text-on-dark-soft before:absolute before:-inset-[2px] before:content-[''] hover:bg-ink-raised hover:text-white"
         >
           <MenuIcon />
         </button>

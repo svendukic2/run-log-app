@@ -196,7 +196,8 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
           type="button"
           onClick={onClose}
           aria-label="Close navigation"
-          className="ml-auto flex size-9 shrink-0 items-center justify-center rounded-[10px] text-on-dark-subtle hover:bg-ink-raised hover:text-white lg:hidden"
+          // 36x36 drawn, 44x44 tapped (RUN-75 AC3, the RUN-64 pattern).
+          className="relative ml-auto flex size-9 shrink-0 items-center justify-center rounded-[10px] text-on-dark-subtle before:absolute before:-inset-[4px] before:content-[''] hover:bg-ink-raised hover:text-white lg:hidden"
         >
           <CloseIcon />
         </button>

@@ -78,8 +78,15 @@ export default function FollowButton({ target, setFollowing, size = 'page' }: Fo
         type="button"
         onClick={toggleFollow}
         disabled={busy}
-        className={`relative z-10 shrink-0 rounded-full font-semibold disabled:cursor-default disabled:opacity-60 ${
-          size === 'row' ? 'px-[16px] py-[7px] text-[12.5px]' : 'px-[20px] py-[9px] text-[13.5px]'
+        // Drawn ~33px ('row') and ~38px ('page') tall, both under the 44px
+        // minimum, so a pseudo-element grows the hit area vertically to 44+.
+        // Vertically only: the pill is already wider than 44px, and on the
+        // People row it sits beside a stretched profile link that a sideways
+        // expansion would eat into (RUN-75 AC3, the RUN-64 pattern).
+        className={`relative z-10 shrink-0 rounded-full font-semibold before:absolute before:inset-x-0 before:content-[''] disabled:cursor-default disabled:opacity-60 ${
+          size === 'row'
+            ? 'px-[16px] py-[7px] text-[12.5px] before:-inset-y-[6px]'
+            : 'px-[20px] py-[9px] text-[13.5px] before:-inset-y-[3px]'
         } ${
           target.following
             ? 'border border-line-strong bg-white text-text-primary hover:bg-muted'

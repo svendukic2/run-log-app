@@ -68,7 +68,15 @@ interface RunRowMenuProps {
 // elsewhere or pressing Escape closes the menu without any action (AC4): the
 // transparent backdrop swallows the click, so a dismissal on the table can
 // never fall through to the row navigation underneath.
-export default function RunRowMenu({ run, sizeClassName = 'size-8' }: RunRowMenuProps) {
+// The table's 32px kebab is under the 44px minimum touch target, and 768px is
+// a touch width too (the sidebar is still a drawer there), so the default
+// grows its HIT area with a pseudo-element and leaves the drawn size alone
+// (RUN-75 AC3, the RUN-64 pattern). The card variant already passes size-11,
+// which needs no help and must not get any: it sits on top of a full-card
+// link that a wider hit area would steal taps from.
+const TABLE_SIZE = "size-8 before:absolute before:-inset-[6px] before:content-['']";
+
+export default function RunRowMenu({ run, sizeClassName = TABLE_SIZE }: RunRowMenuProps) {
   const [placement, setPlacement] = useState<MenuPlacement | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -169,7 +177,7 @@ export default function RunRowMenu({ run, sizeClassName = 'size-8' }: RunRowMenu
         aria-haspopup="menu"
         aria-expanded={isOpen}
         onClick={() => (isOpen ? closeMenu(true) : openMenu())}
-        className={`flex shrink-0 items-center justify-center rounded-[8px] text-tertiary hover:bg-muted hover:text-text-primary ${sizeClassName}`}
+        className={`relative flex shrink-0 items-center justify-center rounded-[8px] text-tertiary hover:bg-muted hover:text-text-primary ${sizeClassName}`}
       >
         <KebabIcon />
       </button>
