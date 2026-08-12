@@ -37,13 +37,20 @@ describe('Auth refresh and logout (e2e)', () => {
   }
 
   // Mints a token with claims we choose, standing in for one issued at some
-  // point in the past. `exp` is always in the past: refresh is supposed to
-  // accept expired tokens, so testing it with fresh ones would test nothing.
-  async function signToken(claims: Record<string, unknown>): Promise<string> {
-    // expiresIn is cleared because the module sets one and jsonwebtoken
-    // refuses to be told the expiry twice. The `iat` in the payload survives
-    // as given (noTimestamp would delete it, which is not what we want).
-    return jwt.signAsync(claims, { expiresIn: undefined });
+  // point in the past.
+  //
+  // The expiry is set through `expiresIn` and NEVER as an `exp` claim in the
+  // payload: jsonwebtoken refuses to be told the expiry twice, and the module
+  // already configures one. Since it computes `exp` from `payload.iat` when
+  // that is present, backdating `iat` backdates the expiry with it, which is
+  // what makes these tokens genuinely expired rather than merely old.
+  async function signToken(
+    claims: Record<string, unknown>,
+    ttlSeconds?: number,
+  ): Promise<string> {
+    return ttlSeconds === undefined
+      ? jwt.signAsync(claims)
+      : jwt.signAsync(claims, { expiresIn: ttlSeconds });
   }
 
   async function signUp(): Promise<AuthResponse> {
@@ -85,7 +92,6 @@ describe('Auth refresh and logout (e2e)', () => {
       ver: 0,
       sst: issuedAt,
       iat: issuedAt,
-      exp: issuedAt + 15 * 60,
     });
 
     await request(app.getHttpServer())
@@ -109,12 +115,12 @@ describe('Auth refresh and logout (e2e)', () => {
     // as 0 and match the column default, or shipping this logs everyone out.
     const { user } = await signUp();
     const issuedAt = nowInSeconds() - 8 * 24 * 60 * 60;
-    const legacy = await signToken({
-      sub: user.id,
-      email: user.email,
-      iat: issuedAt,
-      exp: issuedAt + 7 * 24 * 60 * 60,
-    });
+    const legacy = await signToken(
+      { sub: user.id, email: user.email, iat: issuedAt },
+      // The seven day lifetime every pre-RUN-74 token was signed with, so
+      // this one is a day past its own expiry.
+      7 * 24 * 60 * 60,
+    );
 
     const renewed = (await refresh(legacy).expect(200)).body as AuthResponse;
 
@@ -132,7 +138,6 @@ describe('Auth refresh and logout (e2e)', () => {
       ver: 0,
       sst: now - REFRESH_IDLE_WINDOW_SECONDS - 60,
       iat: now - REFRESH_IDLE_WINDOW_SECONDS - 60,
-      exp: now - 60,
     });
     await refresh(idle).expect(401);
 
@@ -145,7 +150,6 @@ describe('Auth refresh and logout (e2e)', () => {
       ver: 0,
       sst: now - SESSION_ABSOLUTE_MAX_SECONDS - 60,
       iat: now - 60,
-      exp: now + 15 * 60,
     });
     await refresh(ancient).expect(401);
   });
