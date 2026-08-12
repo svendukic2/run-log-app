@@ -71,13 +71,28 @@ function publish(next: RunsSnapshot): void {
   window.dispatchEvent(new Event(RUNS_CHANGED_EVENT));
 }
 
-// Mirrors the ordering of GET /api/runs (backend runs.service.ts findAll):
-// date descending, id descending as the same-day tiebreak. The two MUST
-// change together - the client re-sorts its cache with this after every
-// mutation, and any divergence makes a freshly added same-day run jump to a
-// different position on the next full load.
+// Mirrors the ordering of GET /api/runs (backend runsNewestFirstOrder in
+// run-response.ts): date descending, then createdAt descending, then id
+// descending. The two MUST change together - the client re-sorts its cache
+// with this after every mutation, and any divergence makes a freshly added
+// same-day run jump to a different position on the next full load.
+//
+// createdAt joined this in RUN-78 and is what makes two runs logged on the
+// same day come back in the order they were entered.
+//
+// The '' fallback is unreachable in practice and exists only because the Run
+// type has to stay wide enough for readLegacyRuns' cast (review fix: an
+// earlier comment here claimed imported v1 runs pass through the cache, which
+// is wrong - importLegacyRuns only POSTs, and the fetch that follows replaces
+// the snapshot wholesale). Every list this sorts came off the API, and isRun
+// rejects a server body with no createdAt, so the fallback never decides an
+// order.
 function compareRunsNewestFirst(a: Run, b: Run): number {
-  return b.date.localeCompare(a.date) || b.id.localeCompare(a.id);
+  return (
+    b.date.localeCompare(a.date) ||
+    (b.createdAt ?? '').localeCompare(a.createdAt ?? '') ||
+    b.id.localeCompare(a.id)
+  );
 }
 
 function sortNewestFirst(runs: Run[]): Run[] {

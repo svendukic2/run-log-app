@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { addDaysIso, toDbDate, utcTodayIso } from '../common/dates';
+import { Prisma } from '../generated/prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { deriveEventState, EventsService } from './events.service';
@@ -294,8 +295,15 @@ describe('EventsService', () => {
       };
     }
 
+    // Decimal, not number: _sum over a NUMERIC column returns one (RUN-78),
+    // and building the fixture that way is what keeps the service's kmNumber
+    // call from being deletable without a failing test.
     function aggregate(userId: string, km: number, runs: number) {
-      return { userId, _sum: { distanceKm: km }, _count: { _all: runs } };
+      return {
+        userId,
+        _sum: { distanceKm: new Prisma.Decimal(km) },
+        _count: { _all: runs },
+      };
     }
 
     it('ranks the opted-in participants and withholds the opted-out runner’s numbers (AC2, AC3)', async () => {
@@ -318,8 +326,16 @@ describe('EventsService', () => {
       // the caller's is ordinary. The hidden runner's runs are not here
       // because they are never read.
       prisma.run.findMany.mockResolvedValue([
-        { userId: USER_ID, distanceKm: 10, durationSeconds: 3_000 },
-        { userId: 'user-ana', distanceKm: 10, durationSeconds: 2_000 },
+        {
+          userId: USER_ID,
+          distanceKm: new Prisma.Decimal(10),
+          durationSeconds: 3_000,
+        },
+        {
+          userId: 'user-ana',
+          distanceKm: new Prisma.Decimal(10),
+          durationSeconds: 2_000,
+        },
       ]);
 
       const { items, total } = await service.listParticipants(

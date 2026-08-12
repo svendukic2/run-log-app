@@ -5,6 +5,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { toDbDate, toIsoDate, utcTodayIso } from '../common/dates';
+import { kmNumber, toMeasuredRuns } from '../common/decimal';
 import { resolvePagination } from '../common/pagination-query.dto';
 import { rankByDistance, roundKm } from '../common/ranking';
 import { outlierUserIds } from '../common/runLimits';
@@ -352,11 +353,16 @@ export class EventsService {
     const rankedIds = participants
       .filter((row) => row.user.showOnLeaderboard)
       .map((row) => row.user.id);
+    // toMeasuredRuns is the Decimal boundary (RUN-78), for the same reason
+    // the global board applies it: the outlier rules compare plain numbers,
+    // and a Decimal against a threshold is false every time.
     const taggedRuns = rankedIds.length
-      ? await this.prisma.run.findMany({
-          where: { userId: { in: rankedIds }, eventId },
-          select: { userId: true, distanceKm: true, durationSeconds: true },
-        })
+      ? toMeasuredRuns(
+          await this.prisma.run.findMany({
+            where: { userId: { in: rankedIds }, eventId },
+            select: { userId: true, distanceKm: true, durationSeconds: true },
+          }),
+        )
       : [];
     const flagged = outlierUserIds(taggedRuns);
 
@@ -367,7 +373,7 @@ export class EventsService {
       participants.map((row) => ({
         id: row.user.id,
         showOnLeaderboard: row.user.showOnLeaderboard,
-        totalKm: roundKm(byUser.get(row.user.id)?._sum.distanceKm ?? 0),
+        totalKm: roundKm(kmNumber(byUser.get(row.user.id)?._sum.distanceKm)),
       })),
     );
 
@@ -384,7 +390,7 @@ export class EventsService {
         // client reconstruct one (AC3).
         rank,
         totalKm:
-          rank === null ? null : roundKm(aggregate?._sum.distanceKm ?? 0),
+          rank === null ? null : roundKm(kmNumber(aggregate?._sum.distanceKm)),
         runCount: rank === null ? null : (aggregate?._count._all ?? 0),
         unverified: rank === null ? null : flagged.has(row.user.id),
       };
@@ -445,7 +451,11 @@ export class EventsService {
     const items = rows.map((row) => ({
       id: row.id,
       date: toIsoDate(row.date),
-      distanceKm: row.distanceKm,
+      // The Decimal boundary (RUN-78), on a feed RUN-76 added in parallel:
+      // this response is served straight to a browser, so the decimal.js
+      // object has to become a plain number here like it does in every other
+      // mapper. Listed in common/decimal.ts with the rest.
+      distanceKm: kmNumber(row.distanceKm),
       durationSeconds: row.durationSeconds,
       runner: row.user,
     }));

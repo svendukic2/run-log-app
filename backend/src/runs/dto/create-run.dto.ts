@@ -12,11 +12,13 @@ import {
   IsString,
   Matches,
   MaxLength,
+  Min,
   registerDecorator,
   ValidateNested,
   type ValidationOptions,
 } from 'class-validator';
 import { addDaysIso, isRealCalendarDay, utcTodayIso } from '../../common/dates';
+import type { $Enums } from '../../generated/prisma/client';
 import { ValidateIfNotNull, ValidateIfPresent } from '../../common/validation';
 import { CoordinateDto, MAX_WAYPOINTS } from '../../routes/dto/plan-route.dto';
 
@@ -27,8 +29,31 @@ export { ValidateIfNotNull, ValidateIfPresent };
 
 // Mirrors frontend/src/lib/runs.ts EFFORT_LEVELS; the API and the UI must
 // agree on the capitalized spellings (docs/data-model.md).
-export const EFFORT_LEVELS = ['Easy', 'Medium', 'Hard'] as const;
+//
+// `satisfies` ties it to the database enum in both directions (RUN-78 review
+// fix). Since the column became an enum, the read-side guard that used to
+// catch a mismatch is gone, so an extra value added here without a migration
+// would validate happily and then fail at write time as an unmapped Prisma
+// error - a worse 500 than the guard that was removed. The satisfies clause
+// catches a value this array has and the enum does not; the alias below
+// catches the reverse.
+export const EFFORT_LEVELS = [
+  'Easy',
+  'Medium',
+  'Hard',
+] as const satisfies readonly $Enums.Effort[];
 export type Effort = (typeof EFFORT_LEVELS)[number];
+
+// Compile error if the database enum ever gains a value this array lacks.
+// Exported because it is the invariant, not a scratch alias: it resolves to
+// `true` exactly while the two agree.
+export type EffortCoversTheDatabaseEnum =
+  Exclude<$Enums.Effort, Effort> extends never ? true : never;
+
+// The smallest distance the storage type can hold without rounding to zero:
+// Run.distanceKm is NUMERIC(5, 2) since RUN-78. Shared by both runs DTOs so
+// create and update agree.
+export const MIN_DISTANCE_KM = 0.01;
 
 // Medium is what the Add run modal preselects (ADD-8), so it is also what a
 // payload without an effort means. Omitted, not null: an explicit null is
@@ -148,8 +173,17 @@ export class CreateRunDto {
   })
   routeName!: string;
 
+  // The floor is 0.01, not "greater than 0", since the column became
+  // NUMERIC(5, 2) (RUN-78 review fix). Postgres rounds a third decimal away
+  // on write, which is the intended behaviour for 8.234 and a hole for 0.004:
+  // it passes IsPositive, passes the pace check, and then stores as 0.00 - a
+  // value the API's own rules forbid, and a divisor of zero for every pace
+  // derivation downstream. Rejecting it is cheaper than defending against it.
   @IsNumber({}, { message: 'distanceKm must be a number' })
   @IsPositive({ message: 'distanceKm must be greater than 0' })
+  @Min(MIN_DISTANCE_KM, {
+    message: `distanceKm must be at least ${MIN_DISTANCE_KM}`,
+  })
   distanceKm!: number;
 
   @IsInt({ message: 'durationSeconds must be an integer number' })

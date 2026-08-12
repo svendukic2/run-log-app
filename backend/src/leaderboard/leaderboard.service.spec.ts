@@ -1,5 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { toDbDate } from '../common/dates';
+import { Prisma } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { LEADERBOARD_LIMIT, LeaderboardService } from './leaderboard.service';
 
@@ -15,8 +16,17 @@ function candidate(id: string) {
   return { id, firstName: id, lastName: 'Tester' };
 }
 
+// A groupBy result as Prisma actually returns it: _sum over a NUMERIC column
+// is a Decimal, not a number (RUN-78). Building it that way is what makes the
+// kmNumber call in the service load-bearing - with a plain number here, the
+// whole conversion could be deleted and this suite would stay green while
+// every totalKm on the board turned into an object.
 function aggregate(userId: string, km: number, runs: number) {
-  return { userId, _sum: { distanceKm: km }, _count: { _all: runs } };
+  return {
+    userId,
+    _sum: { distanceKm: new Prisma.Decimal(km) },
+    _count: { _all: runs },
+  };
 }
 
 describe('LeaderboardService (RUN-70)', () => {
@@ -140,12 +150,31 @@ describe('LeaderboardService (RUN-70)', () => {
       aggregate(USER_ID, 20, 2),
       aggregate('user-ana', 20, 2),
     ]);
+    // Decimals, like the column returns (RUN-78). The outlier rules are plain
+    // arithmetic, so a Decimal that reached them would compare false against
+    // every threshold and the marker would quietly stop appearing.
     prisma.run.findMany.mockResolvedValue([
-      { userId: USER_ID, distanceKm: 10, durationSeconds: 3_000 },
-      { userId: USER_ID, distanceKm: 10, durationSeconds: 3_100 },
+      {
+        userId: USER_ID,
+        distanceKm: new Prisma.Decimal(10),
+        durationSeconds: 3_000,
+      },
+      {
+        userId: USER_ID,
+        distanceKm: new Prisma.Decimal(10),
+        durationSeconds: 3_100,
+      },
       // 10 km at 3:20 /km: inside the hard limits, past the soft one.
-      { userId: 'user-ana', distanceKm: 10, durationSeconds: 2_000 },
-      { userId: 'user-ana', distanceKm: 10, durationSeconds: 3_000 },
+      {
+        userId: 'user-ana',
+        distanceKm: new Prisma.Decimal(10),
+        durationSeconds: 2_000,
+      },
+      {
+        userId: 'user-ana',
+        distanceKm: new Prisma.Decimal(10),
+        durationSeconds: 3_000,
+      },
     ]);
 
     const board = await service.weeklyBoard(USER_ID, { weekStart: WEDNESDAY });

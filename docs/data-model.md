@@ -108,7 +108,10 @@ diverge.
   Never integers, so nothing breaks when storage moves.
 - **Dates are calendar days, not timestamps**: `yyyy-mm-dd` strings in TypeScript, `DATE`
   columns in Postgres. A run belongs to a calendar day wherever the device is
-  (`runs.ts#toIsoDate`). The only timestamps are audit fields (`updatedAt`).
+  (`runs.ts#toIsoDate`). The only timestamps are audit fields (`createdAt`,
+  `updatedAt`), and since RUN-78 **every table carries `updatedAt`**. The one place an
+  audit timestamp is also part of the API contract is `Run.createdAt`, because the
+  ordering needs it (see Run below).
 - **Weeks start on Monday** and are identified by the ISO date of their Monday
   (`runs.ts#startOfWeek`). "Which week?" is always a string comparison.
 - **Durations are integer seconds.** `42:15` and `1:18:44` are input/display shapes only
@@ -116,8 +119,18 @@ diverge.
 - **Pace is never stored.** Always derived as `durationSeconds / distanceKm` (ADD-4).
 - **Enums are capitalized string unions** matching the UI copy: effort is
   `'Easy' | 'Medium' | 'Hard'` (`EFFORT_LEVELS`), running level is
-  `'Beginner' | 'Intermediate' | 'Advanced'`. Plain strings in the DB (portable across
-  Postgres and SQLite), validated at the edge.
+  `'Beginner' | 'Intermediate' | 'Advanced'`. Since RUN-78 they are **real Postgres
+  enums** (`Effort`, `RunningLevel`), whose labels are the API values verbatim - there
+  is no translation layer, so adding a level is a migration rather than an edit to one
+  array. They were TEXT before, which is why both services carried a read-side guard
+  answering 500 on a value outside the vocabulary; the database enforces it now and
+  those guards are gone.
+- **Distances are exact, not approximate.** `Run.distanceKm` is `NUMERIC(5, 2)` since
+  RUN-78, not a float: a distance is a number a human typed, so 12.3 has to still be
+  12.3 after a week of them is summed. Prisma types that column as `Decimal`, which is
+  converted to a plain number at the backend boundary and nowhere else - see
+  `backend/src/common/decimal.ts`, which lists every site. **No `Decimal` is ever
+  serialized**: the API's `distanceKm` is a plain JSON number and always was.
 - **Optional text is `''`, optional dates are `null`** (see `Run.note` and
   `Goal.endDate`).
 
@@ -531,7 +544,7 @@ user id, not the address.
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| runningLevel | 'Beginner' \| 'Intermediate' \| 'Advanced' | Set once in onboarding (LVL-2); not editable after (by design, flagged) |
+| runningLevel | 'Beginner' \| 'Intermediate' \| 'Advanced' | Set once in onboarding (LVL-2); not editable after (by design, flagged). The `RunningLevel` Postgres enum since RUN-78 |
 | defaultWeeklyGoalKm | number | Settings "Default weekly goal" (SET-3); seeds future weeks only (SET-6) |
 
 Both fields live on the same `ProfileRecord` in `onboarding.ts` - one record, not
@@ -603,13 +616,26 @@ Exactly as implemented in `runs.ts` (RUN-23):
 | --- | --- | --- |
 | id | string | Generated on save |
 | routeName | string | Required (ADD-7, A12) |
-| distanceKm | number | > 0, one decimal shown (ADD-5) |
+| distanceKm | number | > 0, one decimal shown (ADD-5). `NUMERIC(5, 2)` since RUN-78: stored exactly, a third decimal rounded away on write, capped well under the type by RUN-72's 150 km limit |
 | durationSeconds | number | > 0; parsed from mm:ss or h:mm:ss (ADD-6) |
-| date | yyyy-mm-dd | Defaults to today (ADD-7) |
+| date | yyyy-mm-dd | Defaults to today (ADD-7). When the run HAPPENED |
+| createdAt | ISO instant | When the run was LOGGED (RUN-78). Server-assigned, read-only, not part of any write |
 | effort | Effort | Defaults to 'Medium' (ADD-8) |
 | note | string | Only optional field; `''` when absent |
 | route | RunRoute \| null | The optional drawn route (RUN-54); `null` on every run saved without one |
 | eventId | string \| null | The event this run was logged for (RUN-76); `null` on every untagged run, which is most of them |
+
+**The order runs come back in, and why both sides carry it (RUN-78).** Every runs list -
+the owner's own and a public profile's - is sorted `date` desc, then `createdAt` desc,
+then `id` desc (`runsNewestFirstOrder` in `backend/src/runs/run-response.ts`). The
+client mirrors it exactly in `compareRunsNewestFirst` (`frontend/src/lib/runs.ts`),
+because the cache re-sorts itself after every mutation while a full page load takes the
+server's order: if the two disagreed, a run added to a day that already had one would
+sit in one position now and a different one after a refresh. `createdAt` is what makes
+that order meaningful instead of merely deterministic - the `id` was a cuid, stable but
+arbitrary. Runs written before the migration all share its timestamp and still fall
+through to the id, which is the best available: their real insertion order was never
+recorded. **Change one of these two sorts and you must change the other.**
 
 Start time, elevation and route type from Run detail (DET-7) are **deliberately absent**:
 they are display-only fields no form captures (assumption A10). If the designer answers
@@ -635,8 +661,10 @@ Six things about it are decisions, not accidents:
   submit or receive a polyline with no waypoints, so there is no cross-field validation
   rule and no half-written route to store. A `CHECK` constraint
   (`Run_route_columns_all_or_none`) guards the same invariant from the database side,
-  and reading a row that violates it anyway is a loud 500 that names the row, like a
-  stored effort outside the vocabulary.
+  and reading a row that violates it anyway is a loud 500 that names the row. It is now
+  the only such guard left on the read path: the one for a stored effort outside the
+  vocabulary went with RUN-78, which made the column an enum the database itself
+  refuses to break.
 - **`routeSource` is server-assigned.** The polyline can only have come from
   `POST /api/routes/plan`, so the server already knows who drew it; a client-supplied
   provenance field would be a claim, not a fact. Sending one is rejected by the app-wide
@@ -704,7 +732,8 @@ Planned shape for RUN-32/RUN-35; not implemented yet:
 | weekStart | yyyy-mm-dd | Monday of the week the plan targets |
 | suggestedTargetKm | number | "22 km SUGGESTED TARGET" (AIC-4) |
 | deltaVsLastWeekPct | number | "+10% VS LAST WEEK" |
-| sessions | string | "3-4" |
+| sessionsMin | number | Low end of the suggested session count |
+| sessionsMax | number | High end; equal to `sessionsMin` when the plan suggests an exact number |
 | keyWorkout | string | "1 tempo" |
 | narrative | string | The explanation paragraph |
 | updatedAt | timestamp | Drives "updated 2h ago" (AIC-3) |
@@ -712,6 +741,13 @@ Planned shape for RUN-32/RUN-35; not implemented yet:
 Regenerating creates a new row for the same week; the newest row per week is the current
 plan, older weeks' newest rows are "Previous plans" (AIC-7). `ranKm` and the Hit/Missed
 outcome are derived from runs and WeekTarget, never stored.
+
+`sessionsMin`/`sessionsMax` replaced a single display string `"3-4"` in RUN-78, matching
+the shape `frontend/src/lib/plan.ts` already computes. The table still has **no reader
+and no writer** in `backend/src` - the plan is computed on the client - so this changed
+no behaviour; it exists so that whatever builds RUN-32/RUN-35 starts from data rather
+than from a rendering. Formatting the range back into "3-4" is the UI's job, and a
+string is where "3 to 4" and "3 - 4" quietly become equally valid.
 
 ## Never stored (always derived from runs)
 

@@ -33,9 +33,11 @@ export function rankByDistance(
   return ranks;
 }
 
-// Distances are Floats, so summing them accumulates binary-fraction noise
-// (0.1 + 0.2 = 0.30000000000000004), which would both print as
-// 30.000000000000004 km and order two genuinely equal totals.
+// Distances were Floats until RUN-78, so summing them accumulated
+// binary-fraction noise (0.1 + 0.2 = 0.30000000000000004) that both printed
+// as 30.000000000000004 km and ordered two genuinely equal totals. That half
+// of the reason is gone: the column is NUMERIC(5, 2) and Postgres sums it
+// exactly. The half below is not, and it is the one that matters.
 //
 // One decimal, not two (RUN-69 review fix): the app renders distances to one
 // decimal everywhere (frontend formatKm), so ranking on a finer number than

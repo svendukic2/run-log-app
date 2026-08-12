@@ -1,6 +1,5 @@
 import {
   Injectable,
-  InternalServerErrorException,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -11,11 +10,7 @@ import {
 import { isPrismaError } from '../prisma/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
 import type { Profile as ProfileRow } from '../generated/prisma/client';
-import {
-  PutProfileDto,
-  RUNNING_LEVELS,
-  type RunningLevel,
-} from './dto/put-profile.dto';
+import { PutProfileDto, type RunningLevel } from './dto/put-profile.dto';
 
 // The API shape of the profile: exactly the Profile table from
 // docs/data-model.md. One row per user, so there is no id in the contract -
@@ -27,18 +22,11 @@ export interface ProfileResponse {
   defaultWeeklyGoalKm: number;
 }
 
-// The column is plain TEXT until RUN-73 adds a real enum, so a row edited
-// outside the API can hold anything. A loud 500 that names the row beats a
-// silently wrong RunningLevel reaching the frontend (the same guard the
-// runs module applies to effort).
-function toRunningLevel(rowId: string, value: string): RunningLevel {
-  if (!(RUNNING_LEVELS as readonly string[]).includes(value)) {
-    throw new InternalServerErrorException(
-      `Profile ${rowId} has stored runningLevel "${value}", not one of: ${RUNNING_LEVELS.join(', ')}. Fix the row (RUN-73 adds the enum that prevents this).`,
-    );
-  }
-  return value as RunningLevel;
-}
+// There was a toRunningLevel guard here until RUN-78, the twin of the one in
+// runs/run-response.ts, throwing a 500 on a stored value outside the
+// vocabulary. The column is a database enum now, so there is nothing left for
+// it to catch: the generated $Enums.RunningLevel is the same three values as
+// the DTO's union, assigned straight across below.
 
 @Injectable()
 export class ProfileService {
@@ -49,7 +37,7 @@ export class ProfileService {
 
   private toResponse(row: ProfileRow): ProfileResponse {
     return {
-      runningLevel: toRunningLevel(row.id, row.runningLevel),
+      runningLevel: row.runningLevel,
       defaultWeeklyGoalKm: row.defaultWeeklyGoalKm,
     };
   }

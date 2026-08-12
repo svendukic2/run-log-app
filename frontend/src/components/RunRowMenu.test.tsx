@@ -10,6 +10,9 @@ const RUN: Run = {
   distanceKm: 8.2,
   durationSeconds: 2535, // 42:15
   date: '2026-07-07',
+  // Pinned rather than left to the mock to stamp (RUN-78), so the assertions
+  // below can keep comparing whole run objects.
+  createdAt: '2026-07-07T06:10:00.000Z',
   effort: 'Medium',
   note: 'Felt easy',
 };

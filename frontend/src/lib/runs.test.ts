@@ -477,6 +477,44 @@ describe('store (API-backed since RUN-48)', () => {
     expect(getRuns().map((run) => run.routeName)).toEqual(['Newer', 'Older']);
   });
 
+  it('orders same-day runs by when they were logged, not by id (RUN-78)', async () => {
+    // The ids deliberately run OPPOSITE to the timestamps, and that is the
+    // whole design of this test (review fix). Ordering by id descending - what
+    // the client did before createdAt - would answer ['Early', 'Late'], so
+    // only a sort that actually reads createdAt can produce the expectation
+    // below. Without the contradiction the test passes against both the old
+    // and the new comparator and proves nothing.
+    const sameDay = { date: '2026-07-10', distanceKm: 8.2, durationSeconds: 2535 };
+    seedRuns([
+      {
+        ...sameDay,
+        id: 'run-zzz',
+        routeName: 'Early',
+        createdAt: '2026-07-10T06:00:00.000Z',
+        effort: 'Medium',
+        note: '',
+      },
+      {
+        ...sameDay,
+        id: 'run-aaa',
+        routeName: 'Late',
+        createdAt: '2026-07-10T18:00:00.000Z',
+        effort: 'Medium',
+        note: '',
+      },
+    ]);
+
+    expect(getRuns().map((run) => run.routeName)).toEqual(['Late', 'Early']);
+
+    // And the server's own order agrees, which is the half that matters: the
+    // cache re-sorts itself after every mutation while a full page load takes
+    // whatever the API sent, so a divergence would move a run on refresh.
+    __resetRunsStoreForTests(null);
+    reloadRuns();
+    await waitFor(() => expect(getRuns()).toHaveLength(2));
+    expect(getRuns().map((run) => run.routeName)).toEqual(['Late', 'Early']);
+  });
+
   it('rejects with the failure and caches nothing when the save fails', async () => {
     failRunsApi('POST');
 

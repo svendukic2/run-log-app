@@ -1,5 +1,6 @@
 import { NotFoundException } from '@nestjs/common';
 import { toDbDate } from '../common/dates';
+import { Prisma } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { trimPolylineEnds } from '../runs/route-trim';
 import { UsersService } from './users.service';
@@ -24,12 +25,17 @@ const RUN_ROUTE = {
   routeSource: 'openrouteservice',
 };
 
+// A stored row, with the two column types RUN-78 changed: distanceKm is a
+// Decimal (NUMERIC(5, 2)) and createdAt is the same-day tiebreak. The public
+// profile serves runs through the same mapper the owner's own list uses, so
+// the fixture has to look like a real row here too.
 const RUN_ROW = {
   id: 'run-1',
   routeName: 'Riverside loop',
-  distanceKm: 8.2,
+  distanceKm: new Prisma.Decimal('8.20'),
   durationSeconds: 2535,
   date: toDbDate('2026-08-01'),
+  createdAt: new Date('2026-08-01T07:12:00.000Z'),
   effort: 'Medium',
   note: 'Felt good',
   ...RUN_ROUTE,
