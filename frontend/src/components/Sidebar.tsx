@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 import { ROUTES, isActiveRoute } from '@/lib/routes';
 import { accountInitials, accountShortName, useAccount } from '@/lib/account';
 import { signOut } from '@/lib/session';
+import useFocusTrap from '@/lib/useFocusTrap';
 
 // Icon geometry is taken 1:1 from the Figma exports (20x20 viewBox, node 47:40);
 // fills are currentColor so the active state can recolor them via CSS.
@@ -159,6 +160,7 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   const pathname = usePathname();
   const account = useAccount();
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const drawerRef = useRef<HTMLElement>(null);
 
   // Opening the drawer moves focus into it so keyboard and screen-reader users
   // land on the navigation instead of staying behind the backdrop.
@@ -166,8 +168,14 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
     if (isOpen) closeButtonRef.current?.focus();
   }, [isOpen]);
 
+  // ...and keeps it there while the drawer is open (AC5). Only while `isOpen`,
+  // which is only ever true below `lg`: from `lg` up this is a static column
+  // and trapping in it would be nonsense.
+  useFocusTrap(drawerRef, isOpen);
+
   return (
     <aside
+      ref={drawerRef}
       id={SIDEBAR_ID}
       className={`fixed inset-y-0 left-0 z-50 flex w-[264px] max-w-[85vw] shrink-0 flex-col overflow-y-auto bg-ink px-[18px] py-[26px] transition-[transform,visibility] duration-200 ease-out lg:sticky lg:top-0 lg:h-screen lg:max-w-none lg:visible lg:translate-x-0 ${
         isOpen ? 'visible translate-x-0' : 'invisible -translate-x-full'
@@ -188,7 +196,9 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
           type="button"
           onClick={onClose}
           aria-label="Close navigation"
-          className="ml-auto flex size-9 shrink-0 items-center justify-center rounded-[10px] text-on-dark-subtle hover:bg-ink-raised hover:text-white lg:hidden"
+          // 36x36 drawn, 44x44 tapped (RUN-75 AC3, the RUN-64 pattern), on
+          // touch only: ungated it would enlarge :hover on a mouse as well.
+          className="relative ml-auto flex size-9 shrink-0 items-center justify-center rounded-[10px] text-on-dark-subtle pointer-coarse:before:absolute pointer-coarse:before:-inset-[4px] pointer-coarse:before:content-[''] hover:bg-ink-raised hover:text-white lg:hidden"
         >
           <CloseIcon />
         </button>

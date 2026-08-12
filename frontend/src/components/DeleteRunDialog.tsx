@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { deleteRun, type Run } from '@/lib/runs';
+import useFocusTrap from '@/lib/useFocusTrap';
 
 function TrashIcon() {
   return (
@@ -42,11 +43,15 @@ interface DeleteRunDialogProps {
 // actions one-handed on a phone (responsive addendum, agreed in-project).
 export default function DeleteRunDialog({ run, onClose, onDeleted }: DeleteRunDialogProps) {
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   // The delete round-trips to the API since RUN-48: `deleting` guards the
   // destructive button against a double press, `deleteError` is the inline
   // failure line (dialog stays open, the run still exists).
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // Tab stays inside the dialog, as aria-modal already claimed (RUN-75).
+  useFocusTrap(dialogRef, true);
 
   useEffect(() => {
     // Focus lands on Cancel: the safe answer to a destructive question, so
@@ -99,16 +104,25 @@ export default function DeleteRunDialog({ run, onClose, onDeleted }: DeleteRunDi
         className="fixed inset-0 bg-ink/60"
       />
 
+      {/* max-h + overflow: the other two overlays cap themselves and scroll
+          inside, this one did not, so a long route name on a short phone in
+          landscape pushed the title off the top of the screen with no way to
+          reach it (RUN-75, AC4). The cap is never hit at desktop size, where
+          the dialog is a few hundred pixels tall. */}
       <div
+        ref={dialogRef}
         role="alertdialog"
         aria-modal="true"
         aria-labelledby={TITLE_ID}
         aria-describedby={DESCRIPTION_ID}
-        className="relative z-10 flex w-full flex-col gap-[18px] rounded-t-[20px] bg-white px-5 py-6 shadow-[0_24px_60px_0_rgba(0,0,0,0.22)] sm:max-w-[400px] sm:rounded-[20px] sm:p-[28px]"
+        className="relative z-10 flex max-h-[92dvh] w-full flex-col gap-[18px] overflow-y-auto overscroll-contain rounded-t-[20px] bg-white px-5 py-6 shadow-[0_24px_60px_0_rgba(0,0,0,0.22)] sm:max-h-[calc(100dvh-48px)] sm:max-w-[400px] sm:rounded-[20px] sm:p-[28px]"
       >
+        {/* shrink-0: this is the only child of the capped column with room to
+            give, so without it a dialog taller than the cap flattens the
+            circle into an oval instead of scrolling (RUN-75 review fix). */}
         <span
           aria-hidden="true"
-          className="flex size-[40px] items-center justify-center rounded-full bg-accent-soft text-accent"
+          className="flex size-[40px] shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent"
         >
           <TrashIcon />
         </span>
@@ -120,7 +134,12 @@ export default function DeleteRunDialog({ run, onClose, onDeleted }: DeleteRunDi
           >
             Delete this run?
           </h2>
-          <p id={DESCRIPTION_ID} className="text-[13.5px] leading-[1.55] text-secondary">
+          {/* The dialog quotes a free-text route name, so it breaks rather
+              than widening the card (RUN-75, AC2). */}
+          <p
+            id={DESCRIPTION_ID}
+            className="text-[13.5px] leading-[1.55] break-words text-secondary"
+          >
             &ldquo;{run.routeName}&rdquo; will be permanently removed from your log. This action
             can&rsquo;t be undone.
           </p>

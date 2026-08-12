@@ -62,13 +62,28 @@ interface RunRowMenuProps {
   sizeClassName?: string;
 }
 
+// The table's 32px kebab is under the 44px minimum touch target, and the
+// table is on screen from `md` up, which includes tablet widths where the
+// sidebar is still a drawer. So the default grows its HIT area with a
+// pseudo-element and leaves the drawn size alone (RUN-75 AC3, the RUN-64
+// pattern).
+//
+// Gated on pointer-coarse, and here that gate is load-bearing rather than
+// tidiness: the whole table row navigates on click, so on a mouse an ungated
+// 6px band around the kebab would stop being row-click territory and open
+// the menu instead. A finger gets the 44px target, a mouse gets the row back.
+//
+// The card variant passes size-11 and needs no pseudo-element at all.
+const TABLE_SIZE =
+  "size-8 pointer-coarse:before:absolute pointer-coarse:before:-inset-[6px] pointer-coarse:before:content-['']";
+
 // The kebab and the row menu it opens (RUN-29, 12 · Runs - Row menu): "Edit"
 // opens the Edit run modal prefilled with that row's run (AC2); "Delete"
 // opens the delete confirmation quoting that row's run (RUN-30 AC1). Clicking
 // elsewhere or pressing Escape closes the menu without any action (AC4): the
 // transparent backdrop swallows the click, so a dismissal on the table can
 // never fall through to the row navigation underneath.
-export default function RunRowMenu({ run, sizeClassName = 'size-8' }: RunRowMenuProps) {
+export default function RunRowMenu({ run, sizeClassName = TABLE_SIZE }: RunRowMenuProps) {
   const [placement, setPlacement] = useState<MenuPlacement | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -169,7 +184,7 @@ export default function RunRowMenu({ run, sizeClassName = 'size-8' }: RunRowMenu
         aria-haspopup="menu"
         aria-expanded={isOpen}
         onClick={() => (isOpen ? closeMenu(true) : openMenu())}
-        className={`flex shrink-0 items-center justify-center rounded-[8px] text-tertiary hover:bg-muted hover:text-text-primary ${sizeClassName}`}
+        className={`relative flex shrink-0 items-center justify-center rounded-[8px] text-tertiary hover:bg-muted hover:text-text-primary ${sizeClassName}`}
       >
         <KebabIcon />
       </button>

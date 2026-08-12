@@ -27,17 +27,22 @@ export default function EventParticipantsCard({
 
       <ul className="flex flex-col">
         {participants.map((participant) => (
-          <li key={participant.id} className="flex items-center gap-3 px-[10px] py-[9px]">
+          <li key={participant.id} className="relative flex items-center gap-3 px-[10px] py-[9px]">
             <span
               aria-hidden="true"
               className="grid size-[34px] shrink-0 place-items-center rounded-full bg-muted text-[12px] font-semibold text-secondary"
             >
               {initialsOf(participant.firstName, participant.lastName)}
             </span>
-            {/* AC5: the row opens that runner's public profile. */}
+            {/* AC5: the row opens that runner's public profile. The name is a
+                21px line of text, so on its own it is a tap target under half
+                the 44px minimum; stretching the link over the whole ~52px row
+                fixes that without drawing anything (RUN-75 AC3). This is
+                PeopleView's pattern, and it works here because the row holds
+                nothing else interactive. */}
             <Link
               href={personRoute(participant.id)}
-              className="min-w-0 flex-1 truncate text-[14px] font-medium text-text-primary hover:text-accent-pressed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              className="min-w-0 flex-1 truncate text-[14px] font-medium text-text-primary pointer-coarse:after:absolute pointer-coarse:after:inset-0 pointer-coarse:after:content-[''] hover:text-accent-pressed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
             >
               {participant.firstName} {participant.lastName}
               {participant.me && (
