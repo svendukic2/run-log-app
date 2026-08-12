@@ -438,6 +438,27 @@ describe('store (API-backed since RUN-48)', () => {
     expect(getRuns().map((run) => run.routeName)).toEqual(['Newer', 'Older']);
   });
 
+  it('orders same-day runs the way a reload would, newest logged first (RUN-78)', async () => {
+    // The divergence this guards against is specific: the cache re-sorts
+    // itself locally after every mutation, while a full page load takes the
+    // server's order. Before createdAt the two tiebroke on the id, so adding
+    // a run to a day that already had one could put it in one position now
+    // and a different one after a refresh. Adding three same-day runs and
+    // then reloading is what proves the two sorts agree.
+    await addRun(toRunDraft(makeForm({ routeName: 'First', date: '2026-07-10' })));
+    await addRun(toRunDraft(makeForm({ routeName: 'Second', date: '2026-07-10' })));
+    await addRun(toRunDraft(makeForm({ routeName: 'Third', date: '2026-07-10' })));
+
+    const afterMutations = getRuns().map((run) => run.routeName);
+    expect(afterMutations).toEqual(['Third', 'Second', 'First']);
+
+    // The same list as the server hands it over, with no local sort involved.
+    __resetRunsStoreForTests(null);
+    reloadRuns();
+    await waitFor(() => expect(getRuns()).toHaveLength(3));
+    expect(getRuns().map((run) => run.routeName)).toEqual(afterMutations);
+  });
+
   it('rejects with the failure and caches nothing when the save fails', async () => {
     failRunsApi('POST');
 

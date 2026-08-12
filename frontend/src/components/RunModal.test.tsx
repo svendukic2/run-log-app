@@ -92,6 +92,9 @@ describe('Add run modal (RUN-23)', () => {
         distanceKm: 8.2,
         durationSeconds: 2535,
         date: '2026-07-14',
+        // Server-assigned, like the id above: the form never sends one
+        // (RUN-78).
+        createdAt: expect.any(String),
         effort: 'Hard',
         note: 'Windy',
         // Nobody opened the map, so the run stores no route and is
@@ -303,6 +306,9 @@ describe('Edit run modal (RUN-28)', () => {
         distanceKm: 10,
         durationSeconds: 2535,
         date: '2026-07-07',
+        // Untouched by the edit: an edit changes the run, not when it was
+        // logged (RUN-78).
+        createdAt: run.createdAt,
         effort: 'Hard',
         note: 'Felt smooth, negative splits.',
         route: null,

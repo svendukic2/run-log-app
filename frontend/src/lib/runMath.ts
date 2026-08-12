@@ -65,8 +65,11 @@ export interface RunRoute {
 // contract, not an oversight.
 export type RunRouteDraft = Pick<RunRoute, 'polyline' | 'waypoints'>;
 
-// A run as it is SUBMITTED: no id, and the write-shaped route above.
-export interface RunDraft extends Omit<Run, 'id' | 'route'> {
+// A run as it is SUBMITTED: no id, no createdAt, and the write-shaped route
+// above. createdAt is omitted rather than left optional because the API's
+// whitelist pipe 400s any property the write DTO does not declare, so a draft
+// that could carry one would be a rejected save waiting to happen.
+export interface RunDraft extends Omit<Run, 'id' | 'createdAt' | 'route'> {
   route?: RunRouteDraft | null;
 }
 
@@ -156,6 +159,23 @@ export interface Run {
   date: string;
   effort: Effort;
   note: string;
+  // When the run was LOGGED, as an ISO instant - not to be confused with
+  // `date` above, which is the calendar day it was run on. Server-assigned
+  // and read-only: it is not part of RunDraft, and sending one is ignored.
+  //
+  // It is here because ordering needs it (RUN-78). GET /api/runs sorts by
+  // (date, createdAt, id) and the cache re-sorts itself after every mutation
+  // with compareRunsNewestFirst, so without this field on the client the two
+  // orderings would disagree about same-day runs and a freshly added run
+  // would jump position on the next full load.
+  //
+  // Optional for one reason, and it is not the API: v1 runs imported from
+  // localStorage (readLegacyRuns) were written before any server saw them and
+  // have none. Every run the API serves carries it, and isRun below REFUSES a
+  // server body without one - a guard deliberately stricter than this type,
+  // because a response that quietly stopped carrying createdAt is exactly the
+  // ordering divergence this field exists to prevent.
+  createdAt?: string;
   // The optional drawn route (RUN-54). The API always sends the key (null for
   // a run with no route), but it stays optional in the type because absent and
   // null mean the same thing and every run that predates the field - the v1
@@ -475,6 +495,13 @@ export function isRun(value: unknown): value is Run {
     typeof run.distanceKm === 'number' &&
     typeof run.durationSeconds === 'number' &&
     typeof run.date === 'string' &&
+    // Required here even though the Run type marks it optional: this guard
+    // runs on SERVER bodies only, and the server has sent createdAt on every
+    // run since RUN-78. The optionality upstream is for locally imported v1
+    // runs, which never come through here. Treating a body without it as
+    // malformed is what keeps the client's ordering from silently drifting
+    // apart from the server's.
+    typeof run.createdAt === 'string' &&
     EFFORT_LEVELS.includes(run.effort) &&
     typeof run.note === 'string' &&
     // Absent and null are both "no route"; anything else must be a complete

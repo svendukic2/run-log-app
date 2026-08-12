@@ -34,6 +34,7 @@ import { handleUsersRequest } from './usersApiMock';
 
 let db: Run[] = [];
 let idCounter = 0;
+let createdAtCounter = 0;
 let tokenCounter = 0;
 let validTokens = new Set<string>();
 
@@ -133,6 +134,16 @@ function nextId(): string {
   return `run-${String(idCounter).padStart(6, '0')}`;
 }
 
+// The insertion timestamp the real server stamps (RUN-78). A counter rather
+// than Date.now(): several runs seeded in one test would otherwise share a
+// millisecond and stop being ordered at all, which is the very thing the
+// column exists to fix. Monotonic and ISO-shaped, so it sorts as a string
+// exactly like the server's.
+function nextCreatedAt(): string {
+  createdAtCounter += 1;
+  return new Date(Date.UTC(2026, 0, 1, 0, 0, createdAtCounter)).toISOString();
+}
+
 function mintToken(): string {
   tokenCounter += 1;
   const token = `test-token-${tokenCounter}`;
@@ -141,10 +152,17 @@ function mintToken(): string {
   return token;
 }
 
-// Newest first: date descending, id descending, matching the real endpoint
-// (and compareRunsNewestFirst on the client).
+// Newest first: date, then createdAt, then id, all descending - the real
+// endpoint's runsNewestFirstOrder, and compareRunsNewestFirst on the client.
+// All three of these have to say the same thing; a mock that sorted its own
+// way would let a client/server divergence pass the whole suite.
 function sorted(): Run[] {
-  return [...db].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+  return [...db].sort(
+    (a, b) =>
+      b.date.localeCompare(a.date) ||
+      (b.createdAt ?? '').localeCompare(a.createdAt ?? '') ||
+      b.id.localeCompare(a.id),
+  );
 }
 
 // What a fresh week's target snapshots to: the same seed order as the real
@@ -404,6 +422,10 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
       // frontend test from passing against a shape the API never sends.
       route: storedRoute(draft.route),
       id: nextId(),
+      // Server-assigned like the id and the route source (RUN-78). A draft
+      // cannot carry one - RunDraft omits it and the real whitelist pipe 400s
+      // a payload that sends one - so this is stamped after the spread.
+      createdAt: nextCreatedAt(),
     };
     db.push(run);
     return Promise.resolve(jsonResponse(201, run));
@@ -528,6 +550,7 @@ function handle(input: RequestInfo | URL, init: RequestInit = {}): Promise<Respo
 export function installRunsApiMock(): void {
   db = [];
   idCounter = 0;
+  createdAtCounter = 0;
   tokenCounter = 0;
   validTokens = new Set();
   refreshableTokens = new Set();
@@ -593,7 +616,14 @@ export function installRunsApiMock(): void {
 // Seeds the in-memory backend AND primes the store cache, so the seeded
 // runs are on screen from the first render with no async settling.
 export function seedRuns(drafts: Array<Omit<Run, 'id'> & { id?: string }>): Run[] {
-  const runs = drafts.map((draft) => ({ ...draft, id: draft.id ?? nextId() }));
+  const runs = drafts.map((draft) => ({
+    ...draft,
+    id: draft.id ?? nextId(),
+    // Stamped like the server does, in the order seeded, unless the test
+    // pinned one itself. This is why no existing fixture needed touching when
+    // RUN-78 added the field.
+    createdAt: draft.createdAt ?? nextCreatedAt(),
+  }));
   db.push(...runs);
   __resetRunsStoreForTests(sorted());
   return runs;
