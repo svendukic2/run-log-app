@@ -1,12 +1,22 @@
 'use client';
 
-// Real authentication (RUN-58). The v1 "the device is the account" bridge
-// (RUN-48) is gone: identity now comes from the Sign in / Sign up screens,
-// and `runlog.session` stores ONLY the JWT and the account email - never a
-// password. There is no silent re-authentication: the backend has no
-// refresh endpoint (RUN-74), so an expired or invalid token signs the user
-// out cleanly and lands them on Sign in instead of leaving broken screens
-// behind (RUN-58 AC6).
+// Real authentication (RUN-58, silent renewal since RUN-74). The v1 "the
+// device is the account" bridge (RUN-48) is gone: identity comes from the
+// Sign in / Sign up screens, and `runlog.session` stores ONLY the JWT and
+// the account email - never a password.
+//
+// The token now lives fifteen minutes and renews itself: a 401 sends
+// apiFetch to POST /api/auth/refresh once and replays the request with the
+// new token. The server-side rules that bound the renewing (an idle window,
+// an absolute session ceiling, and a revocation version bumped by logout)
+// are documented in backend/src/auth/token-lifecycle.ts and are deliberately
+// not mirrored here - the client's whole job is "try once, and if that
+// fails, sign out".
+//
+// When the renewal DOES fail, the behaviour is exactly what it was before
+// RUN-74 and RUN-58 AC6 is still the contract: clear the session, hard-load
+// Sign in, throw a terminal ApiError so nothing offers a retry that cannot
+// work. There is no state in between.
 import { ROUTES } from './routes';
 
 const SESSION_KEY = 'runlog.session';
@@ -126,6 +136,10 @@ export function updateSessionEmail(email: string): void {
 function clearSession(): void {
   memorySession = null;
   persistenceFailed = false;
+  // Whatever that renewal resolves to belongs to the session being ended.
+  // performRefresh also refuses to write once the session is gone, so this
+  // is the second of two locks on the same door.
+  refreshInFlight = null;
   try {
     window.localStorage.removeItem(SESSION_KEY);
   } catch {
@@ -249,11 +263,36 @@ export async function signIn(email: string, password: string): Promise<void> {
   writeSession({ email: email.trim().toLowerCase(), token: body.token });
 }
 
-// Sign out (RUN-58 AC5): clear the session and land on Sign in via a full
-// page load, which also drops every module-level store cache.
-export function signOut(): void {
+// Sign out (RUN-58 AC5, server-side since RUN-74): tell the backend to
+// revoke the session, then clear locally and land on Sign in via a full page
+// load, which also drops every module-level store cache.
+//
+// Awaited rather than fired and forgotten, because the hard navigation on
+// the next line cancels in-flight requests: a fire-and-forget logout would
+// reach the server only sometimes, which is worse than not having one. The
+// cost is that a dead backend makes the button take up to API_TIMEOUT_MS.
+// The revoke never throws and the local sign-out happens either way, so an
+// unreachable server still signs the user out of this browser - it just
+// leaves the outstanding token renewable, which is the honest outcome when
+// we could not reach the only thing that can revoke it.
+export async function signOut(): Promise<void> {
+  const session = readSession();
+  if (session) await revokeSession(session.token);
   clearSession();
   navigateToSignIn();
+}
+
+// Best effort by design: the endpoint answers 204 to anything, and the one
+// thing this must never do is stop the user signing out.
+async function revokeSession(token: string): Promise<void> {
+  try {
+    await timedFetch('/api/auth/logout', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch {
+    // Offline, timed out, backend down. Handled by signing out locally.
+  }
 }
 
 // An expired or invalid token discovered mid-request (AC6). Same broom as
@@ -265,18 +304,101 @@ function handleExpiredSession(): ApiError {
   return new ApiError(SESSION_EXPIRED_MESSAGE, 401, true);
 }
 
+// The single renewal in flight, if any. Several stores read at once and a
+// stale token 401s all of them within the same tick; without this they would
+// fire one refresh each, and since every refresh rotates the token, all but
+// one of those would be racing against a token their sibling just replaced.
+// One promise, everyone else awaits it. Same shape as the load-token guards
+// in eventParticipants.ts and friends.
+let refreshInFlight: Promise<string | null> | null = null;
+
+// Exchanges the stored token for a fresh one. Resolves to the new token, or
+// to null for every kind of failure - a rejection here would surface as a
+// mysterious error from whichever unlucky request triggered the renewal,
+// when the only meaningful outcome is "could not renew, so sign out".
+async function performRefresh(token: string): Promise<string | null> {
+  try {
+    const response = await timedFetch('/api/auth/refresh', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) return null;
+    const body = (await response.json()) as {
+      token?: unknown;
+      user?: { email?: unknown };
+    };
+    if (typeof body.token !== 'string' || body.token.length === 0) return null;
+    // Re-read rather than trusting the session we started with: a sign-out
+    // (or another 401's sign-out) may have landed while this was in flight,
+    // and writing here would resurrect the session the user just ended - the
+    // hard navigation would then reload straight back into it.
+    const existing = readSession();
+    if (!existing) return null;
+    // The response carries the account's current email, so a rename made in
+    // another tab lands here too; falling back to the stored one keeps the
+    // session writable if the shape ever changes.
+    const email =
+      typeof body.user?.email === 'string' && body.user.email.length > 0
+        ? body.user.email
+        : existing.email;
+    writeSession({ email, token: body.token });
+    return body.token;
+  } catch {
+    return null;
+  }
+}
+
+// Returns a usable token, or null if the session is over.
+async function renewToken(staleToken: string): Promise<string | null> {
+  const current = readSession();
+  if (!current) return null;
+  // Someone already renewed while this request was in flight. Reuse their
+  // token rather than spending another refresh - and rotating away the one
+  // every other caller is about to use.
+  if (current.token !== staleToken) return current.token;
+
+  if (!refreshInFlight) {
+    const attempt = performRefresh(current.token);
+    refreshInFlight = attempt;
+    void attempt.finally(() => {
+      // Only clear the slot if it is still ours: a later renewal may have
+      // claimed it after this one settled.
+      if (refreshInFlight === attempt) refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
 // The app-wide way to call the API (RUN-48): same-origin /api/* (proxied to
-// the backend by next.config.ts) with the Bearer token attached. A 401
-// signs out cleanly - there is no refresh endpoint to retry against.
+// the backend by next.config.ts) with the Bearer token attached.
+//
+// A 401 buys EXACTLY ONE renewal and ONE replay. If the replay 401s too, the
+// session is over and we sign out - retrying again would be a loop, and a
+// loop against an endpoint that answers 401 is indistinguishable from a
+// working session to everything upstream of here. `init` is reused verbatim
+// on the replay, which is safe because every caller in this app passes a
+// string body or none; a stream body would need reading twice and does not
+// exist here.
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const session = readSession();
   if (!session) throw handleExpiredSession();
-  const response = await timedFetch(path, {
+
+  const response = await sendWithToken(path, init, session.token);
+  if (response.status !== 401) return response;
+
+  const renewed = await renewToken(session.token);
+  if (!renewed) throw handleExpiredSession();
+
+  const replay = await sendWithToken(path, init, renewed);
+  if (replay.status === 401) throw handleExpiredSession();
+  return replay;
+}
+
+function sendWithToken(path: string, init: RequestInit, token: string): Promise<Response> {
+  return timedFetch(path, {
     ...init,
-    headers: { ...init.headers, Authorization: `Bearer ${session.token}` },
+    headers: { ...init.headers, Authorization: `Bearer ${token}` },
   });
-  if (response.status === 401) throw handleExpiredSession();
-  return response;
 }
 
 // Test-only: clears the in-memory session state, which outlives the
@@ -288,4 +410,7 @@ export function __resetSessionForTests(): void {
   }
   memorySession = null;
   persistenceFailed = false;
+  // A renewal left over from the previous test would otherwise resolve into
+  // the next one and hand it a token from an identity it never had.
+  refreshInFlight = null;
 }

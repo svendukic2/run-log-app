@@ -272,11 +272,13 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
               <span className="truncate text-[11.5px] text-on-dark-subtle">{account.email}</span>
             </div>
           </div>
-          {/* Sign out (RUN-58 AC5): clears the session and lands on Sign in
-              via a full page load, which also drops every store cache. */}
+          {/* Sign out (RUN-58 AC5): revokes the session server-side (RUN-74),
+              clears it locally and lands on Sign in via a full page load,
+              which also drops every store cache. Nothing to await here - the
+              navigation is the feedback, and signOut never rejects. */}
           <button
             type="button"
-            onClick={signOut}
+            onClick={() => void signOut()}
             className="mt-[10px] w-full rounded-[10px] border border-ink-border px-[12px] py-[8px] text-left text-[12.5px] font-medium text-on-dark-subtle hover:bg-ink-raised hover:text-white"
           >
             Sign out
