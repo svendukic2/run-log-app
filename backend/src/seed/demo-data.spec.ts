@@ -106,5 +106,19 @@ describe('demo dataset (RUN-71)', () => {
     // Determinism (house rule): the same day produces the same demo, so the
     // screens can be talked about the same way twice.
     expect(buildDemoDataset({ today: TODAY })).toEqual(dataset);
+
+    // The one genuinely different case, asserted here rather than as a third
+    // test: seeded on a MONDAY the current week offers exactly one day, and
+    // that is the day the whole of AC1 rests on - a Monday demo whose
+    // leaderboard is empty is the bug this ticket exists to prevent.
+    const monday = buildDemoDataset({ today: '2026-08-10' });
+    expect(mondayOf('2026-08-10')).toBe('2026-08-10');
+    for (const user of monday.users.filter(
+      (candidate) => candidate.privacy.showOnLeaderboard,
+    )) {
+      expect(
+        user.runs.filter((run) => run.date === '2026-08-10'),
+      ).not.toHaveLength(0);
+    }
   });
 });

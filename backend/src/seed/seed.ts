@@ -10,6 +10,12 @@
 // already runs on in production, so the seeder cannot break in a way the
 // server would not.
 //
+// @faker-js/faker is a devDependency and `nest build` compiles src/seed/
+// along with everything else, so the BUILD needs dev dependencies installed.
+// That is not a new constraint - the build already needs them for @nestjs/cli
+// itself, which is why render.yaml passes `npm ci --include=dev` - but it is
+// the reason nothing outside src/seed/ should import from these files.
+//
 // It boots a Nest application context rather than constructing its own
 // PrismaClient: that reuses env validation, ConfigModule and PrismaService
 // exactly as the server does, so the seeder connects the way the app does or

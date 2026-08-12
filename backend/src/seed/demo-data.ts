@@ -61,8 +61,15 @@ export const DEMO_RUN_BOUNDS = {
 
 // The idempotency marker (AC2). Every seeded account lives on this domain
 // and nothing else does, so the seeder can find and replace exactly its own
-// rows without a schema column to mark them with. `.demo` is a reserved TLD
-// (RFC 2606 style), so these addresses can never collide with a real one.
+// rows without a schema column to mark them with.
+//
+// The separation is a CONVENTION, not a guarantee: `.demo` is a real
+// delegated gTLD, not one of RFC 2606's reserved names, so nothing at the
+// protocol level stops someone signing up as name@runlog.demo and being
+// deleted by the next seed. Nothing stops them typing any other marker
+// either - the alternative, a column on User, is a migration this ticket
+// deliberately does not make. Worth knowing before widening what the marker
+// matches.
 export const DEMO_EMAIL_DOMAIN = 'runlog.demo';
 
 // AC4: one shared password for every seeded account, documented in
@@ -151,10 +158,21 @@ interface LevelProfile {
   paceSecPerKm: [number, number];
 }
 
+// weeklyGoalKm is set to roughly the MEAN weekly volume the ranges beside it
+// produce, which is the whole reason those two numbers are declared
+// together. Pick a rounder, lower goal and every demo account beats its
+// target in almost every week: the dashboard's goal card sits pegged past
+// 100% and the Hit/Missed history is a wall of Hits, so the goal feature
+// demos only its success state. Matching the mean makes a week roughly a
+// coin flip, which is what makes that history worth looking at.
+//
+// The Advanced volumes are trimmed for the same reason from the other
+// direction: its natural mean was ~66 km, and a goal cannot exceed
+// GOAL_MAX_KM (60), so the goal could not have matched it.
 const LEVEL_PROFILES: readonly LevelProfile[] = [
   {
     level: 'Beginner',
-    weeklyGoalKm: 15,
+    weeklyGoalKm: 22,
     runsPerWeek: [3, 4],
     easyDistanceKm: [3, 7],
     longDistanceKm: [8, 12],
@@ -162,7 +180,7 @@ const LEVEL_PROFILES: readonly LevelProfile[] = [
   },
   {
     level: 'Intermediate',
-    weeklyGoalKm: 32,
+    weeklyGoalKm: 43,
     runsPerWeek: [3, 5],
     easyDistanceKm: [5, 12],
     longDistanceKm: [14, 20],
@@ -170,10 +188,10 @@ const LEVEL_PROFILES: readonly LevelProfile[] = [
   },
   {
     level: 'Advanced',
-    weeklyGoalKm: 55,
+    weeklyGoalKm: 57,
     runsPerWeek: [4, 5],
-    easyDistanceKm: [8, 16],
-    longDistanceKm: [21, 28],
+    easyDistanceKm: [7, 13],
+    longDistanceKm: [19, 25],
     paceSecPerKm: [255, 300], // 4:15 - 5:00 /km
   },
 ];
@@ -438,15 +456,40 @@ function buildEvent(users: DemoUser[], today: string): DemoEvent {
     // participant whose rank and distance are withheld.
     users[DEMO_USER_COUNT - 1],
   ];
+  const startDate = addDaysIso(today, -10);
+  const endDate = addDaysIso(today, 11);
+
+  // Derived from what these participants actually run, exactly like the
+  // window is derived from today, rather than being a round number picked in
+  // advance. A fixed target ages badly in one direction only: this group
+  // logs ~700 km in the ten days before the seed, so any number small enough
+  // to look like a challenge has already been passed before the demo opens,
+  // which makes it the one figure on the page that contradicts the data
+  // under it. Scaling the pace so far by the days remaining puts the target
+  // ahead of the group with the event still worth finishing.
+  const kmSoFar = participants.reduce(
+    (total, user) =>
+      total +
+      user.runs
+        .filter((run) => run.date >= startDate && run.date <= endDate)
+        .reduce((sum, run) => sum + run.distanceKm, 0),
+    0,
+  );
+  const elapsedDays = 11; // startDate through today, inclusive
+  const wholeWindowDays = 22;
+  const projected = (kmSoFar / elapsedDays) * wholeWindowDays;
+  // Rounded to a talkable number, and always ahead of the projection.
+  const targetKm = Math.ceil((projected * 1.1) / 100) * 100;
+
   return {
     // Season-neutral on purpose: the window is derived from whatever day the
     // seeder runs on, so "Spring Challenge" would be wrong most of the year.
     name: 'Decode Community Challenge',
     description:
       'Three weeks, one collective target. Every kilometre logged inside the window counts.',
-    startDate: addDaysIso(today, -10),
-    endDate: addDaysIso(today, 11),
-    targetKm: 400,
+    startDate,
+    endDate,
+    targetKm,
     ownerEmail: users[0].email,
     participantEmails: participants.map((user) => user.email),
   };

@@ -708,9 +708,18 @@ notifications and the event with it) and writes it again, all in one transaction
 accounts are never touched. Upserting by email was rejected: it would leave the previous
 run's runs and follows behind and grow the demo on every invocation.
 
+The marker is an email address, and an email address is editable: `PUT /api/account`
+lets a signed-in user change theirs. Rename a demo account off `@runlog.demo` during a
+demo and the next seed no longer recognises it, so it survives as a stale extra runner on
+the leaderboard alongside a freshly created replacement. Deleting it by hand is the fix.
+A marker the app cannot edit away would mean a new column on `User`, which is a migration
+this ticket deliberately does not make for a development convenience.
+
 **Determinism.** faker is seeded with a fixed constant and every date is derived from
-today, so two runs on the same day produce the same demo down to the last note. A demo
-that looks different every time is harder to talk about.
+today, so two runs on the same day produce the same **dataset**: the same names, the same
+distances, the same notes. The rows are not byte-identical - ids are fresh `cuid()`s and
+notification timestamps are relative to the moment of seeding - but nothing on screen
+differs. A demo that looks different every time is harder to talk about.
 
 **It never runs automatically.** Nothing in `render.yaml`'s build or start command
 reaches it; it is a standalone command a human invokes. It also refuses to run with
